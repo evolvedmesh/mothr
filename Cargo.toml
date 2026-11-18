@@ -1,22 +1,22 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
-default-members = ["crates/shepherd-app"]
+members = ["crates/*", "apps/desktop"]
+default-members = ["apps/desktop"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-authors = ["Shepherd contributors"]
+authors = ["Mothr contributors"]
 
 [workspace.dependencies]
-shepherd-core = { path = "crates/shepherd-core" }
-shepherd-agents = { path = "crates/shepherd-agents" }
-shepherd-projects = { path = "crates/shepherd-projects" }
-shepherd-usage = { path = "crates/shepherd-usage" }
-shepherd-design = { path = "crates/shepherd-design" }
-shepherd-remote = { path = "crates/shepherd-remote" }
-shepherd-hub = { path = "crates/shepherd-hub" }
+mothr-core = { path = "crates/mothr-core" }
+mothr-agents = { path = "crates/mothr-agents" }
+mothr-projects = { path = "crates/mothr-projects" }
+mothr-usage = { path = "crates/mothr-usage" }
+mothr-design = { path = "crates/mothr-design" }
+mothr-remote = { path = "crates/mothr-remote" }
+mothr-hub = { path = "crates/mothr-hub" }
 
 gpui-kit = "0.10"
 anyhow = "1"

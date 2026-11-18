@@ -1,12 +1,12 @@
-# Shepherd design system
+# Mothr design system
 
-Shepherd's design system lives in three places that stay in step:
+Mothr's design system lives in three places that stay in step:
 
 | Where | What it's for |
 | --- | --- |
-| `crates/shepherd-app/src/ui/tokens.rs` | The source of truth in code: palettes, type scale, radii, spacing, elevation, motion. |
-| `crates/shepherd-app/src/ui/theme.rs` | Maps the tokens onto every gpui-kit component color and registers the fonts. |
-| `shepherd-design/` | The same system written in Shepherd's own design format. Open a **Design** chat on this repo to browse it in Shepherd's canvas. |
+| `apps/desktop/src/ui/tokens.rs` | The source of truth in code: palettes, type scale, radii, spacing, elevation, motion. |
+| `apps/desktop/src/ui/theme.rs` | Maps the tokens onto every gpui-kit component color and registers the fonts. |
+| `mothr-design/` | The same system written in Mothr's own design format. Open a **Design** chat on this repo to browse it in Mothr's canvas. |
 
 ## Principles
 
@@ -25,8 +25,8 @@ Shepherd's design system lives in three places that stay in step:
      Hermes `#F59E0B`.
 4. **State is always visible.**
    - Working pulses violet, Needs you pulses amber, Error is red, Ready is green, Ended is grey.
-   - A chat that's waiting on you is shown three ways at once: the sidebar banner, the
-     "Needs you" group, and an amber card in the transcript.
+   - A chat that's waiting on you is shown in the "Needs you" sidebar group, with a pulsing
+     status dot, and as an amber card in the transcript.
 5. **Calm motion.**
    - Durations are 120 ms (feedback), 200 ms (navigation) and 320 ms (hero), ease-out.
    - Content fades and rises a few pixels. Nothing bounces.
@@ -113,6 +113,8 @@ window's rem size, so text, buttons, menus and spacing grow together.
 | Composer | Raised surface. On focus its border turns violet and it glows. Shows agent, model, project and mode pickers; Enter sends. |
 | Subagent strip | Below an orchestrator's header: one chip per subagent with live status and tool and token counts. |
 | Usage meter | 5 px track, colored by usage level, with a reset countdown. |
+| Limits button | Title bar: a sparkle, then one 20 px progress ring per agent account with its logo inside. Rings use the agent's tint until 75%, then amber/red. Hover shows the limits card; click pins it. |
+| Agent avatar | The agent's real logo on a soft tile of its brand tint (logos in `apps/desktop/assets/logos`). |
 
 ## Voice
 

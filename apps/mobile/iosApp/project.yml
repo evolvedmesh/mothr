@@ -1,0 +1,27 @@
+# XcodeGen spec for the iOS host. Generate the Xcode project on a Mac with:
+#   cd apps/mobile/iosApp && xcodegen generate
+name: Mothr
+options:
+  bundleIdPrefix: dev.mothr
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  Mothr:
+    type: application
+    platform: iOS
+    sources: [iosApp]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.mothr.mobile
+        PRODUCT_NAME: Mothr
+        INFOPLIST_FILE: iosApp/Info.plist
+        SWIFT_VERSION: "5.0"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        FRAMEWORK_SEARCH_PATHS: "$(SRCROOT)/../composeApp/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)"
+        OTHER_LDFLAGS: ["$(inherited)", "-framework", "ComposeApp"]
+    preBuildScripts:
+      - name: Build Kotlin + Rust (Gradle)
+        basedOnDependencyAnalysis: false
+        script: |
+          cd "$SRCROOT/.."
+          ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode

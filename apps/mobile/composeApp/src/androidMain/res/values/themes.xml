@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Mothr" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/mothr_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+    <color name="mothr_bg">#0B0C0F</color>
+    <color name="mothr_icon_bg">#0B0C0F</color>
+</resources>

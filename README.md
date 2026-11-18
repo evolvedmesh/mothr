@@ -1,6 +1,6 @@
-# Shepherd
+# Mothr
 
-A native, GPU-rendered desktop manager for coding-agent chats. Shepherd runs **Claude Code,
+A native, GPU-rendered desktop manager for coding-agent chats. Mothr runs **Claude Code,
 GitHub Copilot, Codex, OpenCode and Hermes** behind one interface of its own. It talks to each
 agent over its machine protocol and never shows the agent's terminal UI.
 
@@ -25,7 +25,7 @@ with the app.
   Agent questions (`AskUserQuestion`, ACP elicitation) appear as option chips with a free-text
   "Other" field. Plan approval (`ExitPlanMode`) can switch the chat to accept-edits.
 - **Unified permission modes**: Ask, Accept edits, Auto, Plan and Allow all. Each is mapped onto
-  the agent's own modes and also enforced on Shepherd's side for ACP agents. Allow all is shown
+  the agent's own modes and also enforced on Mothr's side for ACP agents. Allow all is shown
   in red.
 - **Orchestrator chats and subagents.** When an agent spawns subagents (Claude Code's
   Agent/Task tool), the chat is marked as an orchestrator:
@@ -35,7 +35,7 @@ with the app.
     tool requests, answer its questions, or stop it
 - **Working with messages**:
   - **Copy:** any message, from the hover actions.
-  - **Edit & resend** (Claude Code): edit a message you sent. Shepherd reverts the agent's file
+  - **Edit & resend** (Claude Code): edit a message you sent. Mothr reverts the agent's file
     changes back to that point (Claude's file checkpoints), rewinds the conversation with a
     truncating resume, and sends the new text.
   - **Queue:** messages sent while the agent is busy wait in a visible queue and send
@@ -68,32 +68,54 @@ with the app.
   - Hermes, via `hermes usage --json`
   - context-window usage and cost per chat
   - warnings at a threshold you configure
+  - all of it lives behind one title-bar button: a sparkle plus a progress ring per agent
+    account (with the agent's logo, turning amber/red near a limit). Hover it for a card with
+    every account's windows and reset times; click to pin the card open.
 - **Claude Remote Control.** A per-chat toggle that hands the session to claude.ai / the Claude
   app.
-- **Shepherd Remote.** Controls the whole app from a phone or another computer. It's a
+- **Mothr Remote.** Controls the whole app from a phone or another computer. It's a
   token-protected web client (installable as a PWA) with live streaming, approvals, answers and
   new chats. It can be exposed on the LAN, on your **Tailscale** tailnet, publicly through
   **Tailscale Funnel**, or through **Dev Tunnels**. The app shows a QR code for pairing.
+- **Mothr mobile** (`apps/mobile`). A native Android/iOS remote built on the same Rust session
+  model. It stays connected in the background and sends a notification when an agent needs a
+  permission or an answer. Allow, Deny or an answer can be tapped right on the notification.
 - **Design mode.** A chat variant where the agent writes a design system and mockup screens as
-  JSON in `shepherd-design/`. Shepherd renders them natively and live:
+  JSON in `mothr-design/`. Mothr renders them natively and live:
   - color, type, spacing, radius and shadow tokens
   - a component gallery with variants
   - device artboards with zoom
   - hot reload on every agent edit
+  - **Export** (toolbar → Export):
+    - **HTML:** one self-contained file with every screen, the design system page and
+      navigation between them. Fonts and icons are embedded, so it opens offline and can be sent
+      as is.
+    - **Storybook:** a Storybook 10 project with a story per component variant, per screen and
+      for the tokens. If Bun or Node is installed, Mothr also builds it to `storybook-static/`, a
+      static site you can host anywhere.
 
-## Architecture
+    Both use the same renderer, ported from the canvas, so exports match what you see in the app.
+
+## Repository layout
+
+A monorepo managed with [Turborepo](https://turborepo.com) (bun workspaces) on top of a Cargo
+workspace:
 
 ```
+apps/
+  desktop          mothr-app: the GPUI desktop app (binary: `mothr`)
+  mobile           Kotlin Multiplatform + Compose app (Android, iOS): a native remote for Mothr
 crates/
-  shepherd-core      domain model: agents, sessions, transcript entries, events + reducer,
-                     usage model, settings, the HubApi trait
-  shepherd-agents    detection + drivers: Claude stream-json control protocol, ACP JSON-RPC
-  shepherd-hub       orchestrator: sessions, persistence, usage polling, discovery; implements HubApi
-  shepherd-projects  project discovery, fuzzy search, pins/recents
-  shepherd-usage     account limits for Claude / Codex / Copilot / Hermes
-  shepherd-design    Design-mode document model, loader, file watcher, agent instructions
-  shepherd-remote    axum server + embedded web client, tunnels, QR
-  shepherd-app       the GPUI desktop app (binary: `shepherd`)
+  mothr-core       domain model: agents, sessions, transcript entries, events + reducer,
+                   usage model, settings, the HubApi trait
+  mothr-agents     detection + drivers: Claude stream-json control protocol, ACP JSON-RPC
+  mothr-hub        orchestrator: sessions, persistence, usage polling, discovery; implements HubApi
+  mothr-projects   project discovery, fuzzy search, pins/recents
+  mothr-usage      account limits for Claude / Codex / Copilot / Hermes
+  mothr-design     Design-mode document model, loader, file watcher, exporters, agent instructions
+  mothr-remote     axum server + embedded web client, tunnels, QR
+  mothr-client     remote-API client shared with the mobile app (UniFFI)
+mothr-design/      Mothr's own design system, written in its Design format
 ```
 
 - **One state model, three places.** Every view of a session (hub, desktop, web) applies the same
@@ -105,16 +127,25 @@ crates/
     Control.
   - Copilot (`copilot --acp`), OpenCode (`opencode acp`), Hermes (`hermes acp`) and Codex (the
     `codex-acp` adapter) use the Agent Client Protocol.
-- **Data locations.** Transcripts go to `~/.local/share/shepherd/sessions/*.json` (or the
-  platform equivalent) and settings to `~/.config/shepherd/settings.toml`. Set `SHEPHERD_HOME`
-  to relocate both.
+- **Data locations.** Transcripts go to `~/.local/share/mothr/sessions/*.json` (or the
+  platform equivalent) and settings to `~/.config/mothr/settings.toml`. Set `MOTHR_HOME`
+  to relocate both. Mothr was called Shepherd before; on first launch it moves the old
+  `shepherd` config and data folders over, and Design mode still reads a project's old
+  `shepherd-design/` folder.
 
 ## Running
 
 ```sh
-cargo run --release            # builds and launches `shepherd`
-cargo test --workspace         # 66 tests
+bun install                    # once: installs Turborepo
+bun run dev                    # launches the desktop app (cargo run -p mothr-app)
+bun run build                  # builds every app (turbo run build)
+bun run test                   # all tests: Rust workspace + mobile
+bun run lint                   # clippy -D warnings + mobile lint
 ```
+
+Plain Cargo works too: `cargo run --release` builds and launches `mothr`, and
+`cargo test --workspace` runs the Rust tests. The mobile app's own build steps are in
+[apps/mobile/README.md](apps/mobile/README.md).
 
 Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libraries).
 
@@ -131,16 +162,19 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 
 ### Developer hooks
 
-- `SHEPHERD_HOME=<dir>`: isolated config and data.
-- `SHEPHERD_OPEN=settings|remote|picker|usage|latest|design|subagent`: open a view at startup
-  (`SHEPHERD_OPEN_DELAY_MS` delays it).
-- `SHEPHERD_TRACE=<file>`: append Claude Code's raw protocol lines to a file.
-- `SHEPHERD_PREFILL=<text>`: type text into the open chat's composer at startup.
-- `SHEPHERD_DEV_PROMPT="<agent_id>|<mode>|<model>|<chat|design>|<prompt>"`: start a real chat in
+- `MOTHR_HOME=<dir>`: isolated config and data.
+- `MOTHR_OPEN=settings|remote|picker|usage|latest|design|subagent`: open a view at startup
+  (`MOTHR_OPEN_DELAY_MS` delays it).
+- `MOTHR_TRACE=<file>`: append Claude Code's raw protocol lines to a file.
+- `MOTHR_PREFILL=<text>`: type text into the open chat's composer at startup.
+- `MOTHR_DEV_PROMPT="<agent_id>|<mode>|<model>|<chat|design>|<prompt>"`: start a real chat in
   the current directory.
-- `cargo run -p shepherd-agents --example drive -- <agent_id> <cwd> "<prompt>" [model]`: headless
+- `MOTHR_EXPORT_DIR=<dir>`: Design exports skip the save dialogs and write into this folder.
+- `cargo run -p mothr-app --example export_design -- <project> <out.html> [storybook-dir] [--build]`:
+  export a project's design without opening the app.
+- `cargo run -p mothr-agents --example drive -- <agent_id> <cwd> "<prompt>" [model]`: headless
   driver smoke test.
-- `cargo run -p shepherd-remote --example demo`: the remote web client against a fake hub.
+- `cargo run -p mothr-remote --example demo`: the remote web client against a fake hub.
 
 ## Known gaps
 
@@ -152,8 +186,9 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
   - **Codex and OpenCode** weren't installed there, so they're untested against real binaries.
 - Edit & resend and Steer need Claude Code. Other agents can queue messages or interrupt and
   send, but they can't rewind or take input mid-turn.
-- Subagent tracking needs Claude Code. The ACP agents don't expose subagents in a form Shepherd
+- Subagent tracking needs Claude Code. The ACP agents don't expose subagents in a form Mothr
   reads yet.
 - The ACP driver doesn't offer client-side terminals (`terminal: false`). Agents run commands
   themselves.
-- Design mode renders a JSON DSL rather than HTML/React. Export to code is not implemented yet.
+- Design mode renders a JSON DSL rather than HTML/React. Exports are HTML and Storybook (static
+  mocks); export to framework code (React, SwiftUI…) is not implemented yet.

@@ -1,0 +1,10 @@
+{
+  "name": "@mothr/crates",
+  "private": true,
+  "description": "Mothr's shared Rust crates (core model, agents, hub, remote, client). Cargo does the real work.",
+  "scripts": {
+    "build": "cargo build --workspace --exclude mothr-app",
+    "test": "cargo test --workspace",
+    "lint": "cargo clippy --workspace --all-targets -- -D warnings"
+  }
+}

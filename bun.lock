@@ -1,0 +1,48 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "mothr",
+      "devDependencies": {
+        "turbo": "^2.5.0",
+      },
+    },
+    "apps/desktop": {
+      "name": "@mothr/desktop",
+      "dependencies": {
+        "@mothr/crates": "workspace:*",
+      },
+    },
+    "apps/mobile": {
+      "name": "@mothr/mobile",
+      "dependencies": {
+        "@mothr/crates": "workspace:*",
+      },
+    },
+    "crates": {
+      "name": "@mothr/crates",
+    },
+  },
+  "packages": {
+    "@mothr/crates": ["@mothr/crates@workspace:crates"],
+
+    "@mothr/desktop": ["@mothr/desktop@workspace:apps/desktop"],
+
+    "@mothr/mobile": ["@mothr/mobile@workspace:apps/mobile"],
+
+    "@turbo/darwin-64": ["@turbo/darwin-64@2.11.12", "", { "os": "darwin", "cpu": "x64" }, "sha512-IF9fY2GVKpwSs+aAmby8BKb8qgGPZl0lhBER3HpPRxfY5jtA3veKXPqphiI5+jEhqXh3OXXpG73kHv990lqfWQ=="],
+
+    "@turbo/darwin-arm64": ["@turbo/darwin-arm64@2.11.12", "", { "os": "darwin", "cpu": "arm64" }, "sha512-2gEvJbwUEupoWFbMPCDU1ZxHXRqaq3w92gFBZ4+7ovJw90qONecUvX8IOQe/8pr3qMmYMiNjA5/+HkUNmTTFgg=="],
+
+    "@turbo/linux-64": ["@turbo/linux-64@2.11.12", "", { "os": [ "linux", "android", ], "cpu": "x64" }, "sha512-2yULGKE5+uVxU0ELgq3vprzBE/Ua/Loaui0eO1E17hFyCeesG9UpQpWmTlf/MjaU0kTlVAh6CfbMsziaTELSMw=="],
+
+    "@turbo/linux-arm64": ["@turbo/linux-arm64@2.11.12", "", { "os": [ "linux", "android", ], "cpu": "arm64" }, "sha512-OK2PbiujzK3y3WleafqL6eUa5SaKvsTFOnpSIXD6jDxAPqlF8bEr/VWxbThHWvN8XV/4iKi/mDXJAM9Tpx9PDg=="],
+
+    "@turbo/windows-64": ["@turbo/windows-64@2.11.12", "", { "os": "win32", "cpu": "x64" }, "sha512-2LOX0kvuvtDtLYH2HQinE3v4Ch8OcR+8gO1RacAP1s1j/m1Spf/HbBGn0EOlkEBsBzKnnxFnYqBGYvBfzrtLNg=="],
+
+    "@turbo/windows-arm64": ["@turbo/windows-arm64@2.11.12", "", { "os": "win32", "cpu": "arm64" }, "sha512-Mg8HvtTCJLIfNdrXaU+CoLRzrMIgWBRTBohatbrsdfyO0Iw6Nvr6gC2bwiQXflSQ8u/7yWJ/J91f/H2u52lqeQ=="],
+
+    "turbo": ["turbo@2.11.12", "", { "optionalDependencies": { "@turbo/darwin-64": "2.11.12", "@turbo/darwin-arm64": "2.11.12", "@turbo/linux-64": "2.11.12", "@turbo/linux-arm64": "2.11.12", "@turbo/windows-64": "2.11.12", "@turbo/windows-arm64": "2.11.12" }, "bin": { "turbo": "bin/turbo" } }, "sha512-NbxpCtwXayklTelyQowpb6Qv483qLP+95cSD/gnpBaIL/tw14JtPhl1XIRwkz/tG2k5cq1De+xhX6/ph713Inw=="],
+  }
+}

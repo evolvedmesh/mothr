@@ -6,7 +6,7 @@ is in [DESIGN.md](DESIGN.md).
 
 ## What this is
 
-Shepherd is a Rust desktop app (GPUI via `gpui-kit`) that runs coding agents behind its own chat
+Mothr is a Rust desktop app (GPUI via `gpui-kit`) that runs coding agents behind its own chat
 UI. It talks to Claude Code over its native stream-json control protocol and to the other agents
 over the Agent Client Protocol (ACP). It never embeds an agent's terminal UI.
 
@@ -38,25 +38,31 @@ Treat source shown by CodeGraph as already read. Fall back to grep/Read for non-
 
 ## Layout
 
+Turborepo monorepo (bun workspaces: `apps/*`, `crates`) over a Cargo workspace
+(`crates/*`, `apps/desktop`). `bun run build|test|lint|dev` fans out through turbo; each
+workspace's `package.json` just calls cargo or gradle.
+
 ```
+apps/desktop        mothr-app: GPUI desktop app, binary `mothr`; UI in src/ui/
+apps/mobile         Kotlin Multiplatform + Compose remote app (see its README)
 crates/
-  shepherd-core      domain model: agents, sessions, entries, SessionEvent + reducer
-                     (SessionState::apply), settings, HubApi trait
-  shepherd-agents    agent detection + drivers (claude.rs: stream-json; acp.rs: ACP JSON-RPC)
-  shepherd-hub       orchestrator: sessions, persistence, queue, edit & resend, subagents, usage
-  shepherd-projects  project discovery, fuzzy search (nucleo), pins/recents
-  shepherd-usage     account limits: Claude OAuth usage, Codex logs, Copilot quotas, Hermes
-  shepherd-design    Design-mode JSON DSL, loader, watcher, agent instructions
-  shepherd-remote    axum server + embedded web client (assets/index.html), tunnels, QR
-  shepherd-app       GPUI desktop app, binary `shepherd`; UI lives in src/ui/
-shepherd-design/     Shepherd's own design system written in its Design DSL
+  mothr-core        domain model: agents, sessions, entries, SessionEvent + reducer
+                    (SessionState::apply), settings, HubApi trait
+  mothr-agents      agent detection + drivers (claude.rs: stream-json; acp.rs: ACP JSON-RPC)
+  mothr-hub         orchestrator: sessions, persistence, queue, edit & resend, subagents, usage
+  mothr-projects    project discovery, fuzzy search (nucleo), pins/recents
+  mothr-usage       account limits: Claude OAuth usage, Codex logs, Copilot quotas, Hermes
+  mothr-design      Design-mode JSON DSL, loader, watcher, exporters, agent instructions
+  mothr-remote      axum server + embedded web client (assets/index.html), tunnels, QR
+  mothr-client      remote-API client exported to Kotlin via UniFFI (mobile app)
+mothr-design/       Mothr's own design system written in its Design DSL
 ```
 
 Key invariants:
 
-- **One reducer.** Every view (hub, desktop, web client) applies the same `SessionEvent`s through
+- **One reducer.** Every view (hub, desktop, web client, mobile via mothr-client) applies the same `SessionEvent`s through
   `SessionState::apply`. The web client has a JS port of it; change both together.
-- **Drivers only translate.** Agent-protocol specifics stay in `shepherd-agents`; the hub and UI
+- **Drivers only translate.** Agent-protocol specifics stay in `mothr-agents`; the hub and UI
   speak only `SessionCommand` / `SessionEvent`.
 - **Capabilities are explicit.** Per-agent features are gated by `AgentKind::supports_*`
   (`supports_edit`, `supports_steering`, `supports_remote_control`) and `supported_modes`.
@@ -64,17 +70,21 @@ Key invariants:
 ## Building and checking
 
 ```sh
-cargo build                                   # debug build of the app
-cargo run --release                           # run Shepherd
-cargo test --workspace                        # all tests must pass
+bun install                                   # once: Turborepo
+bun run dev                                   # run the desktop app
+bun run test                                  # every workspace's tests must pass
+bun run lint                                  # clippy -D warnings (+ mobile lint)
+cargo test --workspace                        # Rust only, without turbo
 cargo clippy --workspace --all-targets        # keep it warning-free
 ```
+
+The mobile app needs JDK 17 and the Android SDK/NDK; see apps/mobile/README.md.
 
 Linux needs the usual GPUI system libraries (Vulkan, xkbcommon, wayland/x11 dev packages).
 
 Run against an isolated profile so you don't touch real chats or settings:
-`SHEPHERD_HOME=$(mktemp -d) cargo run`. Other developer hooks (`SHEPHERD_OPEN`,
-`SHEPHERD_DEV_PROMPT`, `SHEPHERD_TRACE`, …) are listed in the README.
+`MOTHR_HOME=$(mktemp -d) cargo run`. Other developer hooks (`MOTHR_OPEN`,
+`MOTHR_DEV_PROMPT`, `MOTHR_TRACE`, …) are listed in the README.
 
 ## UI rules
 
@@ -91,6 +101,7 @@ Run against an isolated profile so you don't touch real chats or settings:
   `mvp`, branched from `dev`.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
   `feat(hub): …`, `fix(app): …`, `docs: …`, `refactor(agents): …`, `test(core): …`,
-  `chore: …`. Use the crate name without the `shepherd-` prefix as the scope.
-- Don't commit `target/`, `.codegraph/` contents, or anything from a real `SHEPHERD_HOME`
+  `chore: …`. Use the crate name without the `mothr-` prefix as the scope (`desktop` and
+  `mobile` for the apps).
+- Don't commit `target/`, `.codegraph/` contents, or anything from a real `MOTHR_HOME`
   (transcripts, settings, tokens).

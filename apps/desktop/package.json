@@ -1,0 +1,14 @@
+{
+  "name": "@mothr/desktop",
+  "private": true,
+  "description": "Mothr desktop app (Rust + GPUI).",
+  "scripts": {
+    "build": "cargo build --release -p mothr-app",
+    "dev": "cargo run -p mothr-app",
+    "test": "cargo test -p mothr-app",
+    "lint": "cargo clippy -p mothr-app --all-targets -- -D warnings"
+  },
+  "dependencies": {
+    "@mothr/crates": "workspace:*"
+  }
+}
