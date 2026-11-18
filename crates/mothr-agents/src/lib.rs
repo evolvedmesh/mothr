@@ -8,6 +8,7 @@
 
 pub mod acp;
 pub mod claude;
+mod edits;
 pub mod detect;
 mod policy;
 

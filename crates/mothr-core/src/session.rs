@@ -261,11 +261,15 @@ pub enum ToolStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FileDiff {
     pub path: PathBuf,
+    /// The text being replaced; `None` when the file is new.
     pub old_text: Option<String>,
     pub new_text: String,
+    /// 1-based line of `old_text` in the file, when `old_text` is only part of it.
+    #[serde(default)]
+    pub start_line: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -322,6 +326,9 @@ pub struct PermissionRequest {
     pub options: Vec<PermissionOption>,
     /// Option id chosen, once resolved.
     pub resolved: Option<String>,
+    /// The file changes this request would make, for review before they happen.
+    #[serde(default)]
+    pub diffs: Vec<FileDiff>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -773,6 +780,7 @@ mod tests {
                 kind: ToolKind::Execute,
                 options: vec![],
                 resolved: None,
+                diffs: vec![],
             }),
         });
         assert_eq!(s.meta.status, SessionStatus::NeedsInput);

@@ -1,6 +1,6 @@
 //! Claude Code driver over the native `--input-format stream-json` control protocol.
 
-use crate::{summarize_input, CommandTx, Emitter, OutputTx, SessionSpec};
+use crate::{edits, summarize_input, CommandTx, Emitter, OutputTx, SessionSpec};
 use serde_json::{json, Value};
 use mothr_core::*;
 use std::collections::HashMap;
@@ -19,6 +19,11 @@ fn claude_mode(m: PermissionMode) -> &'static str {
         PermissionMode::Plan => "plan",
         PermissionMode::AllowAll => "bypassPermissions",
     }
+}
+
+/// The mode a permission suggestion would switch the session to.
+fn suggested_mode(suggestions: &Value) -> Option<PermissionMode> {
+    suggestions.as_array()?.iter().find(|s| s["type"] == "setMode").and_then(|s| mode_from_claude(s["mode"].as_str()?))
 }
 
 fn mode_from_claude(m: &str) -> Option<PermissionMode> {
@@ -361,7 +366,14 @@ impl Driver {
         let Some(inc) = self.incoming.remove(&entry_id) else { return };
         let response = match option_id.as_str() {
             "allow" => json!({"behavior": "allow", "updatedInput": inc.input}),
-            "allow_always" => json!({"behavior": "allow", "updatedInput": inc.input, "updatedPermissions": inc.suggestions}),
+            "allow_always" => {
+                // A suggestion can switch the session's mode ("accept all edits"): show it.
+                if let Some(mode) = suggested_mode(&inc.suggestions) {
+                    self.mode = mode;
+                    self.out(&None, SessionEvent::Mode { mode });
+                }
+                json!({"behavior": "allow", "updatedInput": inc.input, "updatedPermissions": inc.suggestions})
+            }
             "plan_auto" => {
                 self.control(json!({"subtype": "set_permission_mode", "mode": "acceptEdits"}), Pending::SetMode(PermissionMode::AcceptEdits));
                 json!({"behavior": "allow", "updatedInput": inc.input})
@@ -516,6 +528,7 @@ impl Driver {
                     });
                     return;
                 }
+                let diffs = edits::edit_diffs(&input);
                 let (title, detail, options) = if tool == "ExitPlanMode" {
                     (
                         "Ready to start? Claude finished planning".to_string(),
@@ -530,7 +543,12 @@ impl Driver {
                     let (t, d) = summarize_input(&tool, &input);
                     let mut options = vec![opt("allow", "Allow", PermissionOptionKind::AllowOnce)];
                     if req["permission_suggestions"].as_array().is_some_and(|a| !a.is_empty()) {
-                        options.push(opt("allow_always", "Always allow", PermissionOptionKind::AllowAlways));
+                        let label = if suggested_mode(&req["permission_suggestions"]) == Some(PermissionMode::AcceptEdits) {
+                            "Accept all edits"
+                        } else {
+                            "Always allow"
+                        };
+                        options.push(opt("allow_always", label, PermissionOptionKind::AllowAlways));
                     }
                     options.push(opt("deny", "Deny", PermissionOptionKind::RejectOnce));
                     let desc = req["description"].as_str().map(str::to_string);
@@ -553,6 +571,7 @@ impl Driver {
                         kind: ToolKind::from_tool_name(&tool),
                         options,
                         resolved: None,
+                        diffs,
                     }),
                 });
             }
@@ -757,23 +776,8 @@ impl Driver {
             _ => {}
         }
         let (title, detail) = summarize_input(&name, input);
-        let mut diffs = vec![];
+        let diffs = edits::edit_diffs(input);
         let path = input["file_path"].as_str().map(PathBuf::from);
-        if let Some(p) = &path {
-            if let Some(new) = input["new_string"].as_str() {
-                diffs.push(FileDiff { path: p.clone(), old_text: input["old_string"].as_str().map(str::to_string), new_text: new.to_string() });
-            } else if let Some(content) = input["content"].as_str() {
-                diffs.push(FileDiff { path: p.clone(), old_text: None, new_text: content.to_string() });
-            } else if let Some(edits) = input["edits"].as_array() {
-                for e in edits {
-                    diffs.push(FileDiff {
-                        path: p.clone(),
-                        old_text: e["old_string"].as_str().map(str::to_string),
-                        new_text: e["new_string"].as_str().unwrap_or("").to_string(),
-                    });
-                }
-            }
-        }
         let call = ToolCall {
             id: id.clone(),
             kind: ToolKind::from_tool_name(&name),
@@ -823,6 +827,14 @@ impl Driver {
             };
             call.status = if block["is_error"].as_bool().unwrap_or(false) { ToolStatus::Failed } else { ToolStatus::Completed };
             call.output = Some(truncate(&text, 20_000));
+            // The CLI reports exactly what changed; prefer that over our preview.
+            if call.status == ToolStatus::Completed
+                && !call.diffs.is_empty()
+                && let Some(diffs) = edits::result_diffs(&v["tool_use_result"])
+                && call.locations.first().is_none_or(|p| diffs.first().is_some_and(|d| &d.path == p))
+            {
+                call.diffs = diffs;
+            }
             self.out(&target, SessionEvent::Upsert { entry: Entry::Tool(call) });
             // Images a tool returned (screenshots, a Read of a picture, MCP image results).
             if let Value::Array(parts) = &block["content"] {

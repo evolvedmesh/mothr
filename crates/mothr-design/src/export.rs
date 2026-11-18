@@ -6,7 +6,7 @@
 //!   plus a tokens page. [`build_storybook`] turns it into a static site.
 //!
 //! Both use the same HTML renderer, a port of the desktop canvas renderer
-//! (`apps/desktop/src/ui/design.rs`): the same flex semantics (a `fill` size grows only along the
+//! (`apps/desktop/src/ui/design/canvas.rs`): the same flex semantics (a `fill` size grows only along the
 //! parent's main axis, column children don't shrink), token resolution, defaults and component
 //! overrides. Keep the two in step.
 

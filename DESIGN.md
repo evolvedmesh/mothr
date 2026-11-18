@@ -6,7 +6,7 @@ Mothr's design system lives in three places that stay in step:
 | --- | --- |
 | `apps/desktop/src/ui/tokens.rs` | The source of truth in code: palettes, type scale, radii, spacing, elevation, motion. |
 | `apps/desktop/src/ui/theme.rs` | Maps the tokens onto every gpui-kit component color and registers the fonts. |
-| `mothr-design/` | The same system written in Mothr's own design format. Open a **Design** chat on this repo to browse it in Mothr's canvas. |
+| `mothr-design/` | The same system written in Mothr's own design format. Pin or open this repo in Mothr and it appears on the **Design** page. |
 
 ## Principles
 
@@ -97,7 +97,9 @@ window's rem size, so text, buttons, menus and spacing grow together.
 - **Layout**:
   - the sidebar is 272 px
   - the reading column is capped at 780 px
-  - in a Design chat, the chat column takes 42% of the width and the canvas the rest
+  - the Changes panel takes 52% of a chat's width
+  - the Design viewer has a 228 px page list and a 420 px chat; a narrow window drops the list
+    while the chat is open
 
 ## Components
 
@@ -107,8 +109,12 @@ window's rem size, so text, buttons, menus and spacing grow together.
 | Button / Quiet | Outline or ghost, for secondary actions. Never filled. |
 | Pill / Status | A dot plus a label. The dot pulses while live. The orchestrator variant shows running/total subagents. |
 | Session row | Agent tile with a status badge, title, and one line of context. The active row has a 2.5 px violet edge. Subagents nest beneath their orchestrator with tree guides. |
-| Tool card | Collapsed: icon, action, target, outcome, and the +/- diff count. Expanded: output and diffs. Subagent cards link to the subagent's chat. |
+| Tool card | Collapsed: icon, action, target, outcome, and the +/- line count. Expanded: output or a highlighted diff. Subagent cards link to the subagent's chat. |
 | Permission card | Amber frame, the exact command or path, and the Allow / Always allow / Deny choices. When resolved it shrinks to a single line. |
+| Edit review card | A permission card for a file edit: amber frame, the diff, and Reject / Accept. Replaces the tool card while it waits. |
+| Changes panel | Every edit in a chat, waiting ones first, with a state per file. Rejected and failed edits start collapsed. The footer says what the permission mode means for edits. |
+| Design card | A design introduced by its own tokens: its surface, type, a real component, palette and first screen. |
+| Design viewer | Storybook layout: page list, a page per foundation, component and screen, Export at the top right, chat on demand. |
 | Question card | Violet frame, option chips (single or multi select), plus a free-text "Other" field. |
 | Composer | Raised surface. On focus its border turns violet and it glows. Shows agent, model, project and mode pickers; Enter sends. |
 | Subagent strip | Below an orchestrator's header: one chip per subagent with live status and tool and token counts. |

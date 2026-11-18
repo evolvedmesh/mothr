@@ -39,7 +39,7 @@ impl GroupMode {
 pub enum SidebarEvent {
     Open(SessionId),
     NewChat,
-    NewDesign,
+    OpenDesigns,
     NewGeneral,
     NewChatIn(ProjectRef),
 }
@@ -52,6 +52,8 @@ pub struct Sidebar {
     query: String,
     mode: GroupMode,
     active: Option<SessionId>,
+    /// The Design page is showing.
+    designs_active: bool,
     collapsed: std::collections::HashSet<String>,
     /// Orchestrator chats whose subagent list is folded.
     folded: std::collections::HashSet<SessionId>,
@@ -70,12 +72,47 @@ impl Sidebar {
                 }
             }),
         ];
-        Self { store, search, query: String::new(), mode: GroupMode::Smart, active: None, collapsed: Default::default(), folded: Default::default(), _subs: subs }
+        Self { store, search, query: String::new(), mode: GroupMode::Smart, active: None, designs_active: false, collapsed: Default::default(), folded: Default::default(), _subs: subs }
     }
 
-    pub fn set_active(&mut self, id: Option<SessionId>, cx: &mut Context<Self>) {
+    pub fn set_active(&mut self, id: Option<SessionId>, designs: bool, cx: &mut Context<Self>) {
         self.active = id;
+        self.designs_active = designs;
         cx.notify();
+    }
+
+    /// The way into the Design page, carrying the state of design agents.
+    fn render_design_nav(&self, sessions: &[SessionState], cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pal = tokens::p(cx);
+        let active = self.designs_active;
+        let design = || sessions.iter().filter(|s| s.meta.kind == SessionKind::Design && s.meta.parent.is_none());
+        let needs = design().any(|s| s.meta.status == SessionStatus::NeedsInput);
+        let working = design().any(|s| matches!(s.meta.status, SessionStatus::Working | SessionStatus::Starting));
+        let status = needs.then_some(SessionStatus::NeedsInput).or(working.then_some(SessionStatus::Working));
+        h_flex()
+            .id("sb-design")
+            .relative()
+            .h(sz(34.))
+            .px(sz(10.))
+            .gap(sz(10.))
+            .items_center()
+            .rounded(sz(tokens::radius::MD))
+            .cursor_pointer()
+            .when(active, |d| d.bg(pal.surface_hover))
+            .when(!active, |d| d.hover(|d| d.bg(pal.surface_hover.opacity(0.6))))
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::OpenDesigns)))
+            .when(active, |d| d.child(div().absolute().left(sz(0.)).top(sz(9.)).bottom(sz(9.)).w(sz(2.5)).rounded_full().bg(pal.brand)))
+            .child(icon("palette").size(sz(15.)).text_color(if active { pal.text } else { pal.text_muted }))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(sz(tokens::text::BASE))
+                    .text_color(if active { pal.text } else { pal.text.opacity(0.88) })
+                    .when(active, |d| d.font_weight(FontWeight::MEDIUM))
+                    .child("Design"),
+            )
+            .when(needs, |d| d.child(div().text_size(sz(tokens::text::XS)).text_color(pal.warning).child("Needs you")))
+            .when_some(status, |d, s| d.child(status_dot("sb-design-dot", &s, cx)))
     }
 
     fn groups(&self, sessions: &[SessionState]) -> Vec<(String, Vec<SessionMeta>)> {
@@ -83,7 +120,7 @@ impl Sidebar {
         let mut metas: Vec<SessionMeta> = sessions
             .iter()
             .map(|s| s.meta.clone())
-            .filter(|m| m.parent.is_none())
+            .filter(|m| m.parent.is_none() && m.kind != SessionKind::Design)
             .filter(|m| {
                 q.is_empty()
                     || m.title.to_lowercase().contains(&q)
@@ -174,7 +211,6 @@ impl Sidebar {
         let store = self.store.clone();
         let pinned = m.pinned;
         let title: SharedString = m.title.clone().into();
-        let design = m.kind == SessionKind::Design;
         let needs = m.status == SessionStatus::NeedsInput || sub_needs > 0;
         let working = matches!(m.status, SessionStatus::Working | SessionStatus::Starting) || sub_running > 0;
         let sub: SharedString = if sub_needs > 0 {
@@ -209,21 +245,6 @@ impl Sidebar {
                 div()
                     .relative()
                     .child(agent_avatar(m.agent, 26.))
-                    .when(design, |d| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .top(sz(-4.))
-                                .left(sz(-4.))
-                                .size(sz(14.))
-                                .rounded_full()
-                                .bg(pal.chrome)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(icon("palette").size(sz(9.)).text_color(pal.brand)),
-                        )
-                    })
                     .child(
                         div()
                             .absolute()
@@ -375,7 +396,8 @@ impl Render for Sidebar {
         let store = self.store.read(cx);
         let groups = self.groups(&store.sessions);
         let pinned_projects = store.pinned.clone();
-        let total = store.sessions.len();
+        let total = store.sessions.iter().filter(|s| s.meta.kind != SessionKind::Design).count();
+        let sessions = store.sessions.clone();
         let mode = self.mode;
         let weak = cx.entity().downgrade();
 
@@ -441,6 +463,7 @@ impl Render for Sidebar {
             }
         }
 
+        let design_nav = self.render_design_nav(&sessions, cx);
         v_flex()
             .size_full()
             .child(
@@ -448,7 +471,7 @@ impl Render for Sidebar {
                     .px_3()
                     .pt_3()
                     .pb_1()
-                    .gap(sz(10.))
+                    .gap(sz(8.))
                     .child(
                         h_flex()
                             .gap(sz(6.))
@@ -489,23 +512,8 @@ impl Render for Sidebar {
                                     .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::NewGeneral)))
                                     .child(icon("globe").size(sz(15.)).text_color(pal.text_muted)),
                             )
-                            .child(
-                                div()
-                                    .id("sb-new-design")
-                                    .size(sz(34.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(sz(tokens::radius::MD))
-                                    .border_1()
-                                    .border_color(pal.border_strong)
-                                    .cursor_pointer()
-                                    .hover(|d| d.bg(pal.surface_hover))
-                                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("New design  (Ctrl+Shift+N)").build(window, cx))
-                                    .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::NewDesign)))
-                                    .child(icon("palette").size(sz(15.)).text_color(pal.text_muted)),
-                            ),
                     )
+                    .child(design_nav)
                     .child(
                         h_flex()
                             .gap(sz(4.))

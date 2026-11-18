@@ -734,6 +734,7 @@ mod tests {
                 PermissionOption { id: "n".into(), label: "Deny".into(), kind: PermissionOptionKind::RejectOnce },
             ],
             resolved: None,
+            diffs: vec![],
         }));
         let mut asking = session("Pick a db", SessionStatus::NeedsInput);
         let option = |l: &str| QuestionOption { label: l.into(), description: None };
@@ -778,7 +779,7 @@ mod tests {
             status: ToolStatus::Completed,
             input: None,
             output: None,
-            diffs: vec![FileDiff { path: "lib.rs".into(), old_text: Some("a\nb\n".into()), new_text: "a\nc\nd\n".into() }],
+            diffs: vec![FileDiff { path: "lib.rs".into(), old_text: Some("a\nb\n".into()), new_text: "a\nc\nd\n".into(), start_line: None }],
             locations: vec![],
         });
         match entry_view(&tool) {
@@ -799,6 +800,7 @@ mod tests {
                 PermissionOption { id: "n".into(), label: "Deny".into(), kind: PermissionOptionKind::RejectOnce },
             ],
             resolved: Some("y".into()),
+            diffs: vec![],
         });
         match entry_view(&perm) {
             EntryView::Permission { options, resolved, .. } => {

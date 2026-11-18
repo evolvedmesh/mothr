@@ -220,6 +220,28 @@ pub fn logo_mark(size: f32, pal: &super::tokens::Palette) -> Div {
         .child("M")
 }
 
+/// The track behind a set of [`segment`]s.
+pub fn segment_track(pal: &super::tokens::Palette) -> Div {
+    h_flex().flex_none().p(sz(2.)).gap(sz(2.)).rounded(sz(super::tokens::radius::MD)).bg(pal.surface_hover)
+}
+
+/// One option of a segmented control.
+pub fn segment(id: impl Into<ElementId>, label: impl Into<SharedString>, active: bool, pal: &super::tokens::Palette) -> Stateful<Div> {
+    let pal = *pal;
+    div()
+        .id(id)
+        .h(sz(24.))
+        .px(sz(10.))
+        .flex()
+        .items_center()
+        .rounded(sz(super::tokens::radius::SM))
+        .text_size(sz(super::tokens::text::SM))
+        .cursor_pointer()
+        .when(active, |d| d.bg(pal.surface).text_color(pal.text).font_weight(FontWeight::MEDIUM).shadow(super::tokens::shadow_sm(&pal)))
+        .when(!active, |d| d.text_color(pal.text_muted).hover(move |d| d.text_color(pal.text)))
+        .child(label.into())
+}
+
 /// Slash commands matching `query`: prefix matches first, then substring matches.
 pub fn rank_commands(commands: &[CommandInfo], query: &str) -> Vec<CommandInfo> {
     let q = query.to_ascii_lowercase();

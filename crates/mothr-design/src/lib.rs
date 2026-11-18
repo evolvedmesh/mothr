@@ -7,8 +7,9 @@ pub mod model;
 pub use model::*;
 
 use notify::{RecursiveMode, Watcher};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// Folder (relative to the project root) that holds design files.
 pub const DESIGN_DIR: &str = "mothr-design";
@@ -25,6 +26,20 @@ pub struct DesignDoc {
 impl DesignDoc {
     pub fn is_empty(&self) -> bool {
         self.system.is_none() && self.screens.is_empty()
+    }
+
+    /// Whether the agent has produced anything yet (the starter file doesn't count).
+    pub fn has_content(&self) -> bool {
+        !self.screens.is_empty()
+            || self.system.as_ref().is_some_and(|s| {
+                let t = &s.tokens;
+                !s.components.is_empty() || !t.colors.is_empty() || !t.typography.is_empty() || !t.spacing.is_empty() || !t.radii.is_empty() || !t.shadows.is_empty()
+            })
+    }
+
+    /// The system's description, unless it's still the starter placeholder.
+    pub fn description(&self) -> Option<&str> {
+        self.system.as_ref()?.description.as_deref().map(str::trim).filter(|d| !d.is_empty() && *d != STARTER_DESCRIPTION)
     }
 
     pub fn tokens(&self) -> Tokens {
@@ -139,6 +154,48 @@ pub fn load(project: &Path) -> DesignDoc {
     doc
 }
 
+/// A design found on disk.
+#[derive(Debug, Clone)]
+pub struct FoundDesign {
+    pub project: PathBuf,
+    pub doc: DesignDoc,
+    /// When its files last changed.
+    pub modified: Option<SystemTime>,
+}
+
+fn last_modified(root: &Path) -> Option<SystemTime> {
+    let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let screens = std::fs::read_dir(root.join("screens")).into_iter().flatten().flatten().filter_map(|e| mtime(&e.path()));
+    mtime(&root.join("system.json")).into_iter().chain(screens).max()
+}
+
+/// The folders directly inside `dir` (where designs without a project live).
+pub fn workspaces_in(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()
+}
+
+/// Load every candidate project that has a design, newest first. Each project appears once.
+pub fn discover(candidates: impl IntoIterator<Item = PathBuf>) -> Vec<FoundDesign> {
+    let mut seen = HashSet::new();
+    let mut found: Vec<FoundDesign> = candidates
+        .into_iter()
+        .filter(|p| seen.insert(p.canonicalize().unwrap_or_else(|_| p.clone())))
+        .filter_map(|project| {
+            let root = design_root(&project);
+            let doc = load(&project);
+            if doc.is_empty() && doc.errors.is_empty() {
+                return None;
+            }
+            Some(FoundDesign { modified: last_modified(&root), project, doc })
+        })
+        .collect();
+    found.sort_by_key(|d| std::cmp::Reverse(d.modified));
+    found
+}
+
+/// Placeholder description in a new design's `system.json`.
+pub const STARTER_DESCRIPTION: &str = "Describe the product and the feel of this design system.";
+
 /// Create the design folder with a starter `system.json` if it doesn't exist yet.
 pub fn ensure_scaffold(project: &Path, name: &str) -> anyhow::Result<PathBuf> {
     let root = design_root(project);
@@ -147,7 +204,7 @@ pub fn ensure_scaffold(project: &Path, name: &str) -> anyhow::Result<PathBuf> {
     if !sys.exists() {
         let starter = serde_json::json!({
             "name": name,
-            "description": "Describe the product and the feel of this design system.",
+            "description": STARTER_DESCRIPTION,
             "tokens": { "colors": {}, "typography": {}, "spacing": {}, "radii": {}, "shadows": {} },
             "components": []
         });
@@ -266,6 +323,51 @@ text_align, opacity, overflow ("hidden").
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_project(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mothr-design-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_new_scaffold_is_found_but_has_no_content() {
+        let p = temp_project("scaffold");
+        ensure_scaffold(&p, "Acme").unwrap();
+        let found = discover([p.clone(), p.clone()]);
+        assert_eq!(found.len(), 1, "duplicates collapse");
+        assert!(!found[0].doc.has_content());
+        assert_eq!(found[0].doc.description(), None);
+        assert!(found[0].modified.is_some());
+    }
+
+    #[test]
+    fn folders_without_a_design_are_skipped() {
+        let p = temp_project("plain");
+        assert!(discover([p]).is_empty());
+    }
+
+    #[test]
+    fn broken_designs_still_appear_so_errors_can_be_seen() {
+        let p = temp_project("broken");
+        std::fs::create_dir_all(p.join(DESIGN_DIR)).unwrap();
+        std::fs::write(p.join(DESIGN_DIR).join("system.json"), "{ nope").unwrap();
+        let found = discover([p]);
+        assert_eq!(found[0].doc.errors.len(), 1);
+    }
+
+    #[test]
+    fn newest_design_comes_first() {
+        let (old, new) = (temp_project("old"), temp_project("new"));
+        ensure_scaffold(&old, "Old").unwrap();
+        ensure_scaffold(&new, "New").unwrap();
+        let earlier = SystemTime::now() - Duration::from_secs(3600);
+        let file = std::fs::File::options().write(true).open(old.join(DESIGN_DIR).join("system.json")).unwrap();
+        file.set_modified(earlier).unwrap();
+        let found = discover([old, new.clone()]);
+        assert_eq!(found[0].project, new);
+    }
 
     #[test]
     fn instructions_examples_parse() {

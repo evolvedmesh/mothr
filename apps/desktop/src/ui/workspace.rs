@@ -1,6 +1,7 @@
 //! The root view: title bar, sidebar, routed main area and overlays.
 
 use super::chat::{ChatEvent, ChatView};
+use super::design::{DesignsEvent, DesignsPage};
 use super::home::{Home, HomeEvent};
 use super::kit::*;
 use super::picker::{PickerEvent, ProjectPicker};
@@ -31,7 +32,15 @@ use std::time::Duration;
 pub enum Route {
     Home,
     Session(SessionId),
+    Designs,
     Settings,
+}
+
+/// Who asked for the project picker.
+#[derive(Clone, Copy, PartialEq)]
+enum PickerFor {
+    Chat,
+    Design,
 }
 
 pub struct Workspace {
@@ -40,9 +49,11 @@ pub struct Workspace {
     sidebar: Entity<Sidebar>,
     sidebar_open: bool,
     home: Entity<Home>,
+    designs: Entity<DesignsPage>,
     chats: HashMap<SessionId, Entity<ChatView>>,
     settings_view: Option<Entity<SettingsView>>,
     picker: Option<Entity<ProjectPicker>>,
+    picker_for: PickerFor,
     usage_open: bool,
     route: Route,
     focus: FocusHandle,
@@ -55,17 +66,22 @@ impl Workspace {
         let store = cx.new(|cx| Store::new(hub, cx));
         let sidebar = cx.new(|cx| Sidebar::new(store.clone(), window, cx));
         let home = cx.new(|cx| Home::new(store.clone(), window, cx));
+        let designs = cx.new(|cx| DesignsPage::new(store.clone(), window, cx));
         let mut subs = vec![];
         subs.push(cx.subscribe_in(&sidebar, window, |this, _, ev: &SidebarEvent, window, cx| match ev {
             SidebarEvent::Open(id) => this.open_session(*id, window, cx),
-            SidebarEvent::NewChat => this.new_chat(SessionKind::Chat, None, window, cx),
-            SidebarEvent::NewDesign => this.new_chat(SessionKind::Design, None, window, cx),
+            SidebarEvent::NewChat => this.new_chat(None, window, cx),
+            SidebarEvent::OpenDesigns => this.open_designs(window, cx),
             SidebarEvent::NewGeneral => this.new_general_chat(window, cx),
-            SidebarEvent::NewChatIn(p) => this.new_chat(SessionKind::Chat, Some(p.clone()), window, cx),
+            SidebarEvent::NewChatIn(p) => this.new_chat(Some(p.clone()), window, cx),
+        }));
+        subs.push(cx.subscribe_in(&designs, window, |this, _, ev: &DesignsEvent, window, cx| match ev {
+            DesignsEvent::OpenChat(id) => this.open_session(*id, window, cx),
+            DesignsEvent::PickProject => this.open_picker(PickerFor::Design, window, cx),
         }));
         subs.push(cx.subscribe_in(&home, window, |this, _, ev: &HomeEvent, window, cx| match ev {
             HomeEvent::Started(id) => this.open_session(*id, window, cx),
-            HomeEvent::PickProject => this.open_picker(window, cx),
+            HomeEvent::PickProject => this.open_picker(PickerFor::Chat, window, cx),
         }));
         subs.push(cx.subscribe_in(&store, window, |this, _, ev: &StoreEvent, window, cx| match ev {
             StoreEvent::Toast(level, text) => {
@@ -109,9 +125,11 @@ impl Workspace {
             sidebar,
             sidebar_open,
             home,
+            designs,
             chats: HashMap::new(),
             settings_view: None,
             picker: None,
+            picker_for: PickerFor::Chat,
             usage_open: false,
             route: Route::Home,
             focus,
@@ -125,7 +143,7 @@ impl Workspace {
     }
 
     /// Developer hooks for screenshots / smoke tests:
-    /// `MOTHR_OPEN=settings|picker|latest|design` and
+    /// `MOTHR_OPEN=settings|picker|latest|changes|designs|design` and
     /// `MOTHR_DEV_PROMPT="<agent_id>|<mode>|<model>|<chat|design>|<prompt>"` (project = cwd).
     fn dev_hooks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let open = std::env::var("MOTHR_OPEN").ok();
@@ -165,11 +183,37 @@ impl Workspace {
             Route::Session(id) => Some(id),
             _ => None,
         };
-        self.sidebar.update(cx, |s, cx| s.set_active(active, cx));
+        let designs = route == Route::Designs;
+        self.sidebar.update(cx, |s, cx| s.set_active(active, designs, cx));
         cx.notify();
     }
 
+    /// The Design page, as it was left.
+    fn open_designs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate(Route::Designs, window, cx);
+        self.designs.update(cx, |d, cx| d.refresh(cx));
+    }
+
+    /// The Design gallery, ready to describe a new design.
+    fn new_design(&mut self, project: Option<ProjectRef>, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate(Route::Designs, window, cx);
+        self.designs.update(cx, |d, cx| d.start_new(project, window, cx));
+    }
+
     fn open_session(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
+        // Design chats live next to their design, on the Design page.
+        // (A session started a moment ago may not have reached the store yet.)
+        let store = self.store.read(cx);
+        let meta = store.session(id).map(|s| s.meta.clone()).or_else(|| store.hub.session(id).map(|s| s.meta));
+        let design = meta.filter(|m| m.kind == SessionKind::Design).map(|m| m.project);
+        if let Some(project) = design {
+            self.navigate(Route::Designs, window, cx);
+            self.designs.update(cx, |d, cx| d.open_project(project, Some(id), window, cx));
+            self.store.update(cx, |s, cx| {
+                s.dispatch(AppCommand::MarkRead { id }, window, cx);
+            });
+            return;
+        }
         if !self.chats.contains_key(&id) {
             let store = self.store.clone();
             let view = cx.new(|cx| ChatView::new(id, store, window, cx));
@@ -187,10 +231,9 @@ impl Workspace {
         }
     }
 
-    fn new_chat(&mut self, kind: SessionKind, project: Option<ProjectRef>, window: &mut Window, cx: &mut Context<Self>) {
+    fn new_chat(&mut self, project: Option<ProjectRef>, window: &mut Window, cx: &mut Context<Self>) {
         self.navigate(Route::Home, window, cx);
         self.home.update(cx, |h, cx| {
-            h.set_kind(kind, cx);
             if let Some(p) = project {
                 h.set_project(p, cx);
             }
@@ -239,10 +282,24 @@ impl Workspace {
                     sv.read(cx).scroll_to_bottom();
                 }
             }
-            Some("picker") => this.open_picker(window, cx),
+            Some("picker") => this.open_picker(PickerFor::Chat, window, cx),
             Some("usage") => {
                 this.usage_open = true;
                 cx.notify();
+            }
+            Some("designs") => this.open_designs(window, cx),
+            Some("changes") => {
+                let id = this.store.read(cx).sessions.iter().rev().find(|s| s.meta.parent.is_none() && s.meta.kind == SessionKind::Chat).map(|s| s.meta.id);
+                if let Some(id) = id {
+                    this.open_session(id, window, cx);
+                    if let Some(chat) = this.chats.get(&id) {
+                        chat.update(cx, |c, cx| c.set_changes_open(true, cx));
+                    }
+                }
+            }
+            Some("design") => {
+                this.navigate(Route::Designs, window, cx);
+                this.designs.update(cx, |d, cx| d.open_latest_when_ready(cx));
             }
             Some("subagent") => {
                 let id = this.store.read(cx).sessions.iter().rev().find(|s| s.meta.parent.is_some()).map(|s| s.meta.id);
@@ -250,16 +307,8 @@ impl Workspace {
                     this.open_session(id, window, cx);
                 }
             }
-            Some(kind @ ("latest" | "design")) => {
-                let want_design = kind == "design";
-                let id = this
-                    .store
-                    .read(cx)
-                    .sessions
-                    .iter()
-                    .rev()
-                    .find(|s| s.meta.parent.is_none() && (!want_design || s.meta.kind == SessionKind::Design))
-                    .map(|s| s.meta.id);
+            Some("latest") => {
+                let id = this.store.read(cx).sessions.iter().rev().find(|s| s.meta.parent.is_none()).map(|s| s.meta.id);
                 if let Some(id) = id {
                     this.open_session(id, window, cx);
                 }
@@ -276,14 +325,18 @@ impl Workspace {
         });
     }
 
-    fn open_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_picker(&mut self, purpose: PickerFor, window: &mut Window, cx: &mut Context<Self>) {
+        self.picker_for = purpose;
         let picker = cx.new(|cx| ProjectPicker::new(self.store.clone(), window, cx));
         self._subs.push(cx.subscribe_in(&picker, window, |this, _, ev: &PickerEvent, window, cx| {
             match ev {
                 PickerEvent::Picked(p) => {
                     let p = p.clone();
                     this.picker = None;
-                    this.new_chat(this.home.read(cx).kind(), Some(p), window, cx);
+                    match this.picker_for {
+                        PickerFor::Chat => this.new_chat(Some(p), window, cx),
+                        PickerFor::Design => this.new_design(Some(p), window, cx),
+                    }
                 }
                 PickerEvent::General => {
                     this.picker = None;
@@ -410,6 +463,7 @@ impl Render for Workspace {
                 Some(c) => c.clone().into_any_element(),
                 None => self.home.clone().into_any_element(),
             },
+            Route::Designs => self.designs.clone().into_any_element(),
             Route::Settings => match &self.settings_view {
                 Some(s) => s.clone().into_any_element(),
                 None => div().into_any_element(),
@@ -419,6 +473,7 @@ impl Render for Workspace {
         let route_key: SharedString = match self.route {
             Route::Home => "home".into(),
             Route::Session(id) => id.to_string().into(),
+            Route::Designs => "designs".into(),
             Route::Settings => "settings".into(),
         };
         let title_bar = self.render_title_bar(window, cx);
@@ -430,10 +485,10 @@ impl Render for Workspace {
             .bg(theme.background)
             .text_color(theme.foreground)
             .font_family(theme.font_family.clone())
-            .on_action(cx.listener(|this, _: &NewChat, window, cx| this.new_chat(SessionKind::Chat, None, window, cx)))
-            .on_action(cx.listener(|this, _: &NewDesign, window, cx| this.new_chat(SessionKind::Design, None, window, cx)))
+            .on_action(cx.listener(|this, _: &NewChat, window, cx| this.new_chat(None, window, cx)))
+            .on_action(cx.listener(|this, _: &NewDesign, window, cx| this.new_design(None, window, cx)))
             .on_action(cx.listener(|this, _: &crate::NewGeneralChat, window, cx| this.new_general_chat(window, cx)))
-            .on_action(cx.listener(|this, _: &OpenProjectPalette, window, cx| this.open_picker(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenProjectPalette, window, cx| this.open_picker(PickerFor::Chat, window, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.navigate(Route::Settings, window, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &FocusComposer, window, cx| match this.route {
@@ -442,6 +497,7 @@ impl Render for Workspace {
                         c.update(cx, |c, cx| c.focus(window, cx));
                     }
                 }
+                Route::Designs => this.designs.update(cx, |d, cx| d.focus(window, cx)),
                 _ => this.home.update(cx, |h, cx| h.focus(window, cx)),
             }))
             .child(title_bar)

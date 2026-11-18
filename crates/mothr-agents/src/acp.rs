@@ -735,11 +735,9 @@ impl Driver {
             for c in content {
                 match c["type"].as_str() {
                     Some("diff") => {
-                        let path = PathBuf::from(c["path"].as_str().unwrap_or(""));
-                        let new_text = c["newText"].as_str().unwrap_or("").to_string();
-                        let old_text = c["oldText"].as_str().map(str::to_string);
-                        call.diffs.retain(|d| d.path != path);
-                        call.diffs.push(FileDiff { path, old_text, new_text });
+                        let diff = file_diff(c);
+                        call.diffs.retain(|d| d.path != diff.path);
+                        call.diffs.push(diff);
                     }
                     Some("content") => {
                         if let Some(entry) = image_entry(&c["content"]) {
@@ -852,10 +850,13 @@ impl Driver {
                 self.reply(&id, json!({"outcome": {"outcome": "selected", "optionId": opt}}));
                 return;
             }
+        // The request usually carries the proposed edit; otherwise it was announced earlier.
+        let proposed: Vec<FileDiff> = tc["content"].as_array().into_iter().flatten().filter(|c| c["type"] == "diff").map(file_diff).collect();
+        let diffs = if proposed.is_empty() { known.map(|k| k.diffs.clone()).unwrap_or_default() } else { proposed };
         let entry_id = new_entry_id();
         self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: false });
         self.em.emit(SessionEvent::Upsert {
-            entry: Entry::Permission(PermissionRequest { id: entry_id, tool_call_id: tool_id, title, detail, kind, options, resolved: None }),
+            entry: Entry::Permission(PermissionRequest { id: entry_id, tool_call_id: tool_id, title, detail, kind, options, resolved: None, diffs }),
         });
     }
 
@@ -885,6 +886,16 @@ impl Driver {
         let entry_id = new_entry_id();
         self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: true });
         self.em.emit(SessionEvent::Upsert { entry: Entry::Question(QuestionRequest { id: entry_id, questions, answers: None }) });
+    }
+}
+
+/// An ACP `diff` content block. ACP sends whole files, so no line offset applies.
+fn file_diff(c: &Value) -> FileDiff {
+    FileDiff {
+        path: PathBuf::from(c["path"].as_str().unwrap_or("")),
+        old_text: c["oldText"].as_str().map(str::to_string),
+        new_text: c["newText"].as_str().unwrap_or("").to_string(),
+        start_line: None,
     }
 }
 

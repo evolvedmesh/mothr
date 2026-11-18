@@ -139,6 +139,7 @@ impl DemoHub {
                             PermissionOption { id: "deny".into(), label: "Deny".into(), kind: PermissionOptionKind::RejectOnce },
                         ],
                         resolved: None,
+                        diffs: vec![],
                     })
                 } else {
                     Entry::Question(QuestionRequest {
@@ -451,7 +452,7 @@ fn demo_sessions() -> Vec<SessionState> {
             PlanItem { content: "Write the web client".into(), status: PlanStatus::Pending },
         ] },
         Entry::Tool(ToolCall { id: "t1".into(), name: "Edit".into(), title: "Edit src/lib.rs".into(), kind: ToolKind::Edit, status: ToolStatus::Completed, input: Some("src/lib.rs".into()), output: None,
-            diffs: vec![FileDiff { path: "src/lib.rs".into(), old_text: Some("fn a() {}\nfn b() {}\nfn c() {}".into()), new_text: "fn a() {}\nfn b() -> u8 { 1 }\nfn c() {}\nfn d() {}".into() }], locations: vec![] }),
+            diffs: vec![FileDiff { path: "src/lib.rs".into(), old_text: Some("fn a() {}\nfn b() {}\nfn c() {}".into()), new_text: "fn a() {}\nfn b() -> u8 { 1 }\nfn c() {}\nfn d() {}".into(), start_line: None }], locations: vec![] }),
         Entry::Tool(ToolCall { id: "t2".into(), name: "Bash".into(), title: "cargo test".into(), kind: ToolKind::Execute, status: ToolStatus::Failed, input: Some("cargo test -p mothr-remote".into()), output: Some("error[E0308]: mismatched types\n  --> src/lib.rs:2:20".into()), diffs: vec![], locations: vec![] }),
         Entry::Assistant { id: "a1".into(), text: "I'll fix the type error. See [axum docs](https://docs.rs/axum) and `Router::new()`.\n\n| step | state |\n|---|---|\n| build | ok |".into(), streaming: false },
         Entry::Notice { id: "n1".into(), level: NoticeLevel::Warning, text: "Context window is 76% full".into() },
@@ -459,7 +460,7 @@ fn demo_sessions() -> Vec<SessionState> {
             PermissionOption { id: "allow".into(), label: "Allow once".into(), kind: PermissionOptionKind::AllowOnce },
             PermissionOption { id: "always".into(), label: "Always allow".into(), kind: PermissionOptionKind::AllowAlways },
             PermissionOption { id: "deny".into(), label: "Deny".into(), kind: PermissionOptionKind::RejectOnce },
-        ], resolved: None }),
+        ], resolved: None, diffs: vec![] }),
         Entry::Question(QuestionRequest { id: "q1".into(), questions: vec![
             Question { header: Some("Port".into()), question: "Which port should the server use?".into(), options: vec![QuestionOption { label: "7878".into(), description: Some("Default".into()) }, QuestionOption { label: "8080".into(), description: None }], multi_select: false },
             Question { header: Some("Tunnels".into()), question: "Which tunnels should be supported?".into(), options: vec![QuestionOption { label: "Tailscale".into(), description: None }, QuestionOption { label: "Dev Tunnels".into(), description: None }], multi_select: true },

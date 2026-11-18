@@ -34,7 +34,6 @@ pub struct Home {
     /// Model for the next chat (None = the agent's own default).
     model: Option<String>,
     slash_sel: usize,
-    kind: SessionKind,
     _subs: Vec<Subscription>,
 }
 
@@ -78,20 +77,11 @@ impl Home {
                 cx.notify();
             }),
         ];
-        Self { store, input, agent: None, project: None, general: false, model: None, slash_sel: 0, kind: SessionKind::Chat, _subs: subs }
+        Self { store, input, agent: None, project: None, general: false, model: None, slash_sel: 0, _subs: subs }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |i, cx| i.focus(window, cx));
-    }
-
-    pub fn kind(&self) -> SessionKind {
-        self.kind
-    }
-
-    pub fn set_kind(&mut self, kind: SessionKind, cx: &mut Context<Self>) {
-        self.kind = kind;
-        cx.notify();
     }
 
     pub fn set_project(&mut self, p: ProjectRef, cx: &mut Context<Self>) {
@@ -103,7 +93,6 @@ impl Home {
     /// Switch the launcher to a general chat (no project folder).
     pub fn set_general(&mut self, cx: &mut Context<Self>) {
         self.general = true;
-        self.kind = SessionKind::Chat;
         cx.notify();
     }
 
@@ -216,37 +205,19 @@ impl Home {
             window.push_notification(Notification::warning("No agent is installed. Install Claude Code, Codex, Copilot, OpenCode or Hermes."), cx);
             return;
         };
-        let project = match (&self.project, self.kind) {
-            _ if self.general && self.kind == SessionKind::Chat => std::path::PathBuf::new(),
-            (Some(p), _) => p.path.clone(),
-            (None, SessionKind::Design) => {
-                // Design without a project gets its own workspace folder.
-                let slug: String = derive_title(if text.is_empty() { "design" } else { &text })
-                    .chars()
-                    .filter(|c| c.is_alphanumeric() || *c == ' ')
-                    .take(32)
-                    .collect::<String>()
-                    .trim()
-                    .replace(' ', "-")
-                    .to_lowercase();
-                let dir = designs_dir().join(format!("{}-{}", slug, chrono::Local::now().format("%m%d-%H%M")));
-                if let Err(e) = std::fs::create_dir_all(&dir) {
-                    window.push_notification(Notification::error(format!("Couldn't create design folder: {e}")), cx);
-                    return;
-                }
-                dir
-            }
-            (None, SessionKind::Chat) => {
+        if text.is_empty() {
+            return;
+        }
+        let project = match &self.project {
+            _ if self.general => std::path::PathBuf::new(),
+            Some(p) => p.path.clone(),
+            None => {
                 cx.emit(HomeEvent::PickProject);
                 return;
             }
         };
-        if text.is_empty() && self.kind == SessionKind::Chat {
-            return;
-        }
-        let prompt = if text.is_empty() { None } else { Some(text) };
         let mode = self.default_mode(cx).for_agent(agent);
-        let cmd = AppCommand::NewSession { agent, kind: self.kind, project, mode, model: self.model.clone(), prompt };
+        let cmd = AppCommand::NewSession { agent, kind: SessionKind::Chat, project, mode, model: self.model.clone(), prompt: Some(text) };
         let id = self.store.update(cx, |s, cx| s.dispatch(cmd, window, cx));
         if let Some(id) = id {
             self.input.update(cx, |i, cx| i.set_value("", window, cx));
@@ -255,43 +226,45 @@ impl Home {
     }
 
     fn agent_menu_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let weak = cx.entity().downgrade();
         let agents = self.store.read(cx).agents.clone();
-        let current = self.agent;
-        let label = current.map(|k| k.display_name()).unwrap_or("No agent");
-        Button::new("agent-pick")
-            .ghost()
-            .when_some(current, |b, k| b.icon(agent_logo(k)))
-            .label(label)
-            .dropdown_caret(true)
-            .dropdown_menu(move |mut menu, _, _| {
-                menu = menu.label("Agent");
-                for a in &agents {
-                    let weak = weak.clone();
-                    let kind = a.kind;
-                    let note = if a.available() {
-                        a.version.clone().map(|v| format!("  v{v}")).unwrap_or_default()
-                    } else {
-                        "  — not installed".into()
-                    };
-                    menu = menu.item(
-                        PopupMenuItem::new(format!("{}{}", kind.display_name(), note))
-                            .icon(agent_logo(kind))
-                            .checked(current == Some(kind))
-                            .disabled(!a.available())
-                            .on_click(move |_, _, cx| {
-                                if let Some(h) = weak.upgrade() {
-                                    h.update(cx, |h, cx| {
-                                        h.select_agent(kind, cx);
-                                        cx.notify();
-                                    });
-                                }
-                            }),
-                    );
-                }
-                menu
-            })
+        agent_menu("agent-pick", agents, self.agent, cx.entity().downgrade(), |h: &mut Home, kind, cx| h.select_agent(kind, cx))
     }
+}
+
+/// Button that picks one of the detected agents.
+pub fn agent_menu<T: 'static>(
+    id: &'static str,
+    agents: Vec<AgentInstall>,
+    current: Option<AgentKind>,
+    weak: WeakEntity<T>,
+    set: impl Fn(&mut T, AgentKind, &mut Context<T>) + Clone + 'static,
+) -> impl IntoElement {
+    Button::new(id)
+        .ghost()
+        .when_some(current, |b, k| b.icon(agent_logo(k)))
+        .label(current.map(|k| k.display_name()).unwrap_or("No agent"))
+        .dropdown_caret(true)
+        .dropdown_menu(move |mut menu, _, _| {
+            menu = menu.label("Agent");
+            for a in &agents {
+                let weak = weak.clone();
+                let set = set.clone();
+                let kind = a.kind;
+                let note = if a.available() { a.version.clone().map(|v| format!("  v{v}")).unwrap_or_default() } else { "  — not installed".into() };
+                menu = menu.item(
+                    PopupMenuItem::new(format!("{}{}", kind.display_name(), note))
+                        .icon(agent_logo(kind))
+                        .checked(current == Some(kind))
+                        .disabled(!a.available())
+                        .on_click(move |_, _, cx| {
+                            if let Some(e) = weak.upgrade() {
+                                e.update(cx, |t, cx| set(t, kind, cx));
+                            }
+                        }),
+                );
+            }
+            menu
+        })
 }
 
 pub fn mode_menu<T: 'static>(
@@ -347,41 +320,17 @@ impl Render for Home {
         let model_button = self.model_menu_button(cx);
         let store = self.store.read(cx);
         let no_agents = store.agents_scanned && store.available_agents().is_empty();
-        let design = self.kind == SessionKind::Design;
-        let general = self.general && !design;
+        let general = self.general;
         let weak = cx.entity().downgrade();
         let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         let default_mode = self.default_mode(cx);
         let effective_mode = self.agent.map(|a| default_mode.for_agent(a)).unwrap_or(default_mode);
-        let project_label = match (&self.project, design) {
+        let project_label = match &self.project {
             _ if general => "General".to_string(),
-            (Some(p), _) => p.name.clone(),
-            (None, true) => "New design folder".into(),
-            (None, false) => "Choose project".into(),
+            Some(p) => p.name.clone(),
+            None => "Choose project".into(),
         };
         let send_enabled = self.agent.is_some();
-
-        let segmented = h_flex()
-            .p(sz(3.))
-            .gap(sz(2.))
-            .rounded(sz(tokens::radius::MD + 2.))
-            .bg(pal.surface_hover)
-            .children([(SessionKind::Chat, "Chat"), (SessionKind::Design, "Design")].map(|(k, label)| {
-                let active = self.kind == k;
-                div()
-                    .id(label)
-                    .px(sz(14.))
-                    .h(sz(28.))
-                    .flex()
-                    .items_center()
-                    .rounded(sz(tokens::radius::MD))
-                    .text_size(sz(tokens::text::BASE))
-                    .cursor_pointer()
-                    .when(active, |d| d.bg(pal.surface).text_color(pal.text).font_weight(FontWeight::MEDIUM).shadow(tokens::shadow_sm(&pal)))
-                    .when(!active, |d| d.text_color(pal.text_muted).hover(|d| d.text_color(pal.text)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_kind(k, cx)))
-                    .child(label)
-            }));
 
         let matches = self.slash_matches(cx);
         let sel = self.slash_sel.min(matches.len().saturating_sub(1));
@@ -500,9 +449,8 @@ impl Render for Home {
                         .text_size(sz(tokens::text::XXL + 4.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(pal.text)
-                        .child(if design { "What are we designing?" } else { "What are we working on?" }),
+                        .child("What are we working on?"),
                 )
-                .child(segmented)
                 .child(div().w_full().mt_2().child(composer))
                 .when(no_agents, |d| {
                     d.child(

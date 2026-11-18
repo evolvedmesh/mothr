@@ -1,7 +1,9 @@
 //! Mothr's GPUI interface.
 
+pub mod changes;
 pub mod chat;
 pub mod design;
+pub mod diff;
 pub mod home;
 pub mod kit;
 pub mod picker;

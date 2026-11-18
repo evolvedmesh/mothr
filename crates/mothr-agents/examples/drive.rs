@@ -1,4 +1,5 @@
 //! Headless driver smoke test: `cargo run -p mothr-agents --example drive -- <agent_id> <cwd> "<prompt>" [model]`
+//! `DRIVE_PERMISSION=allow|always|reject` picks how permission requests are answered (default allow).
 use mothr_agents::*;
 use mothr_core::*;
 
@@ -29,7 +30,15 @@ async fn main() {
                 }
                 state.apply(&e);
                 if let SessionEvent::Upsert { entry: Entry::Permission(p) } = &e {
-                    let opt = p.options.iter().find(|o| matches!(o.kind, PermissionOptionKind::AllowOnce)).unwrap();
+                    for d in &p.diffs {
+                        println!("DIFF line {:?} {:?}\n{}", d.start_line, d.stats(), unified_patch("file", &[d]));
+                    }
+                    let want = match std::env::var("DRIVE_PERMISSION").as_deref() {
+                        Ok("reject") => PermissionOptionKind::RejectOnce,
+                        Ok("always") => PermissionOptionKind::AllowAlways,
+                        _ => PermissionOptionKind::AllowOnce,
+                    };
+                    let opt = p.options.iter().find(|o| o.kind == want).or(p.options.first()).unwrap();
                     cmd.send(SessionCommand::RespondPermission { entry_id: p.id.clone(), option_id: opt.id.clone() }).unwrap();
                 }
                 if let SessionEvent::Upsert { entry: Entry::Question(q) } = &e {

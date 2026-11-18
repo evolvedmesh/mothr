@@ -80,13 +80,22 @@ with the app.
 - **Mothr mobile** (`apps/mobile`). A native Android/iOS remote built on the same Rust session
   model. It stays connected in the background and sends a notification when an agent needs a
   permission or an answer. Allow, Deny or an answer can be tapped right on the notification.
-- **Design mode.** A chat variant where the agent writes a design system and mockup screens as
-  JSON in `mothr-design/`. Mothr renders them natively and live:
-  - color, type, spacing, radius and shadow tokens
-  - a component gallery with variants
-  - device artboards with zoom
-  - hot reload on every agent edit
-  - **Export** (toolbar → Export):
+- **Review agent changes.** Every file edit shows as a real line diff with syntax highlighting.
+  The **Changes** panel (the `+N −M` button in a chat's header) lists all of a chat's edits,
+  including its subagents', in unified or split view.
+  - When the permission mode asks before editing (**Ask**), the edit appears as a review card:
+    nothing is written until you **Accept** it, and **Reject** tells the agent no.
+    **Accept all edits** switches Claude Code to Accept edits for the rest of the chat.
+  - In modes that write without asking (**Accept edits**, **Auto**, **Allow all**), changes are
+    shown as already applied.
+- **Design.** A page of its own in the sidebar, holding every design system your agents have
+  made. Agents write a design system and mockup screens as JSON in `mothr-design/`, and Mothr
+  renders them natively and live. Open one to browse it like a storybook:
+  - an overview, then color, type, spacing, radius and shadow tokens
+  - each component with its variants, preview backgrounds and JSON source
+  - device screens that fit the window, with zoom
+  - the agent's chat alongside, with hot reload on every edit
+  - **Export** (top right):
     - **HTML:** one self-contained file with every screen, the design system page and
       navigation between them. Fonts and icons are embedded, so it opens offline and can be sent
       as is.
@@ -163,8 +172,13 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 ### Developer hooks
 
 - `MOTHR_HOME=<dir>`: isolated config and data.
-- `MOTHR_OPEN=settings|remote|picker|usage|latest|design|subagent`: open a view at startup
-  (`MOTHR_OPEN_DELAY_MS` delays it).
+- `MOTHR_OPEN=settings|remote|picker|usage|latest|changes|designs|design|subagent`: open a view
+  at startup (`MOTHR_OPEN_DELAY_MS` delays it). `changes` opens the newest chat's Changes panel;
+  `design` opens the newest design.
+- `MOTHR_DESIGN_PAGE=overview|color|type|space|elevation|component:<n>|screen:<n>`: the page a
+  design opens on. `MOTHR_DESIGN_EXPORT=menu|html|storybook` opens the export menu or exports.
+- `MOTHR_DEV_REVIEW=accept|reject`: answer the first waiting edits from the Changes panel.
+  `MOTHR_DIFF_MODE=split` starts the panel in split view.
 - `MOTHR_TRACE=<file>`: append Claude Code's raw protocol lines to a file.
 - `MOTHR_PREFILL=<text>`: type text into the open chat's composer at startup.
 - `MOTHR_DEV_PROMPT="<agent_id>|<mode>|<model>|<chat|design>|<prompt>"`: start a real chat in

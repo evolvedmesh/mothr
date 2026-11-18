@@ -10,7 +10,8 @@ name = "mothr"
 path = "src/main.rs"
 
 [dependencies]
-gpui-kit.workspace = true
+# syntect highlights code in chat replies and diffs.
+gpui-kit = { workspace = true, features = ["syntect"] }
 mothr-core.workspace = true
 mothr-hub.workspace = true
 mothr-design.workspace = true

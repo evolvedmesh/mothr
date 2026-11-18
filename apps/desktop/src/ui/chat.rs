@@ -1,6 +1,7 @@
-//! A single agent conversation: header, transcript and composer (+ design canvas).
+//! A single agent conversation: header, transcript, composer and the Changes panel.
 
-use super::design::DesignView;
+use super::changes::{ChangesEvent, ChangesPanel};
+use super::diff::{InlineDiffs, stat_label};
 use super::home::mode_menu;
 use super::kit::*;
 use super::tokens;
@@ -48,7 +49,13 @@ pub struct ChatView {
     editing: Option<EntryId>,
     /// Highlighted row in the slash-command menu.
     slash_sel: usize,
-    design: Option<Entity<DesignView>>,
+    /// Diffs shown inside tool and review cards.
+    diffs: InlineDiffs,
+    /// Created the first time the Changes panel opens.
+    changes: Option<Entity<ChangesPanel>>,
+    changes_open: bool,
+    /// Totals for the header button, recomputed when the session's edits change.
+    change_summary: (u64, ChangeSummary),
     _subs: Vec<Subscription>,
 }
 
@@ -60,14 +67,6 @@ impl ChatView {
                 .submit_on_enter(true)
                 .placeholder("Reply… (↵ to send, ⇧↵ for a newline)")
         });
-        let meta = store.read(cx).session(id).map(|s| s.meta.clone());
-        let design = meta
-            .as_ref()
-            .filter(|m| m.kind == SessionKind::Design)
-            .map(|m| {
-                let project = m.project.clone();
-                cx.new(|cx| DesignView::new(project, window, cx))
-            });
         let weak = cx.entity().downgrade();
         let subs = vec![
             cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, window, cx| match ev {
@@ -125,7 +124,10 @@ impl ChatView {
             working_since: None,
             editing: None,
             slash_sel: 0,
-            design,
+            diffs: InlineDiffs::default(),
+            changes: None,
+            changes_open: false,
+            change_summary: (0, ChangeSummary::default()),
             _subs: subs,
         };
         // Inputs for questions that already exist (e.g. after a restart).
@@ -154,6 +156,32 @@ impl ChatView {
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |i, cx| i.focus(window, cx));
+    }
+
+    /// Show or hide the Changes panel.
+    pub fn set_changes_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.changes_open = open;
+        if open && self.changes.is_none() {
+            let (id, store) = (self.id, self.store.clone());
+            let panel = cx.new(|cx| ChangesPanel::new(id, store, cx));
+            self._subs.push(cx.subscribe(&panel, |this, _, ev: &ChangesEvent, cx| match ev {
+                ChangesEvent::Close => this.set_changes_open(false, cx),
+            }));
+            self.changes = Some(panel);
+        }
+        cx.notify();
+    }
+
+    /// Totals across this chat and its subagents.
+    fn refresh_change_summary(&mut self, cx: &App) -> ChangeSummary {
+        let store = self.store.read(cx);
+        let sessions: Vec<&SessionState> = store.session(self.id).into_iter().chain(store.children(self.id)).collect();
+        let fingerprint = sessions.iter().fold(0u64, |acc, s| acc.rotate_left(7) ^ s.changes_fingerprint());
+        if self.change_summary.0 != fingerprint {
+            let changes: Vec<FileChange> = sessions.iter().flat_map(|s| s.file_changes()).collect();
+            self.change_summary = (fingerprint, ChangeSummary::of(&changes));
+        }
+        self.change_summary.1
     }
 
     fn dispatch(&self, command: SessionCommand, window: &mut Window, cx: &mut Context<Self>) {
@@ -372,6 +400,10 @@ impl ChatView {
         let store = self.store.clone();
         let project = m.project.clone();
         let pinned = m.pinned;
+        let changes = Some(self.refresh_change_summary(cx)).filter(|c| c.total > 0 && m.kind == SessionKind::Chat);
+        let changes_open = self.changes_open;
+        // Next to the Changes panel or a design the header is narrow: keep it to one line.
+        let compact = changes_open || m.kind == SessionKind::Design;
 
         h_flex()
             .px_4()
@@ -386,12 +418,12 @@ impl ChatView {
             .child(
                 v_flex()
                     .flex_1()
-                    .min_w(sz(220.))
+                    .min_w(sz(if compact { 120. } else { 220. }))
                     .child(
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(div().font_weight(FontWeight::SEMIBOLD).truncate().child(m.title.clone()))
+                            .child(div().min_w_0().font_weight(FontWeight::SEMIBOLD).truncate().child(m.title.clone()))
                             .child(
                                 h_flex()
                                     .gap_1()
@@ -412,7 +444,35 @@ impl ChatView {
                             .child(format!("{} · {}", m.agent.display_name(), tildify(&m.project))),
                     ),
             )
-            .child({
+            .when_some(changes, |el, c| {
+                let pal = tokens::p(cx);
+                let waiting = c.pending > 0;
+                el.child(
+                    h_flex()
+                        .id("changes-toggle")
+                        .gap(sz(8.))
+                        .px(sz(10.))
+                        .h(sz(30.))
+                        .items_center()
+                        .rounded(sz(tokens::radius::MD))
+                        .border_1()
+                        .border_color(if waiting { pal.warning.opacity(0.5) } else { pal.border })
+                        .when(changes_open, |d| d.bg(pal.surface_hover))
+                        .when(waiting, |d| d.bg(pal.warning.opacity(0.08)))
+                        .text_size(sz(tokens::text::SM))
+                        .text_color(pal.text_muted)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(pal.surface_hover).text_color(pal.text))
+                        .tooltip(move |window, cx| {
+                            let tip = if waiting { format!("{} waiting for review", c.pending) } else { "File changes".to_string() };
+                            gpui_kit::component::tooltip::Tooltip::new(tip).build(window, cx)
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| this.set_changes_open(!changes_open, cx)))
+                        .child(icon("file-diff").size(sz(14.)).text_color(if waiting { pal.warning } else { pal.text_muted }))
+                        .child(stat_label(c.stats, &pal)),
+                )
+            })
+            .when(!compact, |el| el.child({
                 let pal = tokens::p(cx);
                 let f = ctx.fraction();
                 let color = level_color(UsageLevel::from_fraction(f), cx);
@@ -444,15 +504,15 @@ impl ChatView {
                     } else {
                         "—".into()
                     })
-            })
+            }))
             .when(!models.is_empty(), |el| {
                 let weak = weak.clone();
                 el.child(
                     Button::new("model-pick")
                         .ghost()
                         .icon(icon("brain"))
-                        .label(model_label)
-                        .dropdown_caret(true)
+                        .when(compact, |b| b.tooltip(model_label.clone()))
+                        .when(!compact, |b| b.label(model_label.clone()).dropdown_caret(true))
                         .dropdown_menu(move |mut menu, _, _| {
                             menu = menu.label("Model").max_h(sz(420.)).scrollable(true);
                             for mi in &models {
@@ -902,10 +962,10 @@ impl ChatView {
             ToolStatus::Completed => icon("check").size(sz(14.)).text_color(theme.success).into_any_element(),
             ToolStatus::Failed => icon("x").size(sz(14.)).text_color(theme.danger).into_any_element(),
         };
-        let (adds, dels) = t.diffs.iter().fold((0, 0), |(a, d), f| {
-            let (x, y) = diff_counts(f);
-            (a + x, d + y)
-        });
+        let mut stats = DiffStats::default();
+        t.diffs.iter().for_each(|f| stats.add(f.stats()));
+        let inline_diff = (open && !t.diffs.is_empty()).then(|| self.diffs.element(&t.id, &t.diffs, cx));
+        let pal = tokens::p(cx);
         let has_body = t.output.as_ref().is_some_and(|o| !o.trim().is_empty()) || !t.diffs.is_empty();
         v_flex()
             .rounded(sz(10.))
@@ -938,15 +998,7 @@ impl ChatView {
                             .text_color(theme.muted_foreground)
                             .child(t.input.clone().unwrap_or_default()),
                     )
-                    .when(adds + dels > 0, |d| {
-                        d.child(
-                            h_flex()
-                                .gap_1()
-                                .text_xs()
-                                .child(div().text_color(theme.success).child(format!("+{adds}")))
-                                .child(div().text_color(theme.danger).child(format!("-{dels}"))),
-                        )
-                    })
+                    .when(stats.added + stats.removed > 0, |d| d.child(stat_label(stats, &pal)))
                     .when_some(self.subagent_for(&t.id, cx), |d, child| {
                         d.child(
                             Button::new(ElementId::Name(format!("open-sub-{}", t.id).into()))
@@ -965,10 +1017,12 @@ impl ChatView {
             )
             .when(open, |d| {
                 let mut body = v_flex().border_t_1().border_color(theme.border).bg(theme.muted.opacity(0.4));
-                for f in &t.diffs {
-                    body = body.child(render_diff(f, cx));
+                let has_diff = inline_diff.is_some();
+                if let Some(diff) = inline_diff {
+                    body = body.child(diff);
                 }
-                if let Some(out) = &t.output
+                // An edit's output only restates the diff, unless the edit failed.
+                if let Some(out) = t.output.as_ref().filter(|_| !has_diff || t.status == ToolStatus::Failed)
                     && !out.trim().is_empty() {
                         let shown: String = out.lines().take(400).collect::<Vec<_>>().join("\n");
                         body = body.child(
@@ -988,12 +1042,104 @@ impl ChatView {
             .into_any_element()
     }
 
+    /// A proposed edit: the diff, with the decision right under it.
+    fn render_edit_review(&mut self, p: &PermissionRequest, cx: &mut Context<Self>) -> AnyElement {
+        let pal = tokens::p(cx);
+        let mut stats = DiffStats::default();
+        p.diffs.iter().for_each(|d| stats.add(d.stats()));
+        let diff = self.diffs.element(&p.id, &p.diffs, cx);
+        let first = &p.diffs[0];
+        let name = first.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let is_new = p.diffs.iter().all(|d| d.old_text.is_none());
+        // Design chats sit beside their design, with no room for the panel.
+        let has_panel = self.store.read(cx).session(self.id).is_some_and(|s| s.meta.kind == SessionKind::Chat);
+        let mut buttons = h_flex().gap_2().flex_wrap().items_center().justify_end();
+        // Reject on the left of the group, the affirmative choice last.
+        let mut ordered: Vec<&PermissionOption> = p.options.iter().collect();
+        ordered.sort_by_key(|o| match o.kind {
+            PermissionOptionKind::RejectAlways => 0,
+            PermissionOptionKind::RejectOnce => 1,
+            PermissionOptionKind::AllowAlways => 2,
+            PermissionOptionKind::AllowOnce => 3,
+        });
+        for o in ordered {
+            let (eid, oid) = (p.id.clone(), o.id.clone());
+            let b = Button::new(ElementId::Name(format!("perm-{}-{}", p.id, o.id).into())).small();
+            let b = match o.kind {
+                PermissionOptionKind::AllowOnce => b.primary().icon(icon("check")).label("Accept"),
+                PermissionOptionKind::AllowAlways => b.outline().label(o.label.clone()),
+                PermissionOptionKind::RejectOnce => b.ghost().label("Reject"),
+                PermissionOptionKind::RejectAlways => b.ghost().label(o.label.clone()),
+            };
+            buttons = buttons.child(b.on_click(cx.listener(move |this, _, window, cx| {
+                this.dispatch(SessionCommand::RespondPermission { entry_id: eid.clone(), option_id: oid.clone() }, window, cx);
+            })));
+        }
+        appear(
+            ElementId::Name(format!("review-in-{}", p.id).into()),
+            v_flex()
+                .rounded(sz(tokens::radius::LG))
+                .border_1()
+                .border_color(pal.warning.opacity(0.45))
+                .bg(pal.surface)
+                .overflow_hidden()
+                .child(
+                    h_flex()
+                        .px(sz(12.))
+                        .h(sz(40.))
+                        .gap(sz(8.))
+                        .items_center()
+                        .rounded_t(sz(tokens::radius::LG - 1.))
+                        .bg(pal.warning.opacity(0.07))
+                        .border_b_1()
+                        .border_color(pal.warning.opacity(0.25))
+                        .child(icon("file-pen").flex_none().size(sz(15.)).text_color(pal.warning))
+                        .child(div().flex_none().text_size(sz(tokens::text::BASE)).font_weight(FontWeight::MEDIUM).child(if is_new { "Create" } else { "Edit" }))
+                        .child(div().flex_none().max_w(relative(0.45)).truncate().font_family(tokens::FONT_MONO).text_size(sz(tokens::text::SM)).child(name))
+                        .child(div().flex_1().min_w_0().truncate().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(first.path.parent().map(tildify).unwrap_or_default()))
+                        .child(stat_label(stats, &pal))
+                        .when(has_panel, |d| {
+                            d.child(
+                                Button::new(ElementId::Name(format!("review-open-{}", p.id).into()))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(icon("panel-right"))
+                                    .tooltip("Open in Changes")
+                                    .on_click(cx.listener(|this, _, _, cx| this.set_changes_open(true, cx))),
+                            )
+                        }),
+                )
+                .child(diff)
+                .child(
+                    h_flex()
+                        .px(sz(12.))
+                        .py(sz(8.))
+                        .gap(sz(8.))
+                        .items_center()
+                        .border_t_1()
+                        .border_color(pal.border)
+                        .child(div().flex_1().min_w_0().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child("Nothing is written until you accept."))
+                        .child(buttons),
+                ),
+        )
+        .into_any_element()
+    }
+
     fn render_permission(&mut self, p: &PermissionRequest, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
+        let reviewable = p.kind == ToolKind::Edit && !p.diffs.is_empty();
+        if p.resolved.is_none() && reviewable {
+            return self.render_edit_review(p, cx);
+        }
         if let Some(choice) = &p.resolved {
             let opt = p.options.iter().find(|o| &o.id == choice);
             let allowed = opt.is_some_and(|o| matches!(o.kind, PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways));
-            let label = opt.map(|o| o.label.clone()).unwrap_or_else(|| choice.replace('_', " "));
+            let label = match opt {
+                Some(o) if reviewable && o.kind == PermissionOptionKind::AllowOnce => "Accepted".to_string(),
+                Some(o) if reviewable && o.kind == PermissionOptionKind::RejectOnce => "Rejected".to_string(),
+                Some(o) => o.label.clone(),
+                None => choice.replace('_', " "),
+            };
             return h_flex()
                 .gap_2()
                 .items_center()
@@ -1434,10 +1580,6 @@ impl Render for ChatView {
         let Some(s) = self.store.read(cx).session(self.id).cloned() else {
             return div().size_full().child(empty_state("message-square", "Chat not found", "It may have been deleted.", cx)).into_any_element();
         };
-        if self.design.is_none() && s.meta.kind == SessionKind::Design {
-            let project = s.meta.project.clone();
-            self.design = Some(cx.new(|cx| DesignView::new(project, window, cx)));
-        }
         let theme = cx.theme().clone();
         let live = s.meta.status.is_live();
         let header = self.render_header(&s, cx);
@@ -1463,7 +1605,19 @@ impl Render for ChatView {
                 }),
             );
         }
+        // An edit under review is shown by its review card alone.
+        let under_review: HashSet<&str> = s
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Permission(p) if p.resolved.is_none() && p.kind == ToolKind::Edit && !p.diffs.is_empty() => p.tool_call_id.as_deref(),
+                _ => None,
+            })
+            .collect();
         for e in &s.entries {
+            if matches!(e, Entry::Tool(t) if under_review.contains(t.id.as_str())) {
+                continue;
+            }
             let el = self.render_entry(e, live, cx);
             transcript = transcript.child(div().id(ElementId::Name(format!("e-{}", e.id()).into())).child(el));
         }
@@ -1555,11 +1709,11 @@ impl Render for ChatView {
             .child(div().w_full().max_w(sz(860.)).mx_auto().px_6().pb_4().child(composer));
 
         let _ = window;
-        match &self.design {
-            Some(design) => h_flex()
+        match self.changes.clone().filter(|_| self.changes_open && s.meta.kind == SessionKind::Chat) {
+            Some(panel) => h_flex()
                 .size_full()
-                .child(div().w(relative(0.42)).min_w(sz(380.)).h_full().border_r_1().border_color(theme.border).child(chat_column))
-                .child(div().flex_1().min_w_0().h_full().child(design.clone()))
+                .child(div().flex_1().min_w(sz(360.)).h_full().child(chat_column))
+                .child(div().w(relative(0.52)).min_w(sz(380.)).h_full().flex_none().border_l_1().border_color(theme.border).child(panel))
                 .into_any_element(),
             None => chat_column.into_any_element(),
         }
@@ -1633,48 +1787,6 @@ fn mime_for(p: &std::path::Path) -> Option<String> {
         }
         .into(),
     )
-}
-
-fn diff_counts(f: &FileDiff) -> (usize, usize) {
-    let new = f.new_text.lines().count();
-    let old = f.old_text.as_ref().map(|o| o.lines().count()).unwrap_or(0);
-    (new, old)
-}
-
-fn render_diff(f: &FileDiff, cx: &App) -> impl IntoElement + use<> {
-    let theme = cx.theme();
-    let mut lines = v_flex().text_xs().font_family(theme.mono_font_family.clone());
-    let mut count = 0;
-    if let Some(old) = &f.old_text {
-        for l in old.lines() {
-            if count > 240 {
-                break;
-            }
-            count += 1;
-            lines = lines.child(div().px_3().bg(theme.danger.opacity(0.10)).text_color(theme.danger).child(format!("- {l}")));
-        }
-    }
-    for l in f.new_text.lines() {
-        if count > 480 {
-            lines = lines.child(div().px_3().text_color(theme.muted_foreground).child("…"));
-            break;
-        }
-        count += 1;
-        lines = lines.child(div().px_3().bg(theme.success.opacity(0.10)).text_color(theme.success).child(format!("+ {l}")));
-    }
-    v_flex()
-        .child(
-            div()
-                .px_3()
-                .py_1()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.muted_foreground)
-                .border_b_1()
-                .border_color(theme.border)
-                .child(tildify(&f.path)),
-        )
-        .child(div().id(ElementId::Name(format!("diff-{}", f.path.display()).into())).max_h(sz(360.)).overflow_y_scroll().py_1().child(lines))
 }
 
 #[allow(dead_code)]
