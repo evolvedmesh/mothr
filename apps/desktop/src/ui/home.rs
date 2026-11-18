@@ -440,25 +440,37 @@ impl Render for Home {
                     .pb(sz(10.))
                     .pt_1()
                     .gap_1()
-                    .items_center()
-                    .child(agent_button)
-                    .child(model_button)
+                    .items_end()
                     .child(
-                        Button::new("project-pick")
-                            .ghost()
-                            .icon(icon(if general { "globe" } else { "folder" }))
-                            .label(project_label)
-                            .tooltip("Choose project  (Ctrl+P)")
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::PickProject))),
+                        // Controls wrap when the composer is narrow; the send button stays put.
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h(sz(36.))
+                            .flex_wrap()
+                            .gap_1()
+                            .items_center()
+                            .child(agent_button)
+                            .child(model_button)
+                            .child(
+                                Button::new("project-pick")
+                                    .ghost()
+                                    // Long project names truncate instead of crowding the row.
+                                    .max_w(sz(180.))
+                                    .icon(icon(if general { "globe" } else { "folder" }))
+                                    .label(project_label)
+                                    .tooltip("Choose project  (Ctrl+P)")
+                                    .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::PickProject))),
+                            )
+                            .child(mode_menu("home-mode", None, default_mode, weak.clone(), |h: &mut Home, m, _, cx| h.set_default_mode(m, cx)))
+                            .when(effective_mode != default_mode, |d| {
+                                d.child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(format!("{} here", effective_mode.label())))
+                            }),
                     )
-                    .child(mode_menu("home-mode", None, default_mode, weak.clone(), |h: &mut Home, m, _, cx| h.set_default_mode(m, cx)))
-                    .when(effective_mode != default_mode, |d| {
-                        d.child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(format!("{} here", effective_mode.label())))
-                    })
-                    .child(div().flex_1())
                     .child(
                         div()
                             .id("start")
+                            .flex_none()
                             .size(sz(36.))
                             .flex()
                             .items_center()

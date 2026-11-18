@@ -1407,6 +1407,7 @@ impl ChatView {
                     .child(
                         div()
                             .id("send")
+                            .flex_none()
                             .size(sz(34.))
                             .flex()
                             .items_center()
