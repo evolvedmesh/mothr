@@ -1,0 +1,28 @@
+{
+  "name": "Workspace — chat",
+  "description": "Sidebar with smart groups and an orchestrator tree; reading column capped at 780px.",
+  "width": 1280, "height": 760, "background": "$bg",
+  "root": { "type": "row", "style": { "width": "fill", "height": "fill" }, "children": [
+    { "type": "column", "style": { "width": 272, "height": "fill", "bg": "$chrome", "padding": 12, "gap": 10, "border": { "width": 1, "color": "$border" } }, "children": [
+      { "type": "ref", "ref": "Button / Primary", "variant": "Default", "style": { "width": "fill" } },
+      { "type": "input", "icon": "search", "placeholder": "Search chats", "style": { "bg": "$surface-hover", "radius": "$md", "height": 32, "fg": "$text-faint", "border": { "width": 0 } } },
+      { "type": "text", "text": "Working", "style": { "font": "$caption", "fg": "$text-faint", "margin": [8, 0, 0, 6] } },
+      { "type": "ref", "ref": "Session row", "variant": "Active" },
+      { "type": "text", "text": "Today", "style": { "font": "$caption", "fg": "$text-faint", "margin": [8, 0, 0, 6] } },
+      { "type": "row", "style": { "gap": 10, "align": "center", "padding": [8, 10] }, "children": [
+        { "type": "box", "style": { "width": 26, "height": 26, "radius": 8, "bg": "#8B5CF629", "align": "center", "justify": "center" }, "children": [ { "type": "icon", "icon": "bot", "style": { "size": 15, "fg": "$copilot" } } ] },
+        { "type": "column", "children": [ { "type": "text", "text": "Fix flaky login test", "style": { "font": "$body", "fg": "$text-muted" } }, { "type": "text", "text": "web-app · 2h", "style": { "font": "$caption", "fg": "$text-faint" } } ] }
+      ] }
+    ] },
+    { "type": "column", "style": { "grow": 1, "height": "fill", "align": "center", "padding": [28, 32], "gap": 16 }, "children": [
+      { "type": "column", "style": { "width": 560, "gap": 14 }, "children": [
+        { "type": "row", "style": { "justify": "end" }, "children": [ { "type": "box", "style": { "padding": [10, 16], "radius": "$xl", "bg": "$surface-hover", "border": { "width": 1, "color": "$border" } }, "children": [ { "type": "text", "text": "Run the test suite and fix what fails.", "style": { "font": "$read", "fg": "$text" } } ] } ] },
+        { "type": "ref", "ref": "Tool card", "variant": "Completed", "style": { "width": "fill" } },
+        { "type": "text", "text": "Two tests failed in the session reducer. I fixed the ordering bug and re-ran the suite.", "style": { "font": "$read", "fg": "$text" } },
+        { "type": "ref", "ref": "Permission card", "variant": "Pending" }
+      ] },
+      { "type": "spacer" },
+      { "type": "ref", "ref": "Composer", "variant": "Focused" }
+    ] }
+  ] }
+}

@@ -1,0 +1,26 @@
+[package]
+name = "shepherd-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shepherd: a native manager for Claude Code, Codex, Copilot, OpenCode and Hermes agent chats."
+
+[[bin]]
+name = "shepherd"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
+shepherd-core.workspace = true
+shepherd-hub.workspace = true
+shepherd-design.workspace = true
+shepherd-remote.workspace = true
+parking_lot.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+notify.workspace = true

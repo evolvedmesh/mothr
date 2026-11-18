@@ -1,0 +1,19 @@
+[package]
+name = "shepherd-hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shepherd's orchestrator: sessions, persistence, usage polling, agent & project discovery."
+
+[dependencies]
+shepherd-core.workspace = true
+shepherd-agents.workspace = true
+shepherd-projects.workspace = true
+shepherd-usage.workspace = true
+shepherd-design.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+chrono.workspace = true

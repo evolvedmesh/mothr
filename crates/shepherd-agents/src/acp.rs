@@ -1,0 +1,900 @@
+//! Agent Client Protocol driver (newline-delimited JSON-RPC 2.0 over stdio).
+//!
+//! Implemented directly on `serde_json::Value` so it tolerates the small schema differences
+//! between agents (Copilot, codex-acp, OpenCode, Hermes) and protocol revisions.
+
+use crate::claude::truncate;
+use crate::policy::{self, AutoDecision};
+use crate::{Emitter, OutputTx, SessionSpec};
+use serde_json::{json, Value};
+use shepherd_core::*;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Instant;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::Command;
+use tokio::sync::mpsc;
+
+#[derive(Debug)]
+enum Call {
+    Initialize,
+    NewSession,
+    LoadSession,
+    Prompt,
+    SetMode(PermissionMode),
+    SetModel(String),
+}
+
+struct PendingPermission {
+    rpc_id: Value,
+    question: bool,
+}
+
+struct Driver {
+    em: Emitter,
+    spec: SessionSpec,
+    writer: mpsc::UnboundedSender<String>,
+    next_id: u64,
+    calls: HashMap<u64, Call>,
+    session_id: Option<String>,
+    load_session: bool,
+    image_prompts: bool,
+    /// Replaying history during session/load — suppress duplicate transcript entries.
+    replaying: bool,
+    modes: Vec<ModeInfo>,
+    current_mode_id: Option<String>,
+    mode_config_id: Option<String>,
+    model_config_id: Option<String>,
+    mode: PermissionMode,
+    /// Agent message segment currently being streamed.
+    segment: Option<(EntryId, bool)>,
+    tools: HashMap<String, ToolCall>,
+    permissions: HashMap<EntryId, PendingPermission>,
+    turn: u32,
+    turn_started: Option<Instant>,
+    queued: Vec<SessionCommand>,
+    /// Prompts waiting for the running turn to end.
+    deferred: Vec<SessionCommand>,
+    turn_active: bool,
+    context_window: u64,
+    ready: bool,
+    auth_methods: Vec<Value>,
+}
+
+pub async fn run(
+    program: PathBuf,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+    spec: SessionSpec,
+    mut commands: mpsc::UnboundedReceiver<SessionCommand>,
+    out: OutputTx,
+) {
+    let em = Emitter::new(spec.id, out);
+    let mut cmd = Command::new(&program);
+    cmd.args(&args)
+        .envs(env)
+        .current_dir(&spec.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            em.emit(SessionEvent::Status {
+                status: SessionStatus::Error(format!("Failed to start {}: {e}", spec.agent.display_name())),
+            });
+            em.exited(Some(e.to_string()));
+            return;
+        }
+    };
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let stderr = child.stderr.take().expect("stderr");
+    let (wtx, mut wrx) = mpsc::unbounded_channel::<String>();
+    tokio::spawn(async move {
+        while let Some(line) = wrx.recv().await {
+            if stdin.write_all(line.as_bytes()).await.is_err() || stdin.write_all(b"\n").await.is_err() {
+                break;
+            }
+            let _ = stdin.flush().await;
+        }
+    });
+    let tail = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    {
+        let tail = tail.clone();
+        let agent = spec.agent;
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(l)) = lines.next_line().await {
+                tracing::debug!(target: "acp", "{}: {l}", agent.id());
+                if let Ok(mut t) = tail.lock() {
+                    t.push_str(&l);
+                    t.push('\n');
+                    if t.len() > 4000 {
+                        let cut = t.len() - 4000;
+                        t.drain(..cut);
+                    }
+                }
+            }
+        });
+    }
+
+    let mut d = Driver {
+        em: em.clone(),
+        mode: spec.mode,
+        spec,
+        writer: wtx,
+        next_id: 0,
+        calls: HashMap::new(),
+        session_id: None,
+        load_session: false,
+        image_prompts: false,
+        replaying: false,
+        modes: vec![],
+        current_mode_id: None,
+        mode_config_id: None,
+        model_config_id: None,
+        segment: None,
+        tools: HashMap::new(),
+        permissions: HashMap::new(),
+        turn: 0,
+        turn_started: None,
+        queued: vec![],
+        deferred: vec![],
+        turn_active: false,
+        context_window: 0,
+        ready: false,
+        auth_methods: vec![],
+    };
+    d.call(
+        "initialize",
+        json!({
+            "protocolVersion": 1,
+            "clientCapabilities": {"fs": {"readTextFile": true, "writeTextFile": true}, "terminal": false},
+            "clientInfo": {"name": "shepherd", "title": "Shepherd", "version": env!("CARGO_PKG_VERSION")},
+        }),
+        Call::Initialize,
+    );
+
+    let mut lines = BufReader::new(stdout).lines();
+    loop {
+        tokio::select! {
+            line = lines.next_line() => match line {
+                Ok(Some(l)) if !l.trim().is_empty() => match serde_json::from_str::<Value>(&l) {
+                    Ok(v) => d.on_message(v).await,
+                    Err(_) => tracing::debug!(target: "acp", "non-json: {l}"),
+                },
+                Ok(Some(_)) => {}
+                _ => break,
+            },
+            cmd = commands.recv() => match cmd {
+                Some(SessionCommand::Shutdown) | None => { let _ = child.start_kill(); break; }
+                Some(c) => d.on_command(c),
+            }
+        }
+    }
+    let status = child.wait().await.ok();
+    let err = match status {
+        Some(s) if !s.success() && !format!("{s}").contains("signal: 9") => {
+            let t = tail.lock().map(|t| t.trim().to_string()).unwrap_or_default();
+            Some(if t.is_empty() { format!("{} exited ({s})", d.spec.agent.display_name()) } else { t })
+        }
+        _ => None,
+    };
+    if let Some(e) = &err {
+        em.notice(NoticeLevel::Error, e.clone());
+    }
+    em.emit(SessionEvent::Status { status: SessionStatus::Ended });
+    em.exited(err);
+}
+
+impl Driver {
+    fn send(&self, v: Value) {
+        let _ = self.writer.send(v.to_string());
+    }
+
+    fn call(&mut self, method: &str, params: Value, kind: Call) -> u64 {
+        self.next_id += 1;
+        let id = self.next_id;
+        self.calls.insert(id, kind);
+        self.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        id
+    }
+
+    fn notify(&self, method: &str, params: Value) {
+        self.send(json!({"jsonrpc": "2.0", "method": method, "params": params}));
+    }
+
+    fn reply(&self, id: &Value, result: Value) {
+        self.send(json!({"jsonrpc": "2.0", "id": id, "result": result}));
+    }
+
+    fn reply_err(&self, id: &Value, code: i64, msg: &str) {
+        self.send(json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": msg}}));
+    }
+
+    fn sid(&self) -> Value {
+        json!(self.session_id.clone().unwrap_or_default())
+    }
+
+    fn set_status(&self, s: SessionStatus) {
+        self.em.emit(SessionEvent::Status { status: s });
+    }
+
+    fn end_segment(&mut self) {
+        if let Some((id, _)) = self.segment.take() {
+            self.em.emit(SessionEvent::StreamEnd { entry_id: id });
+        }
+    }
+
+    // ------------------------------------------------------------------ commands
+
+    fn on_command(&mut self, c: SessionCommand) {
+        if !self.ready && !matches!(c, SessionCommand::RespondPermission { .. } | SessionCommand::AnswerQuestion { .. }) {
+            self.queued.push(c);
+            return;
+        }
+        match c {
+            SessionCommand::Prompt { text, attachments, delivery } => {
+                if self.turn_active {
+                    // ACP has no mid-turn input: interrupt-and-send cancels first; anything else
+                    // waits for the turn to finish.
+                    if delivery != Delivery::Normal {
+                        self.notify("session/cancel", json!({"sessionId": self.sid()}));
+                    }
+                    self.deferred.push(SessionCommand::Prompt { text, attachments, delivery: Delivery::Normal });
+                    return;
+                }
+                self.em.emit(SessionEvent::Upsert {
+                    entry: Entry::User { id: new_entry_id(), text: text.clone(), attachments: attachments.clone(), at: chrono::Utc::now(), agent_ref: None, prev_ref: None },
+                });
+                let mut prompt = vec![json!({"type": "text", "text": text})];
+                for a in attachments {
+                    let uri = format!("file://{}", a.path.display());
+                    let name = a.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let is_image = matches!(
+                        a.path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+                        Some("png" | "jpg" | "jpeg" | "gif" | "webp")
+                    );
+                    if is_image && self.image_prompts
+                        && let Ok(bytes) = std::fs::read(&a.path) {
+                            let mime = a.mime.clone().unwrap_or_else(|| "image/png".into());
+                            prompt.push(json!({"type": "image", "mimeType": mime, "data": crate::claude::base64_lite::encode(&bytes), "uri": uri}));
+                            continue;
+                        }
+                    prompt.push(json!({"type": "resource_link", "uri": uri, "name": name}));
+                }
+                self.end_segment();
+                self.turn += 1;
+                self.turn_started = Some(Instant::now());
+                self.set_status(SessionStatus::Working);
+                self.turn_active = true;
+                self.call("session/prompt", json!({"sessionId": self.sid(), "prompt": prompt}), Call::Prompt);
+            }
+            SessionCommand::Cancel => {
+                self.notify("session/cancel", json!({"sessionId": self.sid()}));
+                let pending: Vec<EntryId> = self.permissions.keys().cloned().collect();
+                for eid in pending {
+                    if let Some(p) = self.permissions.remove(&eid) {
+                        self.reply(&p.rpc_id, json!({"outcome": {"outcome": "cancelled"}}));
+                        self.em.emit(SessionEvent::Resolved { entry_id: eid, choice: Some("cancelled".into()), answers: None });
+                    }
+                }
+            }
+            SessionCommand::SetMode { mode } => self.apply_mode(mode),
+            SessionCommand::SetModel { model } => {
+                if let Some(cfg) = self.model_config_id.clone() {
+                    self.call(
+                        "session/set_config_option",
+                        json!({"sessionId": self.sid(), "configId": cfg, "value": model}),
+                        Call::SetModel(model),
+                    );
+                } else {
+                    self.call("session/set_model", json!({"sessionId": self.sid(), "modelId": model}), Call::SetModel(model));
+                }
+            }
+            SessionCommand::RespondPermission { entry_id, option_id } => {
+                if let Some(p) = self.permissions.remove(&entry_id) {
+                    let outcome = if option_id == "cancelled" {
+                        json!({"outcome": "cancelled"})
+                    } else {
+                        json!({"outcome": "selected", "optionId": option_id})
+                    };
+                    self.reply(&p.rpc_id, json!({"outcome": outcome}));
+                    self.em.emit(SessionEvent::Resolved { entry_id, choice: Some(option_id), answers: None });
+                }
+            }
+            SessionCommand::AnswerQuestion { entry_id, answers } => {
+                // ACP has no question primitive yet; agents ask via elicitation-like requests.
+                if let Some(p) = self.permissions.remove(&entry_id) {
+                    if p.question {
+                        self.reply(&p.rpc_id, json!({"action": "accept", "content": {"answers": answers}}));
+                    }
+                    self.em.emit(SessionEvent::Resolved { entry_id, choice: None, answers: Some(answers) });
+                }
+            }
+            SessionCommand::SetRemoteControl { .. } => {
+                self.em.emit(SessionEvent::RemoteControl {
+                    state: RemoteControlState {
+                        enabled: false,
+                        url: None,
+                        pending: false,
+                        error: Some(format!(
+                            "{} doesn't offer Remote Control. Use Shepherd Remote to reach this chat from another device.",
+                            self.spec.agent.display_name()
+                        )),
+                    },
+                });
+            }
+            SessionCommand::RewindFiles { .. } => {
+                self.em.emit(SessionEvent::FilesRewound { ok: false, detail: Some(format!("{} can't revert files", self.spec.agent.display_name())) });
+            }
+            SessionCommand::StopSubagent { .. } => {
+                self.em.notice(NoticeLevel::Info, format!("{} doesn't support stopping individual subagents; stop the whole chat instead.", self.spec.agent.display_name()));
+            }
+            SessionCommand::Shutdown => {}
+        }
+    }
+
+    fn apply_mode(&mut self, mode: PermissionMode) {
+        self.mode = mode;
+        // Shepherd enforces the policy client-side; also move the agent's own mode if it has one.
+        if let Some(id) = policy::match_mode(mode, &self.modes) {
+            if self.current_mode_id.as_deref() == Some(id.as_str()) {
+                self.em.emit(SessionEvent::Mode { mode });
+                return;
+            }
+            self.current_mode_id = Some(id.clone());
+            if let Some(cfg) = self.mode_config_id.clone() {
+                self.call("session/set_config_option", json!({"sessionId": self.sid(), "configId": cfg, "value": id}), Call::SetMode(mode));
+            } else {
+                self.call("session/set_mode", json!({"sessionId": self.sid(), "modeId": id}), Call::SetMode(mode));
+            }
+        } else {
+            self.em.emit(SessionEvent::Mode { mode });
+        }
+    }
+
+    // ------------------------------------------------------------------ inbound
+
+    async fn on_message(&mut self, v: Value) {
+        let has_method = v.get("method").and_then(|m| m.as_str()).is_some();
+        let id = v.get("id").cloned();
+        match (has_method, id) {
+            (true, Some(id)) if !id.is_null() => self.on_request(id, &v).await,
+            (true, _) => self.on_notification(&v),
+            (false, Some(id)) => self.on_response(id, &v),
+            _ => {}
+        }
+    }
+
+    fn on_response(&mut self, id: Value, v: &Value) {
+        let Some(n) = id.as_u64() else { return };
+        let Some(kind) = self.calls.remove(&n) else { return };
+        let result = &v["result"];
+        let error = v.get("error").filter(|e| !e.is_null());
+        let err_msg = error.map(|e| {
+            let m = e["message"].as_str().unwrap_or("error").to_string();
+            match e["data"].as_str().or(e["data"]["message"].as_str()) {
+                Some(d) if !d.is_empty() && d != m => format!("{m}: {d}"),
+                _ => m,
+            }
+        });
+        match kind {
+            Call::Initialize => {
+                if let Some(e) = err_msg {
+                    self.set_status(SessionStatus::Error(format!("Initialize failed: {e}")));
+                    return;
+                }
+                let caps = &result["agentCapabilities"];
+                self.load_session = caps["loadSession"].as_bool().unwrap_or(false);
+                self.image_prompts = caps["promptCapabilities"]["image"].as_bool().unwrap_or(false);
+                self.auth_methods = result["authMethods"].as_array().cloned().unwrap_or_default();
+                let cwd = self.spec.cwd.display().to_string();
+                match (&self.spec.resume, self.load_session) {
+                    (Some(sid), true) => {
+                        self.replaying = true;
+                        self.session_id = Some(sid.clone());
+                        self.call("session/load", json!({"sessionId": sid, "cwd": cwd, "mcpServers": []}), Call::LoadSession);
+                    }
+                    _ => {
+                        self.call("session/new", json!({"cwd": cwd, "mcpServers": []}), Call::NewSession);
+                    }
+                }
+            }
+            Call::NewSession | Call::LoadSession => {
+                self.replaying = false;
+                if let Some(e) = err_msg {
+                    let is_load = matches!(kind, Call::LoadSession);
+                    if is_load {
+                        // Fall back to a fresh session.
+                        self.em.notice(NoticeLevel::Warning, format!("Couldn't restore the previous conversation ({e}); starting fresh."));
+                        let cwd = self.spec.cwd.display().to_string();
+                        self.call("session/new", json!({"cwd": cwd, "mcpServers": []}), Call::NewSession);
+                        return;
+                    }
+                    let auth = error.and_then(|e| e["code"].as_i64()) == Some(-32000)
+                        || e.to_ascii_lowercase().contains("auth");
+                    let hint = if auth { self.auth_hint() } else { String::new() };
+                    self.set_status(SessionStatus::Error(format!("{e}{hint}")));
+                    self.em.notice(NoticeLevel::Error, format!("Couldn't start the session: {e}{hint}"));
+                    return;
+                }
+                if let Some(s) = result["sessionId"].as_str() {
+                    self.session_id = Some(s.to_string());
+                }
+                self.on_session_setup(result);
+                self.ready = true;
+                let mode = self.mode;
+                if mode != PermissionMode::Ask || policy::match_mode(mode, &self.modes).is_some() {
+                    self.apply_mode(mode);
+                }
+                if let Some(m) = self.spec.model.clone() {
+                    self.on_command(SessionCommand::SetModel { model: m });
+                }
+                for c in std::mem::take(&mut self.queued) {
+                    self.on_command(c);
+                }
+            }
+            Call::Prompt => {
+                self.end_segment();
+                for (_, mut t) in self.tools.drain() {
+                    if matches!(t.status, ToolStatus::Pending | ToolStatus::Running) {
+                        t.status = ToolStatus::Failed;
+                        self.em.emit(SessionEvent::Upsert { entry: Entry::Tool(t) });
+                    }
+                }
+                let stop = result["stopReason"].as_str().unwrap_or(if err_msg.is_some() { "error" } else { "end_turn" });
+                if let Some(e) = &err_msg {
+                    self.em.notice(NoticeLevel::Error, e.clone());
+                }
+                if let Some(u) = result.get("usage").filter(|u| u.is_object()) {
+                    self.on_usage_update(u);
+                }
+                self.em.emit(SessionEvent::Upsert {
+                    entry: Entry::TurnEnd {
+                        id: new_entry_id(),
+                        stop_reason: stop.to_string(),
+                        duration_ms: self.turn_started.map(|t| t.elapsed().as_millis() as u64),
+                        cost_usd: None,
+                    },
+                });
+                self.set_status(SessionStatus::Idle);
+                self.turn_active = false;
+                if !self.deferred.is_empty() {
+                    let next = self.deferred.remove(0);
+                    self.on_command(next);
+                }
+            }
+            Call::SetMode(m) => {
+                if let Some(e) = err_msg {
+                    self.em.notice(NoticeLevel::Warning, format!("{} didn't accept the mode change: {e}", self.spec.agent.display_name()));
+                }
+                // Client-side policy still applies.
+                self.em.emit(SessionEvent::Mode { mode: m });
+            }
+            Call::SetModel(m) => match err_msg {
+                Some(e) => self.em.notice(NoticeLevel::Warning, format!("Couldn't switch model: {e}")),
+                None => self.em.emit(SessionEvent::Model { model: m }),
+            },
+        }
+    }
+
+    fn auth_hint(&self) -> String {
+        let cmd = self
+            .auth_methods
+            .iter()
+            .find_map(|m| m["description"].as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("sign in with the {} CLI", self.spec.agent.display_name()));
+        format!(" — authentication required: {cmd}")
+    }
+
+    fn on_session_setup(&mut self, r: &Value) {
+        let mut models: Vec<ModelInfo> = r["models"]["availableModels"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| {
+                        Some(ModelInfo {
+                            id: m["modelId"].as_str()?.to_string(),
+                            name: m["name"].as_str().unwrap_or(m["modelId"].as_str()?).to_string(),
+                            description: m["description"].as_str().map(str::to_string),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut current_model = r["models"]["currentModelId"].as_str().map(str::to_string);
+        self.current_mode_id = r["modes"]["currentModeId"].as_str().map(str::to_string);
+        self.modes = r["modes"]["availableModes"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| {
+                        Some(ModeInfo {
+                            id: m["id"].as_str()?.to_string(),
+                            name: m["name"].as_str().unwrap_or("").to_string(),
+                            description: m["description"].as_str().map(str::to_string),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for opt in r["configOptions"].as_array().into_iter().flatten() {
+            let cat = opt["category"].as_str().unwrap_or("");
+            let id = opt["id"].as_str().unwrap_or("").to_string();
+            let options: Vec<(String, String, Option<String>)> = opt["options"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|o| {
+                            Some((
+                                o["value"].as_str()?.to_string(),
+                                o["name"].as_str().unwrap_or("").to_string(),
+                                o["description"].as_str().map(str::to_string),
+                            ))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            match cat {
+                "model" => {
+                    self.model_config_id = Some(id);
+                    if models.is_empty() {
+                        models = options.iter().map(|(v, n, d)| ModelInfo { id: v.clone(), name: n.clone(), description: d.clone() }).collect();
+                    }
+                    if current_model.is_none() {
+                        current_model = opt["currentValue"].as_str().map(str::to_string);
+                    }
+                }
+                "mode" if (id == "mode" || self.modes.is_empty())
+                    // Only adopt the config option if it carries the same ids as session modes.
+                    && self.modes.is_empty() => {
+                        self.modes = options.iter().map(|(v, n, d)| ModeInfo { id: v.clone(), name: n.clone(), description: d.clone() }).collect();
+                        self.mode_config_id = Some(id);
+                    }
+                _ => {}
+            }
+        }
+        // Dedupe models by id (Copilot lists "auto" twice).
+        let mut seen = std::collections::HashSet::new();
+        models.retain(|m| seen.insert(m.id.clone()));
+        self.em.emit(SessionEvent::Ready {
+            agent_session_id: self.session_id.clone(),
+            model: current_model,
+            models,
+            modes: self.modes.clone(),
+        });
+    }
+
+    fn on_notification(&mut self, v: &Value) {
+        if v["method"] != "session/update" {
+            return;
+        }
+        let u = &v["params"]["update"];
+        let kind = u["sessionUpdate"].as_str().unwrap_or("");
+        if self.replaying && !matches!(kind, "current_mode_update" | "usage_update" | "available_commands_update") {
+            return;
+        }
+        match kind {
+            "agent_message_chunk" | "agent_thought_chunk" => {
+                let thinking = kind == "agent_thought_chunk";
+                let text = content_text(&u["content"]);
+                if text.is_empty() {
+                    return;
+                }
+                let id = match &self.segment {
+                    Some((id, t)) if *t == thinking => id.clone(),
+                    _ => {
+                        self.end_segment();
+                        let id = new_entry_id();
+                        self.segment = Some((id.clone(), thinking));
+                        id
+                    }
+                };
+                self.em.emit(SessionEvent::AppendText { entry_id: id, thinking, delta: text });
+            }
+            "tool_call" | "tool_call_update" => {
+                self.end_segment();
+                self.on_tool(u, kind == "tool_call");
+            }
+            "plan" => {
+                self.end_segment();
+                let items = u["entries"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .map(|e| PlanItem {
+                                content: e["content"].as_str().unwrap_or("").to_string(),
+                                status: match e["status"].as_str() {
+                                    Some("completed") => PlanStatus::Completed,
+                                    Some("in_progress") => PlanStatus::InProgress,
+                                    _ => PlanStatus::Pending,
+                                },
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.em.emit(SessionEvent::Upsert { entry: Entry::Plan { id: format!("plan-{}", self.turn), items } });
+            }
+            "current_mode_update" => {
+                let id = u["currentModeId"].as_str().or(u["modeId"].as_str());
+                self.current_mode_id = id.map(str::to_string);
+                if let Some(m) = id.and_then(policy::mode_from_agent) {
+                    self.mode = m;
+                    self.em.emit(SessionEvent::Mode { mode: m });
+                }
+            }
+            "usage_update" => self.on_usage_update(u),
+            "available_commands_update" => {
+                let commands: Vec<CommandInfo> = u["availableCommands"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|c| {
+                                Some(CommandInfo {
+                                    name: c["name"].as_str()?.trim_start_matches('/').to_string(),
+                                    description: c["description"].as_str().map(str::to_string),
+                                    hint: c["input"]["hint"].as_str().map(str::to_string),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.em.emit(SessionEvent::Commands { commands });
+            }
+            "session_info_update" => {
+                if let Some(t) = u["title"].as_str().filter(|t| !t.is_empty()) {
+                    self.em.emit(SessionEvent::Title { title: t.to_string() });
+                }
+            }
+            "config_option_update" => {
+                for opt in u["configOptions"].as_array().into_iter().flatten() {
+                    if opt["category"] == "model"
+                        && let Some(m) = opt["currentValue"].as_str() {
+                            self.em.emit(SessionEvent::Model { model: m.to_string() });
+                        }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_usage_update(&mut self, u: &Value) {
+        let used = u["used"].as_u64().or(u["totalTokens"].as_u64()).or(u["total_tokens"].as_u64()).unwrap_or(0);
+        let size = u["size"].as_u64().or(u["contextWindow"].as_u64()).unwrap_or(self.context_window);
+        if size > 0 {
+            self.context_window = size;
+        }
+        let cost = u["cost"]["amount"].as_f64().or(u["cost"].as_f64());
+        self.em.emit(SessionEvent::Context {
+            usage: ContextUsage {
+                used_tokens: used,
+                window_tokens: size,
+                cost_usd: cost,
+                input_tokens: u["inputTokens"].as_u64().unwrap_or(0),
+                output_tokens: u["outputTokens"].as_u64().unwrap_or(0),
+            },
+        });
+    }
+
+    fn on_tool(&mut self, u: &Value, create: bool) {
+        let Some(id) = u["toolCallId"].as_str().map(str::to_string) else { return };
+        let mut call = self.tools.remove(&id).unwrap_or_else(|| ToolCall {
+            id: id.clone(),
+            name: String::new(),
+            title: "Tool".into(),
+            kind: ToolKind::Other,
+            status: ToolStatus::Pending,
+            input: None,
+            output: None,
+            diffs: vec![],
+            locations: vec![],
+        });
+        let _ = create;
+        if let Some(t) = u["title"].as_str() {
+            call.title = t.to_string();
+            if call.name.is_empty() {
+                call.name = t.to_string();
+            }
+        }
+        if let Some(k) = u["kind"].as_str() {
+            call.kind = acp_kind(k);
+        }
+        if let Some(s) = u["status"].as_str() {
+            call.status = match s {
+                "pending" => ToolStatus::Pending,
+                "in_progress" => ToolStatus::Running,
+                "completed" => ToolStatus::Completed,
+                "failed" => ToolStatus::Failed,
+                _ => call.status,
+            };
+        }
+        if let Some(raw) = u.get("rawInput").filter(|r| r.is_object()) {
+            let (_, detail) = crate::summarize_input(&call.name, raw);
+            if detail.is_some() {
+                call.input = detail;
+            }
+        }
+        if let Some(locs) = u["locations"].as_array() {
+            call.locations = locs.iter().filter_map(|l| l["path"].as_str().map(PathBuf::from)).collect();
+            if call.input.is_none() {
+                call.input = call.locations.first().map(|p| p.display().to_string());
+            }
+        }
+        if let Some(content) = u["content"].as_array() {
+            let mut text = String::new();
+            for c in content {
+                match c["type"].as_str() {
+                    Some("diff") => {
+                        let path = PathBuf::from(c["path"].as_str().unwrap_or(""));
+                        let new_text = c["newText"].as_str().unwrap_or("").to_string();
+                        let old_text = c["oldText"].as_str().map(str::to_string);
+                        call.diffs.retain(|d| d.path != path);
+                        call.diffs.push(FileDiff { path, old_text, new_text });
+                    }
+                    Some("content") => {
+                        let t = content_text(&c["content"]);
+                        if !t.is_empty() {
+                            if !text.is_empty() {
+                                text.push('\n');
+                            }
+                            text.push_str(&t);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !text.is_empty() {
+                call.output = Some(truncate(&text, 20_000));
+            }
+        }
+        if let Some(raw) = u.get("rawOutput").filter(|r| !r.is_null())
+            && call.output.is_none() {
+                let s = raw.get("output").and_then(|o| o.as_str()).map(str::to_string).unwrap_or_else(|| {
+                    raw.as_str().map(str::to_string).unwrap_or_else(|| serde_json::to_string_pretty(raw).unwrap_or_default())
+                });
+                call.output = Some(truncate(&s, 20_000));
+            }
+        self.em.emit(SessionEvent::Upsert { entry: Entry::Tool(call.clone()) });
+        if !matches!(call.status, ToolStatus::Completed | ToolStatus::Failed) {
+            self.tools.insert(id, call);
+        }
+    }
+
+    async fn on_request(&mut self, id: Value, v: &Value) {
+        let method = v["method"].as_str().unwrap_or("");
+        let p = &v["params"];
+        match method {
+            "session/request_permission" => self.on_permission(id, p),
+            "fs/read_text_file" => {
+                let path = PathBuf::from(p["path"].as_str().unwrap_or(""));
+                match tokio::fs::read_to_string(&path).await {
+                    Ok(content) => {
+                        let line = p["line"].as_u64().map(|l| l.saturating_sub(1) as usize);
+                        let limit = p["limit"].as_u64().map(|l| l as usize);
+                        let content = match (line, limit) {
+                            (None, None) => content,
+                            (l, n) => content.lines().skip(l.unwrap_or(0)).take(n.unwrap_or(usize::MAX)).collect::<Vec<_>>().join("\n"),
+                        };
+                        self.reply(&id, json!({"content": content}));
+                    }
+                    Err(e) => self.reply_err(&id, -32002, &format!("{}: {e}", path.display())),
+                }
+            }
+            "fs/write_text_file" => {
+                let path = PathBuf::from(p["path"].as_str().unwrap_or(""));
+                let content = p["content"].as_str().unwrap_or("");
+                if let Some(dir) = path.parent() {
+                    let _ = tokio::fs::create_dir_all(dir).await;
+                }
+                match tokio::fs::write(&path, content).await {
+                    Ok(()) => self.reply(&id, Value::Null),
+                    Err(e) => self.reply_err(&id, -32603, &format!("{}: {e}", path.display())),
+                }
+            }
+            "session/elicitation" | "elicitation/create" => self.on_elicitation(id, p),
+            _ => self.reply_err(&id, -32601, &format!("Shepherd doesn't implement {method}")),
+        }
+    }
+
+    fn on_permission(&mut self, id: Value, p: &Value) {
+        let tc = &p["toolCall"];
+        let options: Vec<PermissionOption> = p["options"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|o| {
+                        Some(PermissionOption {
+                            id: o["optionId"].as_str()?.to_string(),
+                            label: o["name"].as_str().unwrap_or("Option").to_string(),
+                            kind: match o["kind"].as_str() {
+                                Some("allow_always") => PermissionOptionKind::AllowAlways,
+                                Some("reject_once") => PermissionOptionKind::RejectOnce,
+                                Some("reject_always") => PermissionOptionKind::RejectAlways,
+                                _ => PermissionOptionKind::AllowOnce,
+                            },
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let tool_id = tc["toolCallId"].as_str().map(str::to_string);
+        let known = tool_id.as_ref().and_then(|t| self.tools.get(t));
+        let kind = tc["kind"].as_str().map(acp_kind).or(known.map(|k| k.kind)).unwrap_or(ToolKind::Other);
+        let title = tc["title"].as_str().map(str::to_string).or(known.map(|k| k.title.clone())).unwrap_or_else(|| "Permission requested".into());
+        let detail = tc
+            .get("rawInput")
+            .filter(|r| r.is_object())
+            .and_then(|r| crate::summarize_input(&title, r).1)
+            .or(known.and_then(|k| k.input.clone()));
+
+        // Shepherd's policy can answer without bothering the user.
+        let decision = policy::decide(self.mode, kind);
+        let pairs: Vec<(String, PermissionOptionKind)> = options.iter().map(|o| (o.id.clone(), o.kind)).collect();
+        if decision != AutoDecision::Ask
+            && let Some(opt) = policy::pick_option(decision, &pairs) {
+                self.reply(&id, json!({"outcome": {"outcome": "selected", "optionId": opt}}));
+                return;
+            }
+        let entry_id = new_entry_id();
+        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: false });
+        self.em.emit(SessionEvent::Upsert {
+            entry: Entry::Permission(PermissionRequest { id: entry_id, tool_call_id: tool_id, title, detail, kind, options, resolved: None }),
+        });
+    }
+
+    /// Best-effort support for agent questions sent as elicitation requests.
+    fn on_elicitation(&mut self, id: Value, p: &Value) {
+        let message = p["message"].as_str().unwrap_or("The agent has a question").to_string();
+        let mut questions = crate::claude::parse_questions(p);
+        if questions.is_empty() {
+            let props = p["requestedSchema"]["properties"].as_object();
+            questions = props
+                .map(|props| {
+                    props
+                        .iter()
+                        .map(|(k, s)| Question {
+                            header: Some(k.clone()),
+                            question: s["description"].as_str().or(s["title"].as_str()).unwrap_or(&message).to_string(),
+                            options: s["enum"]
+                                .as_array()
+                                .map(|e| e.iter().filter_map(|x| x.as_str()).map(|l| QuestionOption { label: l.into(), description: None }).collect())
+                                .unwrap_or_default(),
+                            multi_select: s["type"] == "array",
+                        })
+                        .collect()
+                })
+                .unwrap_or_else(|| vec![Question { header: None, question: message.clone(), options: vec![], multi_select: false }]);
+        }
+        let entry_id = new_entry_id();
+        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: true });
+        self.em.emit(SessionEvent::Upsert { entry: Entry::Question(QuestionRequest { id: entry_id, questions, answers: None }) });
+    }
+}
+
+fn acp_kind(k: &str) -> ToolKind {
+    match k {
+        "read" => ToolKind::Read,
+        "edit" => ToolKind::Edit,
+        "delete" => ToolKind::Delete,
+        "move" => ToolKind::Move,
+        "search" => ToolKind::Search,
+        "execute" => ToolKind::Execute,
+        "think" => ToolKind::Think,
+        "fetch" => ToolKind::Fetch,
+        "switch_mode" => ToolKind::Other,
+        _ => ToolKind::Other,
+    }
+}
+
+fn content_text(c: &Value) -> String {
+    match c["type"].as_str() {
+        Some("text") => c["text"].as_str().unwrap_or("").to_string(),
+        Some("resource_link") => format!("[{}]({})", c["name"].as_str().unwrap_or("link"), c["uri"].as_str().unwrap_or("")),
+        Some("resource") => c["resource"]["text"].as_str().unwrap_or("").to_string(),
+        _ => c.as_str().unwrap_or("").to_string(),
+    }
+}
