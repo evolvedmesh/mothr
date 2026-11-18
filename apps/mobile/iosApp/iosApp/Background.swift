@@ -34,14 +34,15 @@ final class NotificationBridge: NSObject, Background, UNUserNotificationCenterDe
 
     func status(text: String) {}
 
-    func show(item: Attention) {
+    func show(item: Attention, source: NotificationSource) {
         let content = UNMutableNotificationContent()
         content.title = item.title
-        content.subtitle = [item.projectName, item.chatTitle].filter { !$0.isEmpty }.joined(separator: " · ")
+        content.subtitle = [source.label ?? "", item.projectName, item.chatTitle].filter { !$0.isEmpty }.joined(separator: " · ")
         content.body = item.body
         content.sound = .default
         content.threadIdentifier = item.chatId
         content.userInfo = [
+            "computer": source.computerId,
             "open_path": item.openPath,
             "chat": item.chatId,
             "entry": item.entryId,
@@ -129,18 +130,22 @@ final class NotificationBridge: NSObject, Background, UNUserNotificationCenterDe
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         let info = response.notification.request.content.userInfo
         let action = response.actionIdentifier
+        guard let computer = info["computer"] as? String else {
+            completionHandler()
+            return
+        }
         if action.hasPrefix("reply."),
            let index = Int(action.dropFirst("reply.".count)),
            let replies = info["replies"] as? [String], index < replies.count,
            let chat = info["chat"] as? String, let entry = info["entry"] as? String {
             let kind = (info["kind"] as? String) == "permission" ? AttentionKind.permission : AttentionKind.question
-            model.quickReply(chatId: chat, entryId: entry, kind: kind, replyId: replies[index]) { _, _ in
+            model.quickReply(computerId: computer, chatId: chat, entryId: entry, kind: kind, replyId: replies[index]) { _, _ in
                 completionHandler()
             }
             return
         }
         if action == UNNotificationDefaultActionIdentifier, let path = info["open_path"] as? [String] {
-            model.openPath(path: path)
+            model.openPath(computerId: computer, path: path)
         }
         completionHandler()
     }

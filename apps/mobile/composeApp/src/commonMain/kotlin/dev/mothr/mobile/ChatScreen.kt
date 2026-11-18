@@ -32,6 +32,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -49,9 +50,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
@@ -212,9 +215,9 @@ private fun entryId(e: EntryView): String = when (e) {
 @Composable
 private fun EntryItem(model: AppModel, chat: ChatDetail, e: EntryView) {
     when (e) {
-        is EntryView.User -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        is EntryView.User -> Row(Modifier.fillMaxWidth().padding(start = 44.dp), horizontalArrangement = Arrangement.End) {
             Box(
-                Modifier.widthIn(max = 320.dp).clip(Radius.xl).background(pal.surfaceHover).padding(horizontal = 14.dp, vertical = 10.dp),
+                Modifier.clip(Radius.xl).background(pal.surfaceHover).padding(horizontal = 15.dp, vertical = 11.dp),
             ) { Text(e.text, style = type.reading) }
         }
         is EntryView.Assistant -> MarkdownText(e.text)
@@ -525,14 +528,16 @@ private fun Composer(model: AppModel, chat: ChatDetail) {
         val busy = chat.busy
         val hasText = text.isNotBlank()
         Column(Modifier.fillMaxWidth().clip(Radius.xl).background(pal.surface).border(1.dp, pal.borderStrong, Radius.xl)) {
-            Box(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 13.dp, bottom = 4.dp)) {
-                if (text.isEmpty()) Text(if (busy) "Queue a message, or steer…" else "Message ${chat.summary.agent.shortName}", style = type.reading.copy(color = pal.textFaint))
+            val input = type.reading.copy(fontSize = 16.5.sp)
+            Box(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp)) {
+                if (text.isEmpty()) Text(if (busy) "Queue a message, or steer…" else "Message ${chat.summary.agent.shortName}", style = input.copy(color = pal.textFaint))
                 BasicTextField(
                     value = text,
                     onValueChange = { text = it },
-                    textStyle = type.reading,
+                    textStyle = input,
                     cursorBrush = SolidColor(pal.brand),
-                    maxLines = 8,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                    maxLines = 10,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -550,9 +555,9 @@ private fun Composer(model: AppModel, chat: ChatDetail) {
                     }.padding(horizontal = 10.dp, vertical = 9.dp))
                 }
                 if (busy && !hasText) {
-                    IconBtn(Res.drawable.ic_square, tint = pal.text, size = 38.dp, bg = pal.surfaceHover) { model.act { interrupt(id) } }
+                    IconBtn(Res.drawable.ic_square, tint = pal.text, size = 42.dp, bg = pal.surfaceHover) { model.act { interrupt(id) } }
                 } else {
-                    IconBtn(Res.drawable.ic_arrow_up, tint = if (hasText) pal.bg else pal.textFaint, size = 38.dp, bg = if (hasText) pal.text else pal.surfaceHover) {
+                    IconBtn(Res.drawable.ic_arrow_up, tint = if (hasText) pal.bg else pal.textFaint, size = 42.dp, bg = if (hasText) pal.text else pal.surfaceHover) {
                         if (hasText) { val t = text; text = ""; model.act { send(id, t, Delivery.NORMAL) } }
                     }
                 }

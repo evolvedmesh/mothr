@@ -19,25 +19,67 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.random.Random
+
+/** One paired desktop. It stays connected while paired, whichever computer is on screen. */
+class Computer internal constructor(
+    val id: String,
+    client: MothrClient,
+    customName: String?,
+    hostName: String?,
+) {
+    var client: MothrClient by mutableStateOf(client)
+        internal set
+    var connection: ConnectionInfo? by mutableStateOf(null)
+        internal set
+
+    /** The name given on this phone. */
+    var customName: String? by mutableStateOf(customName)
+        internal set
+
+    /** The name the desktop reports; remembered so it still shows while offline. */
+    var hostName: String? by mutableStateOf(hostName)
+        internal set
+
+    val address: String get() = client.server().removePrefix("https://").removePrefix("http://")
+    val name: String get() = customName ?: hostName ?: address
+    val needsYou: Int get() = connection?.needsYou?.toInt() ?: 0
+
+    internal var loop: Job? = null
+
+    /** Requests already seen (on screen or as a notification); each notifies at most once. */
+    internal val seen = mutableSetOf<String>()
+
+    /** Requests with a notification up. */
+    internal val shown = mutableSetOf<String>()
+
+    /** Requests are numbered per desktop, so notifications need the computer in their key. */
+    internal fun notificationKey(key: String) = "$id/$key"
+}
 
 /**
  * The app's state. All data comes from the Rust client (the desktop's own session model and
  * reducer); this class only turns its change notifications into Compose state.
  *
- * One instance per process ([Mothr.model]): while the app is off screen it keeps the connection
- * (if [runInBackground]) and turns requests agents are blocked on into notifications.
+ * One instance per process ([Mothr.model]). Every paired computer keeps its connection, and any
+ * of them can notify; the chat screens show the [current] one. While the app is off screen the
+ * connections stay up (if [runInBackground]).
  */
 class AppModel(private val scope: CoroutineScope) {
     private val prefs = Settings()
 
-    var client: MothrClient? by mutableStateOf(null)
+    var computers: List<Computer> by mutableStateOf(emptyList())
         private set
-    var connection: ConnectionInfo? by mutableStateOf(null)
+    var current: Computer? by mutableStateOf(null)
         private set
+    val client: MothrClient? get() = current?.client
+    val connection: ConnectionInfo? get() = current?.connection
+
     var groups: List<ChatGroup> by mutableStateOf(emptyList())
         private set
     var usage: List<UsageView> by mutableStateOf(emptyList())
@@ -59,12 +101,21 @@ class AppModel(private val scope: CoroutineScope) {
     var toast: String? by mutableStateOf(null)
     var showNewChat by mutableStateOf(false)
     var showUsage by mutableStateOf(false)
+    var showComputers by mutableStateOf(false)
 
-    /** Keep the connection and notifications going while the app is closed. */
+    /** The unsent new chat, kept if the screen is closed by accident. */
+    var newChatDraft by mutableStateOf("")
+    var creatingChat by mutableStateOf(false)
+        private set
+
+    /** The pairing screen is open on top of an already paired phone. */
+    var addingComputer by mutableStateOf(false)
+        private set
+
+    /** Keep the connections and notifications going while the app is closed. */
     var runInBackground: Boolean by mutableStateOf(prefs.getBoolean(KEY_BACKGROUND, true))
         private set
 
-    private var loop: Job? = null
     private val background get() = Mothr.background
 
     /** The UI is on screen. Off screen, only the connection and [Attention] are tracked. */
@@ -72,68 +123,106 @@ class AppModel(private val scope: CoroutineScope) {
 
     /** Disconnected from the notification; reconnects when the app is opened. */
     private var paused = false
-
-    /** Requests already seen (on screen or as a notification); each notifies at most once. */
-    private val seen = mutableSetOf<String>()
-
-    /** Requests with a notification up. */
-    private val shown = mutableSetOf<String>()
     private var lastStatus = ""
 
     init {
-        prefs.getStringOrNull(KEY_LINK)?.let { pair(it) }
+        restore()
+    }
+
+    private fun restore() {
+        // Before several computers were supported there was a single saved link.
+        prefs.getStringOrNull(KEY_LINK)?.let { link ->
+            prefs.putString(linkKey(newId().also { saveIds(listOf(it)) }), link)
+            prefs.remove(KEY_LINK)
+        }
+        val saved = savedIds().mapNotNull { id ->
+            val link = prefs.getStringOrNull(linkKey(id)) ?: return@mapNotNull null
+            val client = try {
+                MothrClient(link)
+            } catch (e: Throwable) {
+                return@mapNotNull null
+            }
+            Computer(id, client, prefs.getStringOrNull(nameKey(id)), prefs.getStringOrNull(hostKey(id)))
+        }
+        if (saved.isEmpty()) return
+        computers = saved
+        current = saved.firstOrNull { it.id == prefs.getStringOrNull(KEY_CURRENT) } ?: saved.first()
+        saved.forEach(::start)
+        background.keepAlive(runInBackground)
+    }
+
+    private fun savedIds() = prefs.getString(KEY_COMPUTERS, "").split(',').filter { it.isNotEmpty() }
+    private fun saveIds(ids: List<String>) = prefs.putString(KEY_COMPUTERS, ids.joinToString(","))
+    private fun newId() = Random.nextLong().toULong().toString(16)
+
+    private fun start(computer: Computer) {
+        computer.client.connect()
+        startLoop(computer)
     }
 
     /** Called by the platform when the UI appears or goes away. */
     fun setForeground(on: Boolean) {
         if (foreground == on) return
         foreground = on
-        val c = client ?: return
+        if (computers.isEmpty()) return
         if (on) {
-            if (paused) {
-                paused = false
-                c.connect()
-                background.keepAlive(runInBackground)
-            }
-            scope.launch { refresh(c) }
+            resume()
+            computers.forEach { c -> scope.launch { refresh(c) } }
         } else if (!runInBackground) {
-            scope.launch(Dispatchers.IO) { c.disconnect() }
+            disconnectAll()
             paused = true
         }
+    }
+
+    private fun resume() {
+        if (!paused) return
+        paused = false
+        computers.forEach { it.client.connect() }
+        background.keepAlive(runInBackground)
+    }
+
+    private fun disconnectAll() {
+        val clients = computers.map { it.client }
+        scope.launch(Dispatchers.IO) { clients.forEach { it.disconnect() } }
     }
 
     fun toggleBackground(on: Boolean) {
         runInBackground = on
         prefs.putBoolean(KEY_BACKGROUND, on)
-        if (client != null && !paused) background.keepAlive(on)
+        if (computers.isNotEmpty() && !paused) background.keepAlive(on)
     }
 
     /** "Disconnect" on the ongoing notification: stop until the app is opened again. */
     fun pauseUntilOpened() {
-        val c = client ?: return
+        if (computers.isEmpty()) return
         paused = true
         background.keepAlive(false)
-        scope.launch(Dispatchers.IO) { c.disconnect() }
-        clearNotifications()
+        disconnectAll()
+        computers.forEach(::clearNotifications)
     }
 
     /** Open a chat from a notification: [path] is the orchestrator then the subagent. */
-    fun openPath(path: List<String>) {
-        if (client == null || path.isEmpty()) return
+    fun openPath(computerId: String, path: List<String>) {
+        val computer = computers.firstOrNull { it.id == computerId } ?: return
+        if (path.isEmpty()) return
+        select(computer)
+        addingComputer = false
         showNewChat = false
         showUsage = false
         stack = path
-        openChat = client?.chat(path.last())
-        withdrawChat(path.last())
+        openChat = computer.client.chat(path.last())
+        withdrawChat(computer, path.last())
         act { markRead(path.last()) }
     }
 
     /**
      * Answer from a notification without opening the app. Returns an error message, or null
-     * when the desktop took the answer.
+     * when the desktop took the answer. The answer only ever goes to the computer that asked.
      */
-    suspend fun quickReply(chatId: String, entryId: String, kind: AttentionKind, replyId: String): String? {
-        val c = client ?: return "This phone isn't paired with Mothr"
+    suspend fun quickReply(computerId: String, chatId: String, entryId: String, kind: AttentionKind, replyId: String): String? {
+        val computer = computers.firstOrNull { it.id == computerId }
+            ?: return "That computer isn't paired anymore".also { background.failed(it) }
+        val c = computer.client
         return try {
             withContext(Dispatchers.IO) {
                 when (kind) {
@@ -141,7 +230,8 @@ class AppModel(private val scope: CoroutineScope) {
                     AttentionKind.QUESTION -> c.answerQuestion(chatId, entryId, listOf(listOf(replyId)))
                 }
             }
-            "$chatId/$entryId".let { if (shown.remove(it)) background.withdraw(it) }
+            val key = "$chatId/$entryId"
+            if (computer.shown.remove(key)) background.withdraw(computer.notificationKey(key))
             null
         } catch (e: Throwable) {
             e.friendly().also { background.failed(it) }
@@ -149,73 +239,168 @@ class AppModel(private val scope: CoroutineScope) {
     }
 
     /**
-     * One background check (iOS background refresh): connect, wait for the desktop's state,
-     * post notifications, and drop the connection again if the app is still off screen.
+     * One background check (iOS background refresh): connect, wait for each desktop's state,
+     * post notifications, and drop the connections again if the app is still off screen.
+     * Computers are checked side by side, so an unreachable one can't use up the time.
      */
     suspend fun checkOnce(timeoutMs: Long) {
-        val c = client ?: return
-        c.connect()
-        var rev = 0uL
-        val start = kotlin.time.TimeSource.Monotonic.markNow()
-        while (start.elapsedNow().inWholeMilliseconds < timeoutMs) {
-            val conn = c.connection()
-            if (conn.loaded && conn.state == ConnectionState.CONNECTED) break
-            if (conn.state == ConnectionState.UNAUTHORIZED) break
-            rev = withContext(Dispatchers.IO) { c.waitForChange(rev, 1_000u) }
+        coroutineScope {
+            computers.forEach { computer ->
+                launch {
+                    val c = computer.client
+                    c.connect()
+                    var rev = 0uL
+                    val start = kotlin.time.TimeSource.Monotonic.markNow()
+                    while (start.elapsedNow().inWholeMilliseconds < timeoutMs) {
+                        val conn = c.connection()
+                        if (conn.loaded && conn.state == ConnectionState.CONNECTED) break
+                        if (conn.state == ConnectionState.UNAUTHORIZED) break
+                        rev = withContext(Dispatchers.IO) { c.waitForChange(rev, 1_000u) }
+                    }
+                    refresh(computer)
+                    if (!foreground && !runInBackground) withContext(Dispatchers.IO) { c.disconnect() }
+                }
+            }
         }
-        refresh(c)
-        if (!foreground && !runInBackground) withContext(Dispatchers.IO) { c.disconnect() }
     }
 
+    fun startAdding() {
+        pairError = null
+        showComputers = false
+        addingComputer = true
+    }
+
+    fun cancelAdding() {
+        pairError = null
+        addingComputer = false
+    }
+
+    /**
+     * Pair from a link. A link for a computer that's already here (same token, or same address
+     * with a new token) updates that entry, so re-pairing never creates a duplicate.
+     */
     fun pair(link: String) {
         pairError = null
-        try {
-            val c = MothrClient(link)
-            c.connect()
-            prefs.putString(KEY_LINK, c.link())
-            client = c
-            paused = false
-            startLoop(c)
-            background.keepAlive(runInBackground)
+        val client = try {
+            MothrClient(link)
         } catch (e: Throwable) {
             pairError = e.friendly()
+            return
         }
+        val existing = computers.firstOrNull { token(it.client) == token(client) || it.client.server() == client.server() }
+        val computer = when {
+            existing == null -> Computer(newId(), client, null, null).also {
+                computers = computers + it
+                saveIds(computers.map { c -> c.id })
+                start(it)
+            }
+            existing.client.link() == client.link() -> {
+                client.close()
+                toast = "Already paired with ${existing.name}"
+                existing
+            }
+            else -> existing.also { replaceClient(it, client) }
+        }
+        prefs.putString(linkKey(computer.id), computer.client.link())
+        addingComputer = false
+        select(computer)
+        resume()
+        background.keepAlive(runInBackground)
     }
 
-    fun unpair() {
-        loop?.cancel()
-        background.keepAlive(false)
-        clearNotifications()
-        seen.clear()
-        client?.let { c -> scope.launch(Dispatchers.IO) { c.disconnect(); c.close() } }
-        client = null
-        connection = null
-        groups = emptyList()
+    private fun token(client: MothrClient) = client.link().substringAfter("?token=")
+
+    private fun replaceClient(computer: Computer, client: MothrClient) {
+        shutDown(computer)
+        computer.client = client
+        computer.connection = null
+        start(computer)
+    }
+
+    /** Stop a computer's connection and take down what it had on the phone. */
+    private fun shutDown(computer: Computer) {
+        computer.loop?.cancel()
+        clearNotifications(computer)
+        computer.seen.clear()
+        val old = computer.client
+        scope.launch(Dispatchers.IO) { old.disconnect(); old.close() }
+    }
+
+    /** Show this computer's chats. */
+    fun select(computer: Computer) {
+        showComputers = false
+        if (current === computer) return
+        current = computer
+        prefs.putString(KEY_CURRENT, computer.id)
+        clearView()
+        scope.launch { refresh(computer) }
+    }
+
+    private fun clearView() {
         stack = emptyList()
         openChat = null
-        prefs.remove(KEY_LINK)
+        groups = emptyList()
+        usage = emptyList()
+        agents = emptyList()
+        projects = emptyList()
+        query = ""
+        showNewChat = false
+        showUsage = false
     }
 
-    private fun startLoop(c: MothrClient) {
-        loop?.cancel()
-        loop = scope.launch {
+    /** Give a computer a name on this phone; a blank name goes back to the desktop's own. */
+    fun rename(computer: Computer, name: String) {
+        val clean = name.trim().ifEmpty { null }
+        computer.customName = clean
+        if (clean != null) prefs.putString(nameKey(computer.id), clean) else prefs.remove(nameKey(computer.id))
+        updateStatus()
+    }
+
+    fun unpair(computer: Computer) {
+        shutDown(computer)
+        computers = computers - computer
+        saveIds(computers.map { it.id })
+        listOf(linkKey(computer.id), nameKey(computer.id), hostKey(computer.id), projectKey(computer.id)).forEach(prefs::remove)
+        if (current === computer) {
+            current = computers.firstOrNull()
+            clearView()
+            val next = current
+            if (next != null) {
+                prefs.putString(KEY_CURRENT, next.id)
+                scope.launch { refresh(next) }
+            } else {
+                prefs.remove(KEY_CURRENT)
+            }
+        }
+        if (computers.isEmpty()) {
+            showComputers = false
+            addingComputer = false
+            background.keepAlive(false)
+        }
+        updateStatus()
+    }
+
+    private fun startLoop(computer: Computer) {
+        computer.loop?.cancel()
+        val c = computer.client
+        computer.loop = scope.launch {
             var rev = 0uL
-            refresh(c)
+            refresh(computer)
             while (isActive) {
                 rev = withContext(Dispatchers.IO) { c.waitForChange(rev, 15_000u) }
-                refresh(c)
+                refresh(computer)
                 // Streaming produces many tiny changes; ~30 updates/s is plenty.
                 delay(33)
             }
         }
     }
 
-    private suspend fun refresh(c: MothrClient) {
-        if (!foreground) {
-            // Off screen: just the connection and what needs the user.
+    private suspend fun refresh(computer: Computer) {
+        val c = computer.client
+        if (!foreground || computer !== current) {
+            // Not on screen: just the connection and what needs the user.
             val (conn, items) = withContext(Dispatchers.Default) { c.connection() to c.attention() }
-            connection = conn
-            track(conn, items)
+            if (computer.client === c) update(computer, conn, items)
             return
         }
         val id = stack.lastOrNull()
@@ -223,8 +408,10 @@ class AppModel(private val scope: CoroutineScope) {
         val snapshot = withContext(Dispatchers.Default) {
             Snapshot(c.connection(), c.chatGroups(q), c.usage(), c.agents(), c.projects(), id?.let { c.chat(it) }, c.takeToasts(), c.attention())
         }
-        track(snapshot.connection, snapshot.attention)
-        connection = snapshot.connection
+        if (computer.client !== c) return
+        update(computer, snapshot.connection, snapshot.attention)
+        // The user may have switched computers while this was loading.
+        if (computer !== current) return
         groups = snapshot.groups
         usage = snapshot.usage
         agents = snapshot.agents
@@ -244,29 +431,54 @@ class AppModel(private val scope: CoroutineScope) {
         val attention: List<Attention>,
     )
 
-    /** Notify about new requests (only while off screen) and withdraw answered ones. */
-    private fun track(conn: ConnectionInfo, items: List<Attention>) {
-        // The list is only meaningful once the desktop's snapshot is in.
-        if (conn.loaded) {
-            val keys = items.mapTo(HashSet()) { it.key }
-            for (a in items) {
-                if (seen.add(a.key) && !foreground) {
-                    background.show(a)
-                    shown += a.key
-                }
-            }
-            seen.retainAll(keys)
-            (shown - keys).forEach { shown -= it; background.withdraw(it) }
+    private fun update(computer: Computer, conn: ConnectionInfo, items: List<Attention>) {
+        computer.connection = conn
+        conn.computer?.takeIf { it != computer.hostName }?.let {
+            computer.hostName = it
+            prefs.putString(hostKey(computer.id), it)
         }
-        val text = when (conn.state) {
-            ConnectionState.CONNECTED -> when (val n = conn.needsYou.toInt()) {
-                0 -> "Connected to ${conn.server.removePrefix("https://").removePrefix("http://")}"
-                1 -> "1 chat needs you"
-                else -> "$n chats need you"
+        track(computer, conn, items)
+        updateStatus()
+    }
+
+    /** Notify about new requests that aren't on screen, and withdraw answered ones. */
+    private fun track(computer: Computer, conn: ConnectionInfo, items: List<Attention>) {
+        // The list is only meaningful once the desktop's snapshot is in.
+        if (!conn.loaded) return
+        val onScreen = foreground && computer === current
+        val keys = items.mapTo(HashSet()) { it.key }
+        for (a in items) {
+            if (computer.seen.add(a.key) && !onScreen) {
+                val source = NotificationSource(computer.id, computer.name.takeIf { computers.size > 1 })
+                background.show(a.copy(key = computer.notificationKey(a.key)), source)
+                computer.shown += a.key
             }
-            ConnectionState.UNAUTHORIZED -> "Not paired anymore. Open Mothr to pair again."
-            ConnectionState.IDLE -> "Disconnected"
-            else -> "Reconnecting…"
+        }
+        computer.seen.retainAll(keys)
+        (computer.shown - keys).forEach {
+            computer.shown -= it
+            background.withdraw(computer.notificationKey(it))
+        }
+    }
+
+    /** The one line on the ongoing "connected" notification. */
+    private fun updateStatus() {
+        val waiting = computers.sumOf { it.needsYou }
+        val connected = computers.filter { it.connection?.state == ConnectionState.CONNECTED }
+        val only = computers.singleOrNull()
+        val text = when {
+            computers.isEmpty() -> "Disconnected"
+            waiting == 1 -> "1 chat needs you"
+            waiting > 1 -> "$waiting chats need you"
+            only != null -> when (only.connection?.state) {
+                ConnectionState.CONNECTED -> "Connected to ${only.name}"
+                ConnectionState.UNAUTHORIZED -> "Not paired anymore. Open Mothr to pair again."
+                ConnectionState.IDLE -> "Disconnected"
+                else -> "Reconnecting…"
+            }
+            connected.size == computers.size -> "Connected to ${computers.size} computers"
+            connected.isEmpty() -> "Reconnecting…"
+            else -> "Connected to ${connected.size} of ${computers.size} computers"
         }
         if (text != lastStatus) {
             lastStatus = text
@@ -274,24 +486,32 @@ class AppModel(private val scope: CoroutineScope) {
         }
     }
 
-    private fun withdrawChat(chatId: String) {
-        shown.filter { it.startsWith("$chatId/") }.forEach { shown -= it; background.withdraw(it) }
+    private fun withdrawChat(computer: Computer, chatId: String) {
+        computer.shown.filter { it.startsWith("$chatId/") }.forEach {
+            computer.shown -= it
+            background.withdraw(computer.notificationKey(it))
+        }
     }
 
-    private fun clearNotifications() {
-        shown.forEach { background.withdraw(it) }
-        shown.clear()
+    private fun clearNotifications(computer: Computer) {
+        computer.shown.forEach { background.withdraw(computer.notificationKey(it)) }
+        computer.shown.clear()
     }
 
     fun search(q: String) {
         query = q
-        client?.let { c -> scope.launch { groups = withContext(Dispatchers.Default) { c.chatGroups(q) } } }
+        val computer = current ?: return
+        scope.launch {
+            val found = withContext(Dispatchers.Default) { computer.client.chatGroups(q) }
+            if (computer === current) groups = found
+        }
     }
 
     fun open(id: String) {
+        val computer = current ?: return
         stack = stack + id
-        openChat = client?.chat(id)
-        withdrawChat(id)
+        openChat = computer.client.chat(id)
+        withdrawChat(computer, id)
         act { markRead(id) }
     }
 
@@ -324,13 +544,23 @@ class AppModel(private val scope: CoroutineScope) {
     }
 
     fun newChat(agentId: String, projectPath: String, modeId: String, prompt: String, design: Boolean) {
-        val c = client ?: return
+        val computer = current ?: return
+        if (creatingChat) return
+        creatingChat = true
+        val c = computer.client
         scope.launch {
             try {
-                val id = withContext(Dispatchers.IO) { c.newChat(agentId, projectPath, modeId, null, prompt, design) }
-                showNewChat = false
+                val id = try {
+                    withContext(Dispatchers.IO) { c.newChat(agentId, projectPath, modeId, null, prompt, design) }
+                } finally {
+                    creatingChat = false
+                }
                 prefs.putString(KEY_AGENT, agentId)
                 prefs.putString(KEY_MODE, modeId)
+                prefs.putString(projectKey(computer.id), projectPath)
+                newChatDraft = ""
+                if (computer !== current) return@launch
+                showNewChat = false
                 stack = listOf(id)
                 // The chat arrives over the socket a moment later.
                 repeat(20) {
@@ -347,11 +577,21 @@ class AppModel(private val scope: CoroutineScope) {
     val lastAgent: String? get() = prefs.getStringOrNull(KEY_AGENT)
     val lastMode: String? get() = prefs.getStringOrNull(KEY_MODE)
 
+    /** The project last used on this computer; empty means General. */
+    val lastProject: String? get() = current?.let { prefs.getStringOrNull(projectKey(it.id)) }
+
     companion object {
         private const val KEY_LINK = "pairing_link"
+        private const val KEY_COMPUTERS = "computers"
+        private const val KEY_CURRENT = "current_computer"
         private const val KEY_AGENT = "last_agent"
         private const val KEY_MODE = "last_mode"
         private const val KEY_BACKGROUND = "run_in_background"
+
+        private fun linkKey(id: String) = "computer.$id.link"
+        private fun nameKey(id: String) = "computer.$id.name"
+        private fun hostKey(id: String) = "computer.$id.host"
+        private fun projectKey(id: String) = "computer.$id.project"
     }
 }
 

@@ -35,7 +35,8 @@ fun App() {
         val model = Mothr.model
         Box(Modifier.fillMaxSize().background(pal.bg)) {
             val screen = when {
-                model.client == null -> "pair"
+                model.client == null || model.addingComputer -> "pair"
+                model.showNewChat -> "new"
                 model.stack.isNotEmpty() -> "chat"
                 else -> "chats"
             }
@@ -43,28 +44,35 @@ fun App() {
                 targetState = screen,
                 transitionSpec = {
                     val forward = targetState == "chat"
-                    (slideInHorizontally(tween(260)) { if (forward) it / 4 else -it / 4 } + fadeIn(tween(200))) togetherWith
+                    if (targetState == "new" || initialState == "new") {
+                        // New chat rises over the list, like a compose window.
+                        val rising = targetState == "new"
+                        (slideInVertically(tween(240)) { if (rising) it / 8 else 0 } + fadeIn(tween(200))) togetherWith
+                            (slideOutVertically(tween(200)) { if (rising) 0 else it / 8 } + fadeOut(tween(160)))
+                    } else (slideInHorizontally(tween(260)) { if (forward) it / 4 else -it / 4 } + fadeIn(tween(200))) togetherWith
                         (slideOutHorizontally(tween(260)) { if (forward) -it / 6 else it / 6 } + fadeOut(tween(160)))
                 },
                 label = "screen",
             ) { s ->
                 when (s) {
                     "pair" -> PairScreen(model)
+                    "new" -> NewChatScreen(model)
                     "chats" -> ChatsScreen(model)
                     else -> ChatScreen(model)
                 }
             }
 
-            BackHandler(enabled = model.stack.isNotEmpty() || model.showNewChat || model.showUsage) {
+            BackHandler(enabled = model.stack.isNotEmpty() || model.showNewChat || model.showUsage || model.addingComputer) {
                 when {
+                    model.addingComputer -> model.cancelAdding()
                     model.showNewChat -> model.showNewChat = false
                     model.showUsage -> model.showUsage = false
                     else -> model.back()
                 }
             }
 
-            if (model.showNewChat) NewChatSheet(model)
             if (model.showUsage) UsageSheet(model)
+            if (model.showComputers) ComputersSheet(model)
 
             // Toasts: brief, bottom, quiet.
             val toast = model.toast

@@ -1,5 +1,7 @@
 //! Parse the pairing link the desktop shows (its QR code): `https://host[:port]/?token=…`.
 
+use std::net::IpAddr;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pairing {
     /// `http(s)://host[:port]` without a trailing slash.
@@ -49,9 +51,43 @@ impl Pairing {
         format!("{ws}/api/ws?token={}", self.token)
     }
 
+    /// What to tell the user when this address can't be reached, based on what kind it is.
+    pub fn unreachable_message(&self) -> &'static str {
+        let authority = self.base.split_once("://").map_or(self.base.as_str(), |(_, a)| a);
+        let host = match authority.strip_prefix('[') {
+            Some(v6) => v6.split(']').next().unwrap_or(v6),
+            None => authority.split(':').next().unwrap_or(authority),
+        }
+        .to_ascii_lowercase();
+        let ip = host.parse::<IpAddr>().ok();
+        if host == "localhost" || ip.is_some_and(|ip| ip.is_loopback()) {
+            "This link points at this phone, not your computer. Unpair from the menu, then scan the code in Mothr → Settings → Remote."
+        } else if host.ends_with(".ts.net") || ip.is_some_and(is_tailnet) {
+            "Can't reach your computer over Tailscale. Turn Tailscale on on this phone, sign in to the same account, and check that Remote is on in Mothr."
+        } else if host.ends_with(".local") || ip.is_some_and(is_private) {
+            "Can't reach your computer. Join the same Wi-Fi and check that Remote is on in Mothr."
+        } else {
+            "Can't reach Mothr. Is the desktop app running with Remote on?"
+        }
+    }
+
     /// The pairing link, for saving and re-pairing.
     pub fn link(&self) -> String {
         format!("{}/?token={}", self.base, self.token)
+    }
+}
+
+fn is_tailnet(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]),
+        IpAddr::V6(v6) => v6.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
+    }
+}
+
+fn is_private(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => (v6.segments()[0] & 0xfe00) == 0xfc00 || (v6.segments()[0] & 0xffc0) == 0xfe80,
     }
 }
 
@@ -69,6 +105,21 @@ mod tests {
         assert_eq!(p.base, "http://192.168.1.4:7878");
         assert_eq!(p.ws_url(), "ws://192.168.1.4:7878/api/ws?token=t1");
         assert_eq!(p.link(), "http://192.168.1.4:7878/?token=t1");
+    }
+
+    #[test]
+    fn unreachable_message_fits_the_address() {
+        let message = |link: &str| Pairing::parse(link).unwrap().unreachable_message();
+        for link in ["http://127.0.0.1:7878/?token=t", "http://localhost:1/?token=t", "http://[::1]:7878/?token=t"] {
+            assert!(message(link).contains("this phone"), "{link}");
+        }
+        for link in ["http://100.64.0.10:7878/?token=t", "http://[fd7a:115c:a1e0::1]:7878/?token=t", "https://box.tail1.ts.net/?token=t"] {
+            assert!(message(link).contains("Tailscale"), "{link}");
+        }
+        for link in ["http://192.168.1.4:7878/?token=t", "http://10.0.2.2:7979/?token=t", "http://box.local:7878/?token=t"] {
+            assert!(message(link).contains("Wi-Fi"), "{link}");
+        }
+        assert!(message("https://abc.devtunnels.ms/?token=t").contains("Remote on"));
     }
 
     #[test]

@@ -154,7 +154,8 @@ impl MothrClient {
         }
         let url = self.pairing.ws_url();
         let shared = self.shared.clone();
-        *task = Some(self.rt.spawn(run_socket(url, shared)));
+        let unreachable = self.pairing.unreachable_message();
+        *task = Some(self.rt.spawn(run_socket(url, unreachable, shared)));
     }
 
     pub fn disconnect(&self) {
@@ -170,6 +171,7 @@ impl MothrClient {
         ConnectionInfo {
             state: c.state,
             server: self.pairing.base.clone(),
+            computer: store.computer.clone(),
             message: c.message.clone(),
             loaded: store.loaded,
             needs_you: store.needs_you_count(),
@@ -379,15 +381,16 @@ fn net(e: reqwest::Error) -> ClientError {
 /// The server pings every 20 s; silence for longer than this means the link is dead
 /// (common when a phone switches networks).
 const SILENCE_LIMIT: Duration = Duration::from_secs(50);
+/// An address with no route (Tailscale off on the phone) can otherwise hang for minutes.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-async fn run_socket(url: String, shared: Arc<Shared>) {
+async fn run_socket(url: String, unreachable: &'static str, shared: Arc<Shared>) {
     let mut backoff = Duration::from_millis(500);
-    let mut first = true;
+    // Retries keep the last message up, so the reason stays readable between attempts.
+    shared.set_conn(ConnectionState::Connecting, None);
     loop {
-        shared.set_conn(if first { ConnectionState::Connecting } else { ConnectionState::Reconnecting }, None);
-        first = false;
-        match tokio_tungstenite::connect_async(&url).await {
-            Ok((ws, _)) => {
+        match tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(&url)).await {
+            Ok(Ok((ws, _))) => {
                 shared.set_conn(ConnectionState::Connected, None);
                 backoff = Duration::from_millis(500);
                 let (_sink, mut stream) = ws.split();
@@ -406,17 +409,19 @@ async fn run_socket(url: String, shared: Arc<Shared>) {
                 };
                 shared.set_conn(ConnectionState::Reconnecting, Some(reason));
             }
-            Err(tungstenite::Error::Http(res)) if res.status().as_u16() == 401 => {
+            Ok(Err(tungstenite::Error::Http(res))) if res.status().as_u16() == 401 => {
                 shared.set_conn(ConnectionState::Unauthorized, Some(ClientError::Unauthorized.to_string()));
                 return;
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 let msg = match &e {
-                    tungstenite::Error::Io(_) => "Can't reach Mothr. Is the desktop app running with Remote on?".to_string(),
+                    tungstenite::Error::Io(_) => unreachable.to_string(),
+                    tungstenite::Error::Http(res) if res.status().is_server_error() => unreachable.to_string(),
                     other => other.to_string(),
                 };
                 shared.set_conn(ConnectionState::Reconnecting, Some(msg));
             }
+            Err(_) => shared.set_conn(ConnectionState::Reconnecting, Some(unreachable.to_string())),
         }
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(10));

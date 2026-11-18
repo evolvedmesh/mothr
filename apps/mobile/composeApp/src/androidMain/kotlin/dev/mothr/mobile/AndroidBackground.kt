@@ -70,14 +70,14 @@ class AndroidBackground(private val app: Context) : Background {
         if (ConnectionService.running) notifyIfAllowed(null, ConnectionService.NOTIFICATION_ID, ConnectionService.build(app, text))
     }
 
-    override fun show(item: Attention) {
+    override fun show(item: Attention, source: NotificationSource) {
         val n = NotificationCompat.Builder(app, CHANNEL_NEEDS_YOU)
             .setSmallIcon(if (item.kind == AttentionKind.PERMISSION) R.drawable.ic_stat_permission else R.drawable.ic_stat_question)
             .setColor(0xFF000000.toInt() or item.agent.color.toInt())
             .setContentTitle(item.title)
             .setContentText(item.body.lineSequence().first())
             .setStyle(NotificationCompat.BigTextStyle().bigText(item.body))
-            .setSubText(listOf(item.projectName, item.chatTitle).filter { it.isNotBlank() }.distinct().joinToString(" · "))
+            .setSubText(listOfNotNull(source.label, item.projectName, item.chatTitle).filter { it.isNotBlank() }.distinct().joinToString(" · "))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setWhen(item.updatedMs)
@@ -85,11 +85,12 @@ class AndroidBackground(private val app: Context) : Background {
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)
             .setGroup(GROUP)
-            .setContentIntent(openIntent(item))
+            .setContentIntent(launchIntent(item.openPath, item.key, source.computerId))
         item.quickReplies.sortedByDescending { it.allow }.forEachIndexed { i, r ->
             val intent = Intent(app, NotificationReceiver::class.java)
                 .setAction(NotificationReceiver.ACTION_REPLY)
                 .putExtra(NotificationReceiver.EXTRA_KEY, item.key)
+                .putExtra(NotificationReceiver.EXTRA_COMPUTER, source.computerId)
                 .putExtra(NotificationReceiver.EXTRA_CHAT, item.chatId)
                 .putExtra(NotificationReceiver.EXTRA_ENTRY, item.entryId)
                 .putExtra(NotificationReceiver.EXTRA_KIND, item.kind.name)
@@ -115,13 +116,12 @@ class AndroidBackground(private val app: Context) : Background {
         notifyIfAllowed("failed", ATTENTION_ID, n)
     }
 
-    private fun openIntent(item: Attention) = launchIntent(item.openPath, item.key)
-
-    private fun launchIntent(path: List<String>, key: String = "") = PendingIntent.getActivity(
+    private fun launchIntent(path: List<String>, key: String = "", computerId: String? = null) = PendingIntent.getActivity(
         app,
         key.hashCode(),
         Intent(app, MainActivity::class.java)
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra(MainActivity.EXTRA_COMPUTER, computerId)
             .putExtra(MainActivity.EXTRA_OPEN_PATH, path.toTypedArray()),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )

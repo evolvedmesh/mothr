@@ -2,7 +2,6 @@ package dev.mothr.mobile
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -30,14 +28,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.mothr.client.AgentView
+import dev.mothr.client.ModeOption
 import dev.mothr.client.ProjectView
 import dev.mothr.mobile.resources.Res
 import dev.mothr.mobile.resources.ic_check
 import dev.mothr.mobile.resources.ic_folder
 import dev.mothr.mobile.resources.ic_git_branch
 import dev.mothr.mobile.resources.ic_globe
+import dev.mothr.mobile.resources.ic_log_out
+import dev.mothr.mobile.resources.ic_pencil
+import dev.mothr.mobile.resources.ic_plus
 import dev.mothr.mobile.resources.ic_refresh_cw
 import kotlinx.coroutines.delay
 
@@ -55,103 +59,160 @@ private fun Sheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
     ) { content() }
 }
 
+/** Every paired computer: switch between them, name them, add or unpair one. */
 @Composable
-private fun SectionLabel(text: String) {
-    Text(text, style = type.caption.copy(color = pal.textFaint), modifier = Modifier.padding(bottom = 8.dp))
+fun ComputersSheet(model: AppModel) {
+    var renaming by remember { mutableStateOf<String?>(null) }
+    var unpairing by remember { mutableStateOf<String?>(null) }
+    Sheet({ model.showComputers = false }) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
+            Text("Computers", style = type.title)
+            Spacer(Modifier.height(4.dp))
+            Text("All of them stay connected, so any of them can notify you.", style = type.body.copy(color = pal.textMuted))
+            Spacer(Modifier.height(16.dp))
+            Column(Modifier.clip(Radius.lg).border(1.dp, pal.border, Radius.lg)) {
+                model.computers.forEach { c ->
+                    when (c.id) {
+                        renaming -> RenameRow(c, onDone = { name ->
+                            model.rename(c, name)
+                            renaming = null
+                        })
+                        unpairing -> Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("Unpair ${c.name}?", style = type.body, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            Btn("Cancel", tone = Tone.Ghost) { unpairing = null }
+                            Btn("Unpair", tone = Tone.Danger) {
+                                unpairing = null
+                                model.unpair(c)
+                            }
+                        }
+                        else -> ComputerRow(
+                            c,
+                            selected = c === model.current,
+                            onSelect = { model.select(c) },
+                            onRename = { unpairing = null; renaming = c.id },
+                            onUnpair = { renaming = null; unpairing = c.id },
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Btn("Add a computer", icon = Res.drawable.ic_plus, modifier = Modifier.fillMaxWidth()) { model.startAdding() }
+        }
+    }
 }
 
 @Composable
-fun NewChatSheet(model: AppModel) {
-    val agents = model.agents.filter { it.available }
-    var agentId by remember { mutableStateOf(model.lastAgent?.takeIf { id -> agents.any { it.agent.id == id } } ?: agents.firstOrNull()?.agent?.id) }
-    val agent = agents.firstOrNull { it.agent.id == agentId }
-    var project by remember { mutableStateOf<ProjectView?>(model.projects.firstOrNull()) }
-    var general by remember { mutableStateOf(model.projects.isEmpty()) }
+private fun ComputerRow(computer: Computer, selected: Boolean, onSelect: () -> Unit, onRename: () -> Unit, onUnpair: () -> Unit) {
+    val (color, state) = connectionLook(computer)
+    Row(
+        Modifier.fillMaxWidth().tap(shape = Radius.lg, onClick = onSelect).padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(Modifier.size(8.dp).clip(Radius.full).background(color))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(computer.name, style = type.label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                if (selected) Ico(Res.drawable.ic_check, tint = pal.brand, size = 14.dp)
+            }
+            Text(state ?: computer.address, style = type.caption.copy(color = pal.textFaint), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (computer.needsYou > 0) Pill("${computer.needsYou} waiting", color = pal.warning)
+        IconBtn(Res.drawable.ic_pencil, onClick = onRename)
+        IconBtn(Res.drawable.ic_log_out, onClick = onUnpair)
+    }
+}
+
+@Composable
+private fun RenameRow(computer: Computer, onDone: (String) -> Unit) {
+    var name by remember { mutableStateOf(computer.customName ?: computer.name) }
+    Row(
+        Modifier.fillMaxWidth().padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(Modifier.weight(1f)) { Field(name, "Name", singleLine = true) { name = it } }
+        Btn("Save", tone = Tone.Primary) { onDone(name) }
+    }
+}
+
+/** One choice in a picker sheet. */
+@Composable
+private fun PickRow(
+    title: String,
+    subtitle: String?,
+    selected: Boolean,
+    titleColor: Color = pal.text,
+    onClick: () -> Unit,
+    leading: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        Modifier.fillMaxWidth().clip(Radius.md).background(if (selected) pal.surfaceHover else Color.Transparent)
+            .tap(onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        leading?.invoke()
+        Column(Modifier.weight(1f)) {
+            Text(title, style = type.label.copy(color = titleColor))
+            subtitle?.let { Text(it, style = type.caption.copy(color = pal.textMuted)) }
+        }
+        if (selected) Ico(Res.drawable.ic_check, size = 17.dp, tint = pal.text)
+    }
+}
+
+@Composable
+private fun PickerBody(title: String, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(horizontal = 12.dp).padding(bottom = 24.dp)) {
+        Text(title, style = type.title, modifier = Modifier.padding(start = 12.dp, top = 4.dp, bottom = 12.dp))
+        content()
+    }
+}
+
+@Composable
+fun AgentPickerSheet(agents: List<AgentView>, selected: String?, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    Sheet(onDismiss) {
+        PickerBody("Agent") {
+            agents.forEach { a ->
+                PickRow(a.agent.name, a.version, a.agent.id == selected, onClick = { onPick(a.agent.id) }) { AgentAvatar(a.agent, 34.dp) }
+            }
+        }
+    }
+}
+
+@Composable
+fun ModePickerSheet(modes: List<ModeOption>, selected: String?, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    Sheet(onDismiss) {
+        PickerBody("Permissions") {
+            modes.forEach { m ->
+                PickRow(m.label, m.description, m.id == selected, titleColor = if (m.dangerous) pal.danger else pal.text, onClick = { onPick(m.id) })
+            }
+        }
+    }
+}
+
+@Composable
+fun ProjectPickerSheet(model: AppModel, selected: ProjectView?, onDismiss: () -> Unit, onPick: (ProjectView?) -> Unit) {
     var query by remember { mutableStateOf("") }
     var hits by remember { mutableStateOf<List<ProjectView>>(emptyList()) }
-    var modeId by remember { mutableStateOf(model.lastMode ?: "ask") }
-    var prompt by remember { mutableStateOf("") }
-    var design by remember { mutableStateOf(false) }
-
     LaunchedEffect(query) {
         if (query.isBlank()) { hits = emptyList(); return@LaunchedEffect }
         delay(150)
         hits = model.searchProjects(query)
     }
-    // The mode list depends on the agent; fall back to its closest supported mode.
-    val modes = agent?.modes ?: emptyList()
-    val mode = modes.firstOrNull { it.id == modeId } ?: modes.firstOrNull()
-
-    Sheet({ model.showNewChat = false }) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("New chat", style = type.title, modifier = Modifier.weight(1f))
-                Segmented(listOf("Chat", "Design"), if (design) 1 else 0) { design = it == 1 }
-            }
-            Spacer(Modifier.height(20.dp))
-
-            SectionLabel("Agent")
-            if (agents.isEmpty()) {
-                Text("No agents are installed on your computer.", style = type.body.copy(color = pal.textMuted))
-            }
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                agents.forEach { a ->
-                    val on = a.agent.id == agentId
-                    Row(
-                        Modifier.clip(Radius.lg).background(if (on) pal.surfaceHover else pal.surface)
-                            .border(1.dp, if (on) pal.text.copy(alpha = 0.6f) else pal.border, Radius.lg)
-                            .tap(shape = Radius.lg) { agentId = a.agent.id }.padding(start = 8.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                    ) {
-                        AgentAvatar(a.agent, 28.dp)
-                        Text(a.agent.shortName, style = type.label)
-                    }
-                }
-            }
-            Spacer(Modifier.height(20.dp))
-
-            SectionLabel("Where")
-            Field(query, "Search projects", singleLine = true) { query = it }
+    Sheet(onDismiss) {
+        PickerBody("Project") {
+            Box(Modifier.padding(horizontal = 4.dp)) { Field(query, "Search projects", singleLine = true) { query = it } }
             Spacer(Modifier.height(8.dp))
-            Column(Modifier.clip(Radius.lg).border(1.dp, pal.border, Radius.lg)) {
-                ProjectRow(null, selected = general) { general = true; project = null }
-                val list = if (query.isBlank()) model.projects.take(6) else hits
-                list.forEach { p -> ProjectRow(p, selected = !general && project?.path == p.path) { general = false; project = p } }
-            }
-            Spacer(Modifier.height(20.dp))
-
-            SectionLabel("Permissions")
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                modes.forEach { m ->
-                    val on = m.id == mode?.id
-                    val accent = if (m.dangerous) pal.danger else pal.text
-                    Text(
-                        m.label,
-                        style = type.label.copy(color = if (on) (if (m.dangerous) pal.danger else pal.bg) else pal.textMuted),
-                        modifier = Modifier.clip(Radius.full)
-                            .background(if (on) (if (m.dangerous) pal.danger.copy(alpha = 0.15f) else accent) else pal.surface)
-                            .border(1.dp, if (on) accent.copy(alpha = 0.6f) else pal.border, Radius.full)
-                            .tap(shape = Radius.full) { modeId = m.id }
-                            .padding(horizontal = 14.dp, vertical = 9.dp),
-                    )
-                }
-            }
-            mode?.let { Text(it.description, style = type.caption.copy(color = pal.textMuted), modifier = Modifier.padding(top = 8.dp)) }
-            Spacer(Modifier.height(20.dp))
-
-            SectionLabel(if (design) "What should it design?" else "First message")
-            Box(Modifier.fillMaxWidth().heightIn(min = 96.dp)) {
-                Field(prompt, if (design) "A design system for a calm banking app…" else "What are we working on?") { prompt = it }
-            }
-            Spacer(Modifier.height(18.dp))
-            Btn(
-                "Start",
-                tone = Tone.Primary,
-                enabled = agent != null && mode != null && (general || project != null),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                model.newChat(agent!!.agent.id, if (general) "" else project!!.path, mode!!.id, prompt, design)
+            if (query.isBlank()) ProjectRow(null, selected = selected == null) { onPick(null) }
+            val list = if (query.isBlank()) model.projects else hits
+            list.forEach { p -> ProjectRow(p, selected = selected?.path == p.path) { onPick(p) } }
+            if (query.isNotBlank() && hits.isEmpty()) {
+                Text("No projects match", style = type.body.copy(color = pal.textMuted), modifier = Modifier.padding(12.dp))
             }
         }
     }
@@ -160,8 +221,8 @@ fun NewChatSheet(model: AppModel) {
 @Composable
 private fun ProjectRow(p: ProjectView?, selected: Boolean, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().background(if (selected) pal.surfaceHover else pal.raised).tap(shape = Radius.sm, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 11.dp),
+        Modifier.fillMaxWidth().clip(Radius.md).background(if (selected) pal.surfaceHover else Color.Transparent).tap(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(11.dp),
     ) {
@@ -188,7 +249,7 @@ fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
             Text(
                 o,
                 style = type.label.copy(color = if (on) pal.text else pal.textMuted),
-                modifier = Modifier.clip(Radius.sm).background(if (on) pal.raised else androidx.compose.ui.graphics.Color.Transparent)
+                modifier = Modifier.clip(Radius.sm).background(if (on) (if (pal.dark) pal.borderStrong else pal.raised) else Color.Transparent)
                     .tap(shape = Radius.sm) { onSelect(i) }.padding(horizontal = 12.dp, vertical = 6.dp),
             )
         }

@@ -97,10 +97,21 @@ for the simulator or device and links it into the `ComposeApp` framework. Target
 ## Pairing
 
 1. On the desktop: Settings → Remote → turn Remote on.
-2. Copy the pairing link (`http(s)://…/?token=…`) and paste it into the app.
+   With Tailscale, keep it on on the phone too, signed in to the same account. Nothing else is
+   needed: Mothr listens directly on the computer's Tailscale address.
+2. On Android, tap **Scan QR code** and scan the code on the desktop. It uses Google's code
+   scanner, so it needs Google Play services but no camera permission.
+3. Or copy the pairing link (`http(s)://…/?token=…`) and paste it into the app. This is the only
+   way on iOS for now.
 
-The link carries a secret token, so treat it like a password. "Unpair this phone" (the
-settings icon on the chat list) forgets it.
+The link carries a secret token, so treat it like a password.
+
+## Several computers
+
+A phone can pair with any number of computers, such as a home and a work PC. Tap the computer's
+name under "Chats" to switch, rename, unpair or add one. Every paired computer stays connected,
+so any of them can notify you, and a notification's answer goes to the computer that asked.
+Pairing again with the same computer updates its entry instead of adding a second one.
 
 To try the app without a desktop session, run the fake hub:
 

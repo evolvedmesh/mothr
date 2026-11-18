@@ -51,8 +51,9 @@ class MainActivity : ComponentActivity() {
 
     /** A tapped "Needs you" notification opens its chat. */
     private fun handle(intent: Intent?) {
-        val path = intent?.getStringArrayExtra(EXTRA_OPEN_PATH)?.toList().orEmpty()
-        if (path.isNotEmpty()) Mothr.model.openPath(path)
+        val computer = intent?.getStringExtra(EXTRA_COMPUTER) ?: return
+        val path = intent.getStringArrayExtra(EXTRA_OPEN_PATH)?.toList().orEmpty()
+        if (path.isNotEmpty()) Mothr.model.openPath(computer, path)
     }
 
     // The activity handles uiMode itself (so an open chat survives a theme switch); the system
@@ -69,6 +70,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        const val EXTRA_COMPUTER = "computer"
         const val EXTRA_OPEN_PATH = "open_path"
     }
 }

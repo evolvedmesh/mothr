@@ -36,26 +36,43 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.mothr.mobile.resources.Res
+import dev.mothr.mobile.resources.ic_arrow_left
 import dev.mothr.mobile.resources.ic_clipboard_paste
 import dev.mothr.mobile.resources.ic_link
+import dev.mothr.mobile.resources.ic_scan_line
 
 @Suppress("DEPRECATION") // LocalClipboardManager: the replacement is suspend-only and platform-typed.
 @Composable
 fun PairScreen(model: AppModel) {
     var link by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
+    val adding = model.addingComputer
+    val scan = rememberQrScanner(
+        onCode = {
+            link = it.trim()
+            model.pair(link)
+        },
+        onError = { model.toast = it },
+    )
     Column(
         Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding()
             .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
     ) {
-        Spacer(Modifier.height(72.dp))
+        if (adding) {
+            Spacer(Modifier.height(12.dp))
+            IconBtn(Res.drawable.ic_arrow_left, tint = pal.text) { model.cancelAdding() }
+            Spacer(Modifier.height(20.dp))
+        } else {
+            Spacer(Modifier.height(72.dp))
+        }
         Logo(56)
         Spacer(Modifier.height(28.dp))
-        Text("Pair with Mothr", style = type.display)
+        Text(if (adding) "Add a computer" else "Pair with Mothr", style = type.display)
         Spacer(Modifier.height(10.dp))
         Text(
-            "Control the chats running on your computer from here. On the desktop, open Settings → Remote, " +
-                "turn Remote on, then copy the pairing link or scan its QR code.",
+            (if (adding) "Your other computers stay connected. " else "Control the chats running on your computer from here. ") +
+                "On the desktop, open Settings → Remote, " +
+                "turn Remote on, then " + if (scan != null) "scan its QR code or copy the pairing link." else "copy the pairing link.",
             style = type.body.copy(color = pal.textMuted),
         )
         Spacer(Modifier.height(32.dp))
@@ -91,10 +108,14 @@ fun PairScreen(model: AppModel) {
         }
         Spacer(Modifier.height(20.dp))
         Btn("Connect", tone = Tone.Primary, enabled = link.isNotBlank(), modifier = Modifier.fillMaxWidth()) { model.pair(link) }
+        if (scan != null) {
+            Spacer(Modifier.height(10.dp))
+            Btn("Scan QR code", icon = Res.drawable.ic_scan_line, modifier = Modifier.fillMaxWidth(), onClick = scan)
+        }
         Spacer(Modifier.height(36.dp))
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Hint("1", "Same Wi-Fi works out of the box: Mothr shows a local address.")
-            Hint("2", "Away from home, turn on Tailscale or Dev Tunnels in Mothr's remote settings.")
+            Hint("2", "Away from home, choose Tailscale in Mothr's remote settings and keep it on on this phone too.")
             Hint("3", "The link carries a secret token. Anyone with it can control your agents.")
         }
         Spacer(Modifier.height(40.dp))

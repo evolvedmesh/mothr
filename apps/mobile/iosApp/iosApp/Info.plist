@@ -25,7 +25,7 @@
         <key>UIApplicationSupportsMultipleScenes</key>
         <false/>
     </dict>
-    <!-- Pairing over the local network uses plain http plus a secret token; Tailscale and
+    <!-- Pairing over the local network or the tailnet uses plain http plus a secret token;
          Dev Tunnels links are https. -->
     <key>NSAppTransportSecurity</key>
     <dict>

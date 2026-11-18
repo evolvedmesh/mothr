@@ -78,6 +78,7 @@ fn pairs_streams_and_sends_commands() {
     client.connect();
     wait_until(&client, "snapshot", |c| c.connection().loaded);
     assert_eq!(client.connection().state, ConnectionState::Connected);
+    assert!(client.connection().computer.is_some_and(|name| !name.is_empty()));
     let groups = client.chat_groups(String::new());
     assert_eq!(groups[0].chats[0].title, "Demo session");
     assert_eq!(groups[0].chats[0].status, ChatStatus::Ready);

@@ -60,6 +60,9 @@ kotlin {
             implementation(libs.androidx.activity.compose)
             implementation(libs.androidx.core)
             implementation(libs.kotlinx.coroutines.android)
+            implementation(libs.play.services.code.scanner)
+            // The scanner pulls in a Fragment too old for the ActivityResult API MainActivity uses.
+            implementation(libs.androidx.fragment)
         }
     }
 }

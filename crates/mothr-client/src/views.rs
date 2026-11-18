@@ -243,6 +243,8 @@ pub struct ConnectionInfo {
     pub state: ConnectionState,
     /// The desktop's address (without the token).
     pub server: String,
+    /// The desktop's own name, once it has told us.
+    pub computer: Option<String>,
     pub message: Option<String>,
     /// The first snapshot has arrived.
     pub loaded: bool,

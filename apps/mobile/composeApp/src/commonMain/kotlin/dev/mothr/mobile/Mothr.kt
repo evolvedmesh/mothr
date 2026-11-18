@@ -5,20 +5,23 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 
+/** Which computer a notification is about. [label] is set when several are paired. */
+data class NotificationSource(val computerId: String, val label: String?)
+
 /**
  * What a platform does while the app is off screen. Android keeps the connection in a
  * foreground service and posts notifications; iOS posts local notifications and checks in
  * through background refresh (see iosApp/iosApp/Background.swift).
  */
 interface Background {
-    /** Paired and allowed to run in the background: keep the connection alive. */
+    /** Paired and allowed to run in the background: keep the connections alive. */
     fun keepAlive(on: Boolean)
 
     /** One line for the ongoing "connected" notification (Android). */
     fun status(text: String)
 
-    /** An agent is waiting on the user. Called once per request, only while off screen. */
-    fun show(item: Attention)
+    /** An agent is waiting on the user. Called once per request, when it isn't on screen. */
+    fun show(item: Attention, source: NotificationSource)
 
     /** The request was answered (here, on the desktop or elsewhere) or the chat is gone. */
     fun withdraw(key: String)
@@ -30,7 +33,7 @@ interface Background {
 private object NoBackground : Background {
     override fun keepAlive(on: Boolean) {}
     override fun status(text: String) {}
-    override fun show(item: Attention) {}
+    override fun show(item: Attention, source: NotificationSource) {}
     override fun withdraw(key: String) {}
     override fun failed(text: String) {}
 }

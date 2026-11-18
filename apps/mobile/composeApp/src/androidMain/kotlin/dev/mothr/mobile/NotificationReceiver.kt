@@ -13,6 +13,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class NotificationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_REPLY) return
+        val computer = intent.getStringExtra(EXTRA_COMPUTER) ?: return
         val chat = intent.getStringExtra(EXTRA_CHAT) ?: return
         val entry = intent.getStringExtra(EXTRA_ENTRY) ?: return
         val reply = intent.getStringExtra(EXTRA_REPLY) ?: return
@@ -22,7 +23,7 @@ class NotificationReceiver : BroadcastReceiver() {
         val pending = goAsync()
         CoroutineScope(Dispatchers.Main).launch {
             try {
-                withTimeoutOrNull(9_000) { Mothr.model.quickReply(chat, entry, kind, reply) }
+                withTimeoutOrNull(9_000) { Mothr.model.quickReply(computer, chat, entry, kind, reply) }
             } finally {
                 pending.finish()
             }
@@ -32,6 +33,7 @@ class NotificationReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_REPLY = "dev.mothr.mobile.REPLY"
         const val EXTRA_KEY = "key"
+        const val EXTRA_COMPUTER = "computer"
         const val EXTRA_CHAT = "chat"
         const val EXTRA_ENTRY = "entry"
         const val EXTRA_KIND = "kind"

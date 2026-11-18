@@ -16,7 +16,12 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
-    Snapshot { data: Box<HubSnapshot> },
+    Snapshot {
+        data: Box<HubSnapshot>,
+        /// The desktop's name; older desktops don't send one.
+        #[serde(default)]
+        computer: Option<String>,
+    },
     Event { data: Box<HubEvent> },
     Ack {
         #[serde(default)]
@@ -39,6 +44,8 @@ pub struct Store {
     pub toasts: Vec<Toast>,
     /// True once the first snapshot arrived.
     pub loaded: bool,
+    /// The name the desktop goes by.
+    pub computer: Option<String>,
 }
 
 impl Store {
@@ -54,8 +61,9 @@ impl Store {
     /// Apply one server message. Returns the session it touched, if any.
     pub fn apply_msg(&mut self, msg: ServerMsg) -> Option<SessionId> {
         match msg {
-            ServerMsg::Snapshot { data } => {
+            ServerMsg::Snapshot { data, computer } => {
                 self.load(*data);
+                self.computer = computer;
                 None
             }
             ServerMsg::Event { data } => self.apply_event(*data),

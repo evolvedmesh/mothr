@@ -5,12 +5,16 @@ compose-multiplatform = "1.10.3"
 gobley = "0.3.7"
 activity-compose = "1.12.4"
 androidx-core = "1.17.0"
+androidx-fragment = "1.9.1"
 coroutines = "1.10.2"
 markdown = "0.40.0"
 settings = "1.3.0"
 jna = "5.18.1"
+play-services-code-scanner = "16.1.0"
 
 [libraries]
+androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "androidx-fragment" }
+play-services-code-scanner = { module = "com.google.android.gms:play-services-code-scanner", version.ref = "play-services-code-scanner" }
 androidx-core = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }

@@ -71,6 +71,8 @@ val LightPalette = Palette(
 @Immutable
 data class Type(
     val display: TextStyle,
+    /** What you write when starting something: large and easy to read. */
+    val prompt: TextStyle,
     val title: TextStyle,
     val heading: TextStyle,
     val reading: TextStyle,
@@ -103,6 +105,7 @@ fun MothrTheme(content: @Composable () -> Unit) {
     val base = TextStyle(fontFamily = ui, color = pal.text)
     val type = Type(
         display = base.copy(fontSize = 28.sp, fontWeight = FontWeight.SemiBold, lineHeight = 32.sp, letterSpacing = (-0.4).sp),
+        prompt = base.copy(fontSize = 21.sp, lineHeight = 30.sp, letterSpacing = (-0.15).sp),
         title = base.copy(fontSize = 18.sp, fontWeight = FontWeight.SemiBold, lineHeight = 24.sp, letterSpacing = (-0.2).sp),
         heading = base.copy(fontSize = 16.sp, fontWeight = FontWeight.SemiBold, lineHeight = 22.sp),
         reading = base.copy(fontSize = 15.5.sp, lineHeight = 24.sp),
