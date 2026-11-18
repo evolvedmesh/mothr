@@ -4068,6 +4068,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "futures",
+ "gethostname",
  "mothr-core",
  "qrcode",
  "rand 0.9.5",

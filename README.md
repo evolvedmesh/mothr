@@ -75,8 +75,8 @@ with the app.
   app.
 - **Mothr Remote.** Controls the whole app from a phone or another computer. It's a
   token-protected web client (installable as a PWA) with live streaming, approvals, answers and
-  new chats. It can be exposed on the LAN, on your **Tailscale** tailnet, publicly through
-  **Tailscale Funnel**, or through **Dev Tunnels**. The app shows a QR code for pairing.
+  new chats. It can be reached on the LAN, directly over your **Tailscale** tailnet (no
+  extra setup beyond being signed in), or through **Dev Tunnels**. The app shows a QR code for pairing.
 - **Mothr mobile** (`apps/mobile`). A native Android/iOS remote built on the same Rust session
   model. It stays connected in the background and sends a notification when an agent needs a
   permission or an answer. Allow, Deny or an answer can be tapped right on the notification.

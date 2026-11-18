@@ -31,6 +31,8 @@ pub struct AppState {
     pub token: Arc<str>,
     pub status: watch::Sender<RemoteStatus>,
     pub shutdown: watch::Receiver<bool>,
+    /// This computer's name, so a phone paired with several can tell them apart.
+    pub computer: Option<Arc<str>>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -315,8 +317,19 @@ async fn command(State(st): State<AppState>, body: Bytes) -> Response {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerMsg<'a> {
-    Snapshot { data: &'a HubSnapshot },
+    Snapshot {
+        data: &'a HubSnapshot,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        computer: Option<&'a str>,
+    },
     Event { data: &'a HubEvent },
+}
+
+fn snapshot_msg(st: &AppState, data: &HubSnapshot) -> Message {
+    encode(&ServerMsg::Snapshot {
+        data,
+        computer: st.computer.as_deref(),
+    })
 }
 
 async fn ws_upgrade(State(st): State<AppState>, ws: WebSocketUpgrade) -> Response {
@@ -351,9 +364,7 @@ async fn client_loop(st: AppState, socket: WebSocket) {
     // Snapshot and subscribe atomically so no event is lost or applied twice.
     let (initial, mut events) = st.hub.snapshot_and_subscribe();
     if sink
-        .send(encode(&ServerMsg::Snapshot {
-            data: &initial,
-        }))
+        .send(snapshot_msg(&st, &initial))
         .await
         .is_err()
     {
@@ -369,7 +380,7 @@ async fn client_loop(st: AppState, socket: WebSocket) {
                 Ok(ev) => encode(&ServerMsg::Event { data: &ev }),
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     tracing::debug!("remote client lagged by {n} events; resending snapshot");
-                    encode(&ServerMsg::Snapshot { data: &st.hub.snapshot() })
+                    snapshot_msg(&st, &st.hub.snapshot())
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             },
@@ -436,9 +447,7 @@ fn handle_client_message(st: &AppState, text: &str, reply: &mpsc::UnboundedSende
     } else {
         let id = value.get("id").cloned().unwrap_or(serde_json::Value::Null);
         if value.get("op").and_then(|o| o.as_str()) == Some("snapshot") {
-            let _ = reply.send(encode(&ServerMsg::Snapshot {
-                data: &st.hub.snapshot(),
-            }));
+            let _ = reply.send(snapshot_msg(st, &st.hub.snapshot()));
             let _ = reply.send(ack(
                 id,
                 CommandReply {

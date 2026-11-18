@@ -8,6 +8,7 @@ description = "Mothr remote control: an authenticated HTTP/WebSocket server plus
 [dependencies]
 mothr-core.workspace = true
 axum.workspace = true
+gethostname = "1"
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -3,7 +3,7 @@
 //! Serves an authenticated HTTP + WebSocket API on top of [`mothr_core::HubApi`] together
 //! with an embedded single-page web client, so the whole app can be driven from a phone,
 //! tablet or another computer. Reachability options: the local network (bind address),
-//! Tailscale (`tailscale serve` / `tailscale funnel`) or Microsoft Dev Tunnels.
+//! Tailscale (a direct listener on the tailnet address) or Microsoft Dev Tunnels.
 //!
 //! Authentication: every API/WebSocket request must carry the pairing token, either as
 //! `Authorization: Bearer <token>`, a `?token=<token>` query parameter or the `mothr_token`
@@ -12,6 +12,7 @@
 
 mod auth;
 mod server;
+mod tailnet;
 mod tunnel;
 
 use mothr_core::{HubApi, RemoteSettings, TunnelKind};
@@ -31,11 +32,13 @@ pub struct RemoteStatus {
     /// URL reachable from this machine or the LAN: `http://<lan-ip>:<port>/` when bound to an
     /// unspecified address (0.0.0.0 / ::), otherwise `http://<bind>:<port>/`.
     pub local_url: Option<String>,
-    /// Tunnel URL (Tailscale / Dev Tunnels) once established.
+    /// Tailnet or tunnel URL once established.
     pub public_url: Option<String>,
     pub tunnel: TunnelKind,
-    /// Last error (tunnel failures never stop the server; they land here).
+    /// Last error (connection failures never stop the server; they land here).
     pub error: Option<String>,
+    /// Something that may keep a phone from connecting, or a state worth waiting on.
+    pub warning: Option<String>,
     pub connected_clients: usize,
 }
 
@@ -65,7 +68,12 @@ impl RemoteServer {
             token.len() >= 16,
             "remote token is missing or too short; generate one with generate_token()"
         );
-        let listener = bind_listener(&settings.bind, settings.port).await?;
+        // With Tailscale the only outside door is the tailnet listener, whatever `bind` says.
+        let bind = match settings.tunnel {
+            TunnelKind::Tailscale => "127.0.0.1",
+            _ => settings.bind.as_str(),
+        };
+        let listener = bind_listener(bind, settings.port).await?;
         let addr = listener.local_addr()?;
 
         let initial = RemoteStatus {
@@ -74,6 +82,7 @@ impl RemoteServer {
             public_url: None,
             tunnel: settings.tunnel,
             error: None,
+            warning: initial_warning(settings.tunnel, addr),
             connected_clients: 0,
         };
         let (status, _) = watch::channel(initial);
@@ -84,14 +93,16 @@ impl RemoteServer {
             token: Arc::from(token.as_str()),
             status: status.clone(),
             shutdown: shutdown.subscribe(),
+            computer: computer_name().map(Arc::from),
         };
         let app = server::router(state);
+        let server_app = app.clone();
         let mut stop_rx = shutdown.subscribe();
         let status_for_server = status.clone();
         let server_task = tokio::spawn(async move {
             let result = axum::serve(
                 listener,
-                app.into_make_service_with_connect_info::<SocketAddr>(),
+                server_app.into_make_service_with_connect_info::<SocketAddr>(),
             )
             .with_graceful_shutdown(async move {
                 let _ = stop_rx.wait_for(|v| *v).await;
@@ -105,10 +116,29 @@ impl RemoteServer {
         });
         tracing::info!("remote control listening on {addr}");
 
-        let tunnel_task = (settings.tunnel != TunnelKind::None).then(|| {
-            let cfg = tunnel::TunnelConfig::detect(settings.tunnel, addr);
-            tokio::spawn(tunnel::run(cfg, status.clone(), shutdown.subscribe()))
-        });
+        let tunnel_task = match settings.tunnel {
+            TunnelKind::None => None,
+            TunnelKind::Tailscale => {
+                let cfg = tailnet::TailnetConfig {
+                    program: None,
+                    port: addr.port(),
+                    app,
+                };
+                Some(tokio::spawn(tailnet::run(
+                    cfg,
+                    status.clone(),
+                    shutdown.subscribe(),
+                )))
+            }
+            TunnelKind::DevTunnel => {
+                let cfg = tunnel::TunnelConfig::detect(addr);
+                Some(tokio::spawn(tunnel::run(
+                    cfg,
+                    status.clone(),
+                    shutdown.subscribe(),
+                )))
+            }
+        };
 
         Ok(RemoteServer {
             status,
@@ -133,18 +163,17 @@ impl RemoteServer {
         self.addr
     }
 
-    /// Best URL for pairing (tunnel URL if up, else the local/LAN URL) including `?token=…`.
+    /// URL for pairing, including `?token=…`. `None` while the selected tunnel isn't up.
     pub fn pairing_url(&self) -> Option<String> {
         let status = self.status.borrow();
-        let base = status.public_url.as_ref().or(status.local_url.as_ref())?;
-        Some(with_token(base, &self.token))
+        Some(with_token(pairing_base(&status)?, &self.token))
     }
 
     /// Stop serving, close every client and tear down any tunnel we set up.
     pub async fn stop(mut self) {
         let _ = self.shutdown.send(true);
         if let Some(task) = self.tunnel_task.take() {
-            // Teardown runs `tailscale … off` / kills devtunnel; give it time but don't hang.
+            // Teardown closes the tailnet listener / kills devtunnel; give it time but don't hang.
             if tokio::time::timeout(Duration::from_secs(20), task)
                 .await
                 .is_err()
@@ -200,6 +229,38 @@ pub fn qr_matrix(data: &str) -> Vec<Vec<bool>> {
         .chunks(width)
         .map(|row| row.iter().map(|c| *c == qrcode::Color::Dark).collect())
         .collect()
+}
+
+/// With Tailscale or a tunnel selected only that URL will do: the server then listens on
+/// loopback, so the local URL would point the phone at itself.
+fn pairing_base(status: &RemoteStatus) -> Option<&str> {
+    match status.tunnel {
+        TunnelKind::None => status.local_url.as_deref(),
+        _ => status.public_url.as_deref(),
+    }
+}
+
+/// This machine's name, without the `.local` macOS adds.
+fn computer_name() -> Option<String> {
+    clean_host_name(&gethostname::gethostname().to_string_lossy())
+}
+
+fn clean_host_name(name: &str) -> Option<String> {
+    let name = name.trim().trim_end_matches(".local");
+    (!name.is_empty() && !name.eq_ignore_ascii_case("localhost")).then(|| name.to_string())
+}
+
+/// What to show before anything has happened.
+fn initial_warning(tunnel: TunnelKind, addr: SocketAddr) -> Option<String> {
+    let ip = addr.ip();
+    let only_this_computer = ip.is_loopback() || (ip.is_unspecified() && primary_local_ip().is_none());
+    match tunnel {
+        TunnelKind::Tailscale => Some("Checking Tailscale…".into()),
+        TunnelKind::None if only_this_computer => Some(
+            "This address only works on this computer. Join a network, or choose Tailscale.".into(),
+        ),
+        _ => None,
+    }
 }
 
 fn with_token(base: &str, token: &str) -> String {
@@ -265,6 +326,24 @@ pub fn primary_local_ip() -> Option<IpAddr> {
 }
 
 #[cfg(test)]
+pub(crate) mod test_util {
+    use std::path::{Path, PathBuf};
+
+    /// Tests that write and exec fake CLIs race with concurrent forks (ETXTBSY); run them serially.
+    pub static PROC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[cfg(unix)]
+    pub fn fake_cli(dir: &Path, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join("fake-cli");
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -299,6 +378,38 @@ mod tests {
             with_token("http://x/?a=1", "t+/"),
             "http://x/?a=1&token=t%2B%2F"
         );
+    }
+
+    #[test]
+    fn pairing_needs_the_tunnel_when_one_is_selected() {
+        let mut status = RemoteStatus {
+            local_url: Some("http://127.0.0.1:7878/".into()),
+            tunnel: TunnelKind::Tailscale,
+            ..Default::default()
+        };
+        assert_eq!(pairing_base(&status), None);
+        status.public_url = Some("https://h.ts.net/".into());
+        assert_eq!(pairing_base(&status), Some("https://h.ts.net/"));
+        status.tunnel = TunnelKind::None;
+        status.public_url = None;
+        assert_eq!(pairing_base(&status), Some("http://127.0.0.1:7878/"));
+    }
+
+    #[test]
+    fn host_names() {
+        assert_eq!(clean_host_name("Work-Mac.local").as_deref(), Some("Work-Mac"));
+        assert_eq!(clean_host_name(" box\n").as_deref(), Some("box"));
+        assert_eq!(clean_host_name("localhost"), None);
+        assert_eq!(clean_host_name(""), None);
+    }
+
+    #[test]
+    fn warns_about_addresses_a_phone_cannot_use() {
+        let loopback = "127.0.0.1:7878".parse().unwrap();
+        assert!(initial_warning(TunnelKind::None, loopback).is_some());
+        let lan = "192.168.1.4:7878".parse().unwrap();
+        assert_eq!(initial_warning(TunnelKind::None, lan), None);
+        assert_eq!(initial_warning(TunnelKind::DevTunnel, loopback), None);
     }
 
     #[test]

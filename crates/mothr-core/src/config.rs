@@ -128,10 +128,10 @@ pub enum TunnelKind {
     /// Only reachable on the local network / bind address.
     #[default]
     None,
-    /// `tailscale serve` — private to your tailnet.
+    /// Direct connection over the tailnet, on this machine's Tailscale address.
+    /// `tailscale_funnel` was a separate option once; those settings land here.
+    #[serde(alias = "tailscale_funnel")]
     Tailscale,
-    /// `tailscale funnel` — public HTTPS URL.
-    TailscaleFunnel,
     /// Microsoft Dev Tunnels (`devtunnel host`).
     DevTunnel,
 }
@@ -141,7 +141,6 @@ impl TunnelKind {
         match self {
             TunnelKind::None => "Local network",
             TunnelKind::Tailscale => "Tailscale (tailnet only)",
-            TunnelKind::TailscaleFunnel => "Tailscale Funnel (public)",
             TunnelKind::DevTunnel => "Dev Tunnels",
         }
     }
@@ -327,6 +326,15 @@ mod tests {
         assert!(!s.record_selection(AgentKind::ClaudeCode, Some("opus")));
         assert_eq!(s.preferred_agent(), Some(AgentKind::Hermes));
         assert_eq!(s.preferred_model(AgentKind::Hermes).as_deref(), Some("anthropic:claude-sonnet-5"));
+    }
+
+    #[test]
+    fn old_funnel_setting_becomes_tailscale() {
+        let remote: RemoteSettings = toml::from_str(
+            "enabled = true\nbind = \"127.0.0.1\"\nport = 7878\ntoken = \"t\"\ntunnel = \"tailscale_funnel\"",
+        )
+        .unwrap();
+        assert_eq!(remote.tunnel, TunnelKind::Tailscale);
     }
 
     #[test]

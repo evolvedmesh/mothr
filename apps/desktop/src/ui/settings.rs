@@ -85,7 +85,7 @@ impl SettingsView {
         let tunnels = self.tunnels.clone();
 
         let mut tunnel_row = h_flex().gap_2().flex_wrap();
-        for kind in [TunnelKind::None, TunnelKind::Tailscale, TunnelKind::TailscaleFunnel, TunnelKind::DevTunnel] {
+        for kind in [TunnelKind::None, TunnelKind::Tailscale, TunnelKind::DevTunnel] {
             let available = tunnels.supports(kind);
             let selected = r.tunnel == kind;
             tunnel_row = tunnel_row.child(
@@ -118,13 +118,11 @@ impl SettingsView {
                             .child(icon(match kind {
                                 TunnelKind::None => "wifi",
                                 TunnelKind::Tailscale => "network",
-                                TunnelKind::TailscaleFunnel => "globe",
                                 TunnelKind::DevTunnel => "link",
                             }).size(sz(15.)))
                             .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(match kind {
                                 TunnelKind::None => "Local network",
                                 TunnelKind::Tailscale => "Tailscale",
-                                TunnelKind::TailscaleFunnel => "Tailscale Funnel",
                                 TunnelKind::DevTunnel => "Dev Tunnels",
                             })),
                     )
@@ -132,18 +130,24 @@ impl SettingsView {
                         (_, false) => "Not installed".to_string(),
                         (TunnelKind::None, _) => "Same Wi-Fi / LAN only".into(),
                         (TunnelKind::Tailscale, _) => "Private to your tailnet".into(),
-                        (TunnelKind::TailscaleFunnel, _) => "Public HTTPS URL".into(),
                         (TunnelKind::DevTunnel, _) => "Microsoft dev tunnel".into(),
                     })),
             );
         }
 
+        // With Tailscale or a tunnel the local address is loopback: no use to a phone.
+        let public_label = if r.tunnel == TunnelKind::Tailscale { "Tailnet" } else { "Public" };
         let urls = v_flex()
             .gap_2()
-            .when_some(status.public_url.clone(), |d, u| d.child(url_row("Public", u, cx)))
-            .when_some(status.local_url.clone(), |d, u| d.child(url_row("Local", u, cx)));
+            .when_some(status.public_url.clone(), |d, u| d.child(url_row(public_label, u, cx)))
+            .when_some(status.local_url.clone().filter(|_| r.tunnel == TunnelKind::None), |d, u| d.child(url_row("Local", u, cx)));
 
         let qr = pairing.as_ref().map(|p| qr_code(p, 3.4));
+        let copy_link = pairing.clone();
+        let tailscale_help = r.tunnel == TunnelKind::Tailscale
+            && status.public_url.is_some()
+            && status.warning.is_none()
+            && status.connected_clients == 0;
 
         card(cx).p_5().child(
             v_flex()
@@ -183,18 +187,40 @@ impl SettingsView {
                             })
                         }))),
                 )
-                .child(v_flex().gap_2().child(section_label("CONNECTION", cx)).child(tunnel_row))
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(section_label("CONNECTION", cx))
+                        .child(tunnel_row)
+                        .when(tunnels.tailscale.is_none(), |d| {
+                            d.child(div().text_xs().text_color(theme.muted_foreground).child(
+                                "To reach this computer from anywhere, install Tailscale from tailscale.com/download.",
+                            ))
+                        }),
+                )
                 .when(status.running || status.error.is_some(), |d| {
                     d.child(
                         h_flex()
                             .gap_6()
                             .items_start()
                             .when_some(qr, |d, q| {
-                                d.child(v_flex().items_center().gap_2().child(q).child(div().text_xs().text_color(theme.muted_foreground).child("Scan to pair")))
+                                d.child(
+                                    v_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(q)
+                                        .child(div().text_xs().text_color(theme.muted_foreground).child("Scan with the Mothr app"))
+                                        .when_some(copy_link, |d, link| {
+                                            d.child(Button::new("copy-pairing-link").ghost().small().icon(icon("copy")).label("Copy pairing link").on_click(
+                                                move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(link.clone())),
+                                            ))
+                                        }),
+                                )
                             })
                             .child(
                                 v_flex()
                                     .flex_1()
+                                    .min_w_0()
                                     .gap_3()
                                     .child(
                                         h_flex()
@@ -213,7 +239,15 @@ impl SettingsView {
                                     )
                                     .child(urls)
                                     .when_some(status.error.clone(), |d, e| {
-                                        d.child(div().text_xs().text_color(theme.danger).child(e))
+                                        d.child(div().w_full().text_xs().text_color(theme.danger).child(e))
+                                    })
+                                    .when_some(status.warning.clone(), |d, w| {
+                                        d.child(div().w_full().text_xs().text_color(theme.warning).child(w))
+                                    })
+                                    .when(tailscale_help, |d| {
+                                        d.child(div().w_full().text_xs().text_color(theme.muted_foreground).child(
+                                            "Keep Tailscale on on your phone, signed in to the same account. If it can't connect, check that your firewall allows this port on the Tailscale interface.",
+                                        ))
                                     }),
                             ),
                     )
