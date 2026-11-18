@@ -138,7 +138,7 @@ impl Home {
             .icon(icon("brain"))
             .label(label)
             .dropdown_caret(true)
-            .tooltip(if models.is_empty() { "More models appear after your first chat with this agent" } else { "Model for new chats" })
+            .tooltip(if models.is_empty() { "Model list is still loading" } else { "Model for new chats" })
             .dropdown_menu(move |mut menu, _, _| {
                 menu = menu.label("Model").max_h(sz(420.)).scrollable(true);
                 let w = weak.clone();

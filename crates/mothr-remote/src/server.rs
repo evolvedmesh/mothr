@@ -38,6 +38,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/snapshot", get(snapshot))
         .route("/api/sessions/{id}", get(session))
         .route("/api/projects", get(projects))
+        .route("/api/images/{name}", get(image))
         .route("/api/command", post(command))
         .route("/api/ws", get(ws_upgrade))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
@@ -206,6 +207,33 @@ async fn session(State(st): State<AppState>, Path(id): Path<SessionId>) -> Respo
             Json(json!({ "ok": false, "error": "no such session" })),
         )
             .into_response(),
+    }
+}
+
+/// Serve a stored image (agent output or pasted screenshot) by file name. Only raster files
+/// directly inside Mothr's images folder are reachable; the name can't carry a path.
+async fn image(Path(name): Path<String>) -> Response {
+    let mime = match name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).as_deref() {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    if name.starts_with('.') || name.contains(['/', '\\', '\0']) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match tokio::fs::read(mothr_core::images_dir().join(&name)).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, "private, max-age=86400"),
+                (header::CONTENT_SECURITY_POLICY, "default-src 'none'; sandbox"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
 

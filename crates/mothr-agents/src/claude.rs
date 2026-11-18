@@ -690,8 +690,13 @@ impl Driver {
                 usage: ContextUsage { used_tokens: ctx, window_tokens: self.context_window, ..Default::default() },
             });
         }
-        for block in m["content"].as_array().into_iter().flatten() {
+        for (bi, block) in m["content"].as_array().into_iter().flatten().enumerate() {
             match block["type"].as_str().unwrap_or("") {
+                "image" => {
+                    if let Some(entry) = image_entry(block, format!("{msg}:img{bi}")) {
+                        self.out(&target, SessionEvent::Upsert { entry });
+                    }
+                }
                 t @ ("text" | "thinking") => {
                     let kind = if t == "text" { BlockKind::Text } else { BlockKind::Thinking };
                     let text = block[t].as_str().unwrap_or("").to_string();
@@ -819,6 +824,14 @@ impl Driver {
             call.status = if block["is_error"].as_bool().unwrap_or(false) { ToolStatus::Failed } else { ToolStatus::Completed };
             call.output = Some(truncate(&text, 20_000));
             self.out(&target, SessionEvent::Upsert { entry: Entry::Tool(call) });
+            // Images a tool returned (screenshots, a Read of a picture, MCP image results).
+            if let Value::Array(parts) = &block["content"] {
+                for (i, part) in parts.iter().enumerate() {
+                    if let Some(entry) = image_entry(part, format!("{id}:img{i}")) {
+                        self.out(&target, SessionEvent::Upsert { entry });
+                    }
+                }
+            }
         }
     }
 
@@ -914,6 +927,21 @@ fn find_url(v: &Value) -> Option<String> {
         }
         Value::Array(a) => a.iter().find_map(find_url),
         _ => None,
+    }
+}
+
+/// An [`Entry::Image`] from an Anthropic `image` content block (base64 source), saved to disk.
+fn image_entry(block: &Value, id: String) -> Option<Entry> {
+    if block["type"] != "image" || block["source"]["type"] != "base64" {
+        return None;
+    }
+    let mime = block["source"]["media_type"].as_str().unwrap_or("image/png");
+    match save_image_base64(block["source"]["data"].as_str()?, mime) {
+        Ok(path) => Some(Entry::Image { id, path, mime: Some(mime.to_string()) }),
+        Err(e) => {
+            tracing::warn!("couldn't store agent image: {e}");
+            None
+        }
     }
 }
 

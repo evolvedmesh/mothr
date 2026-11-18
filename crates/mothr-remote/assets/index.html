@@ -102,6 +102,7 @@ body.in-session #session-pane{transform:none}
 .msg.user{display:flex;justify-content:flex-end}
 .bubble{max-width:86%;background:var(--user);padding:9px 14px;border-radius:18px 18px 6px 18px;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}
 .att{display:block;font-size:12px;color:var(--mut);margin-top:4px}
+.pic{display:block;max-width:100%;max-height:360px;border-radius:10px;margin-top:6px;border:1px solid var(--line,rgba(127,127,127,.25))}
 .md{overflow-wrap:anywhere;line-height:1.6}
 .md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
 .md p{margin:.5em 0}
@@ -731,12 +732,23 @@ const isOpen = (key, dflt) => (S.open.has(key) ? S.open.get(key) : dflt);
 const openAttr = (key, dflt) => (isOpen(key, dflt) ? ' open' : '');
 
 /* ======================= entries ======================= */
+// Images Mothr stored itself (agent output, pasted screenshots) are served by name.
+function imgSrc(path) {
+  const m = /[\\/]images[\\/]([^\\/]+\.(?:png|jpe?g|gif|webp))$/i.exec(path || '');
+  return m ? '/api/images/' + encodeURIComponent(m[1]) : null;
+}
 function entryHTML(e, s) {
   const wrap = (inner, cls = '') => `<div class="entry ${cls}" data-eid="${esc(e.id)}">${inner}</div>`;
   switch (e.type) {
     case 'user': {
-      const att = (e.attachments || []).map((a) => `<span class="att">${ic('read', 'sm')} ${esc(projectName(a.path))}</span>`).join('');
+      const att = (e.attachments || []).map((a) => imgSrc(a.path)
+        ? `<a href="${imgSrc(a.path)}" target="_blank" rel="noopener"><img class="pic" src="${imgSrc(a.path)}" alt="${esc(projectName(a.path))}" loading="lazy"></a>`
+        : `<span class="att">${ic('read', 'sm')} ${esc(projectName(a.path))}</span>`).join('');
       return wrap(`<div class="msg user"><div class="bubble">${esc(e.text)}${att}</div></div>`);
+    }
+    case 'image': {
+      const src = imgSrc(e.path);
+      return wrap(src ? `<a href="${src}" target="_blank" rel="noopener"><img class="pic" src="${src}" alt="Image from the agent" loading="lazy"></a>` : `<div class="notice info">${ic('info', 'sm')}<div>Image: ${esc(projectName(e.path))}</div></div>`);
     }
     case 'assistant':
       return wrap(`<div class="md">${md(e.text)}${e.streaming ? '<span class="caret"></span>' : ''}</div>`);

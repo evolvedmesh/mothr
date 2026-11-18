@@ -52,6 +52,44 @@ pub fn sessions_dir() -> PathBuf {
     data_dir().join("sessions")
 }
 
+/// Where images (agent output, pasted screenshots) are stored.
+pub fn images_dir() -> PathBuf {
+    data_dir().join("images")
+}
+
+/// File extension for an image MIME type.
+pub fn image_ext(mime: &str) -> Option<&'static str> {
+    Some(match mime {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        _ => return None,
+    })
+}
+
+/// Write image bytes into [`images_dir`] under a content-derived name (same bytes, same file).
+pub fn save_image(bytes: &[u8], mime: &str) -> anyhow::Result<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let ext = image_ext(mime).ok_or_else(|| anyhow::anyhow!("unsupported image type {mime}"))?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    let path = images_dir().join(format!("{:016x}-{}.{ext}", h.finish(), bytes.len()));
+    if !path.exists() {
+        std::fs::create_dir_all(images_dir())?;
+        std::fs::write(&path, bytes)?;
+    }
+    Ok(path)
+}
+
+/// Decode base64 image data from an agent and store it. Returns the saved path.
+pub fn save_image_base64(data: &str, mime: &str) -> anyhow::Result<PathBuf> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim())?;
+    save_image(&bytes, mime)
+}
+
 /// Where design sessions without a project keep their files.
 pub fn designs_dir() -> PathBuf {
     data_dir().join("designs")

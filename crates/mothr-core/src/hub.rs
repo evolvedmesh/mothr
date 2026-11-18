@@ -1,9 +1,10 @@
 //! The hub contract: the single API both the desktop UI and the remote-control server use.
 
 use crate::agent::{AgentInstall, AgentKind, PermissionMode};
-use crate::session::{SessionCommand, SessionEvent, SessionId, SessionKind, SessionMeta, SessionState};
+use crate::session::{ModelInfo, SessionCommand, SessionEvent, SessionId, SessionKind, SessionMeta, SessionState};
 use crate::usage::ProviderUsage;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 
@@ -92,6 +93,8 @@ pub enum HubEvent {
     SessionRemoved { id: SessionId },
     Usage { usage: ProviderUsage },
     Agents { agents: Vec<AgentInstall> },
+    /// The models an agent offers (learned from a session or a startup probe).
+    AgentModels { agent: AgentKind, models: Vec<ModelInfo> },
     Projects { pinned: Vec<ProjectRef>, recent: Vec<ProjectRef> },
     /// Project index finished (re)scanning.
     ProjectsIndexed { count: usize },
@@ -105,6 +108,9 @@ pub struct HubSnapshot {
     pub usage: Vec<ProviderUsage>,
     pub pinned_projects: Vec<ProjectRef>,
     pub recent_projects: Vec<ProjectRef>,
+    /// Last known model list per agent, so pickers work before the first chat.
+    #[serde(default)]
+    pub agent_models: BTreeMap<AgentKind, Vec<ModelInfo>>,
 }
 
 /// Implemented by the hub; consumed by the GPUI app and the remote server.

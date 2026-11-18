@@ -243,6 +243,7 @@ impl HubApi for DemoHub {
                 project("/home/me/projects/website"),
                 project("/home/me/projects/api"),
             ],
+            ..Default::default()
         }
     }
 

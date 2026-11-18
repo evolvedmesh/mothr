@@ -11,13 +11,14 @@ async fn main() {
     let transport = install.transport.expect("not available");
     let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel();
     let meta = SessionMeta::new(kind, SessionKind::Chat, args[2].clone().into(), PermissionMode::Ask);
+    // DRIVE_ATTACH=<image path> attaches an image to the prompt.
     let spec = SessionSpec {
         id: meta.id, agent: kind, kind: SessionKind::Chat, cwd: args[2].clone().into(), mode: PermissionMode::Ask,
         model: args.get(4).cloned(), resume: None, resume_at: None, system_prompt: None, title: "smoke".into(),
     };
     let mut state = SessionState::new(meta);
     let cmd = spawn(&transport, spec, out_tx).unwrap();
-    cmd.send(SessionCommand::Prompt { text: args[3].clone(), attachments: vec![] , delivery: Default::default()}).unwrap();
+    cmd.send(SessionCommand::Prompt { text: args[3].clone(), attachments: std::env::var("DRIVE_ATTACH").ok().map(|p| vec![Attachment { path: p.into(), mime: Some("image/png".into()) }]).unwrap_or_default(), delivery: Default::default()}).unwrap();
     let mut prompted = true;
     while let Some(o) = out_rx.recv().await {
         match o {

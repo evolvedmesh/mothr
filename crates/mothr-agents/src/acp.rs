@@ -581,6 +581,11 @@ impl Driver {
         match kind {
             "agent_message_chunk" | "agent_thought_chunk" => {
                 let thinking = kind == "agent_thought_chunk";
+                if let Some(entry) = image_entry(&u["content"]) {
+                    self.end_segment();
+                    self.em.emit(SessionEvent::Upsert { entry });
+                    return;
+                }
                 let text = content_text(&u["content"]);
                 if text.is_empty() {
                     return;
@@ -724,6 +729,7 @@ impl Driver {
                 call.input = call.locations.first().map(|p| p.display().to_string());
             }
         }
+        let mut images: Vec<Entry> = vec![];
         if let Some(content) = u["content"].as_array() {
             let mut text = String::new();
             for c in content {
@@ -736,6 +742,10 @@ impl Driver {
                         call.diffs.push(FileDiff { path, old_text, new_text });
                     }
                     Some("content") => {
+                        if let Some(entry) = image_entry(&c["content"]) {
+                            images.push(entry);
+                            continue;
+                        }
                         let t = content_text(&c["content"]);
                         if !t.is_empty() {
                             if !text.is_empty() {
@@ -759,6 +769,9 @@ impl Driver {
                 call.output = Some(truncate(&s, 20_000));
             }
         self.em.emit(SessionEvent::Upsert { entry: Entry::Tool(call.clone()) });
+        for entry in images {
+            self.em.emit(SessionEvent::Upsert { entry });
+        }
         if !matches!(call.status, ToolStatus::Completed | ToolStatus::Failed) {
             self.tools.insert(id, call);
         }
@@ -887,6 +900,25 @@ fn acp_kind(k: &str) -> ToolKind {
         "fetch" => ToolKind::Fetch,
         "switch_mode" => ToolKind::Other,
         _ => ToolKind::Other,
+    }
+}
+
+/// An [`Entry::Image`] from an ACP `image` content block (`data` + `mimeType`), saved to disk.
+/// The id derives from the stored file, so a repeated update doesn't duplicate the picture.
+fn image_entry(c: &Value) -> Option<Entry> {
+    if c["type"] != "image" {
+        return None;
+    }
+    let mime = c["mimeType"].as_str().unwrap_or("image/png");
+    match save_image_base64(c["data"].as_str()?, mime) {
+        Ok(path) => {
+            let id = format!("img-{}", path.file_stem()?.to_string_lossy());
+            Some(Entry::Image { id, path, mime: Some(mime.to_string()) })
+        }
+        Err(e) => {
+            tracing::warn!("couldn't store agent image: {e}");
+            None
+        }
     }
 }
 

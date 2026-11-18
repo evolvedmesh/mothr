@@ -106,7 +106,7 @@ impl Store {
                 self.recent_projects = recent;
                 None
             }
-            HubEvent::ProjectsIndexed { .. } => None,
+            HubEvent::ProjectsIndexed { .. } | HubEvent::AgentModels { .. } => None,
             HubEvent::Toast { level, text } => {
                 self.toasts.push(Toast { level: level_name(level).into(), text });
                 if self.toasts.len() > 20 {
@@ -633,6 +633,12 @@ pub fn entry_view(e: &Entry) -> EntryView {
             answers: q.answers.clone(),
         },
         Entry::Notice { id, level, text } => EntryView::Notice { id: id.clone(), level: level_name(*level).into(), text: text.clone() },
+        // The mobile app doesn't render pictures yet; say one was produced.
+        Entry::Image { id, path, .. } => EntryView::Notice {
+            id: id.clone(),
+            level: level_name(NoticeLevel::Info).into(),
+            text: format!("Image: {}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+        },
         Entry::TurnEnd { id, stop_reason, duration_ms, cost_usd } => {
             let mut parts = Vec::new();
             if let Some(ms) = duration_ms {

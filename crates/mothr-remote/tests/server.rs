@@ -486,3 +486,32 @@ async fn rejects_missing_token() {
     };
     assert!(RemoteServer::start(FakeHub::new(), settings).await.is_err());
 }
+
+#[tokio::test]
+async fn serves_only_stored_images() {
+    let home = std::env::temp_dir().join(format!("mothr-img-test-{}", std::process::id()));
+    // SAFETY: no other test in this binary reads the data directory.
+    unsafe { std::env::set_var("MOTHR_HOME", &home) };
+    let path = mothr_core::save_image(b"\x89PNG-not-really", "image/png").unwrap();
+    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    // A secret next to the images folder must stay unreachable.
+    std::fs::write(home.join("data").join("secret.png"), b"secret").unwrap();
+
+    let (server, base, token) = start(FakeHub::new(), 0).await;
+    let http = client();
+    let get = |p: String| http.get(format!("{base}api/images/{p}")).bearer_auth(&token).send();
+
+    let res = http.get(format!("{base}api/images/{name}")).send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    let res = get(name.clone()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "image/png");
+    assert_eq!(res.bytes().await.unwrap().as_ref(), b"\x89PNG-not-really");
+
+    for bad in ["..%2Fsecret.png", "%2E%2E%2Fsecret.png", "secret.png", "x.svg", ".hidden.png", "nope.png"] {
+        assert_eq!(get(bad.to_string()).await.unwrap().status(), StatusCode::NOT_FOUND, "{bad}");
+    }
+    drop(server);
+    let _ = std::fs::remove_dir_all(&home);
+}

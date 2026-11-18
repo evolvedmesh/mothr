@@ -16,6 +16,8 @@ pub struct Store {
     pub pinned: Vec<ProjectRef>,
     pub recent: Vec<ProjectRef>,
     pub project_count: Option<usize>,
+    /// Hub's cached model lists per agent.
+    pub agent_models: BTreeMap<AgentKind, Vec<ModelInfo>>,
     /// Limit windows we already warned about (provider, label, level).
     warned: HashSet<(Provider, String, UsageLevel)>,
     _task: Task<()>,
@@ -63,6 +65,7 @@ impl Store {
             recent: vec![],
             project_count: None,
             warned: HashSet::new(),
+            agent_models: BTreeMap::new(),
             _task: task,
         };
         store.apply_snapshot(snap);
@@ -82,6 +85,7 @@ impl Store {
         self.usage = snap.usage.into_iter().map(|u| (u.provider, u)).collect();
         self.pinned = snap.pinned_projects;
         self.recent = snap.recent_projects;
+        self.agent_models = snap.agent_models;
     }
 
     fn resync(&mut self, cx: &mut Context<Self>) {
@@ -145,6 +149,11 @@ impl Store {
                 self.agents = agents;
                 self.agents_scanned = true;
             }
+            HubEvent::AgentModels { agent, models } => {
+                self.agent_models.insert(agent, models);
+                cx.emit(StoreEvent::Changed);
+                cx.notify();
+            }
             HubEvent::Projects { pinned, recent } => {
                 self.pinned = pinned;
                 self.recent = recent;
@@ -176,13 +185,15 @@ impl Store {
         (running, kids.len(), needs)
     }
 
-    /// Models an agent reported in the most recent chat that listed any.
+    /// Models an agent offers: from its most recent chat that listed any, else the hub's
+    /// cache (startup probe / earlier runs), so the picker works before the first chat.
     pub fn known_models(&self, agent: AgentKind) -> Vec<ModelInfo> {
         self.sessions
             .iter()
             .rev()
             .find(|s| s.meta.agent == agent && !s.models.is_empty())
             .map(|s| s.models.clone())
+            .or_else(|| self.agent_models.get(&agent).cloned())
             .unwrap_or_default()
     }
 

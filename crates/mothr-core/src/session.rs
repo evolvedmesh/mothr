@@ -390,6 +390,13 @@ pub enum Entry {
         streaming: bool,
     },
     Tool(ToolCall),
+    /// An image produced by the agent (or one of its tools), stored under [`images_dir`].
+    Image {
+        id: EntryId,
+        path: PathBuf,
+        #[serde(default)]
+        mime: Option<String>,
+    },
     Plan {
         id: EntryId,
         items: Vec<PlanItem>,
@@ -418,6 +425,7 @@ impl Entry {
             | Entry::Thinking { id, .. }
             | Entry::Plan { id, .. }
             | Entry::Notice { id, .. }
+            | Entry::Image { id, .. }
             | Entry::TurnEnd { id, .. } => id,
             Entry::Tool(t) => &t.id,
             Entry::Permission(p) => &p.id,
@@ -799,6 +807,25 @@ mod tests {
         s.apply(&SessionEvent::Truncate { from_entry_id: "u2".into() });
         assert_eq!(s.entries.len(), 2);
         assert_eq!(s.entries.last().map(|e| e.id()), Some("a1"));
+    }
+
+    #[test]
+    fn image_entries_upsert_and_roundtrip() {
+        let mut s = state();
+        let img = Entry::Image { id: "i1".into(), path: "/tmp/x.png".into(), mime: Some("image/png".into()) };
+        s.apply(&SessionEvent::Upsert { entry: img.clone() });
+        s.apply(&SessionEvent::Upsert { entry: img.clone() });
+        assert_eq!(s.entries, vec![img.clone()]);
+        assert_eq!(img.id(), "i1");
+        let back: Entry = serde_json::from_str(&serde_json::to_string(&img).unwrap()).unwrap();
+        assert_eq!(back, img);
+    }
+
+    #[test]
+    fn image_types_map_to_extensions() {
+        assert_eq!(crate::image_ext("image/jpeg"), Some("jpg"));
+        assert_eq!(crate::image_ext("image/png"), Some("png"));
+        assert_eq!(crate::image_ext("application/pdf"), None);
     }
 
     #[test]

@@ -246,6 +246,13 @@ impl ChatView {
             return;
         }
         let k = &ev.keystroke;
+        if k.key == "v" && k.modifiers.secondary(cx) && !k.modifiers.shift && !k.modifiers.alt {
+            // A pasted screenshot / copied file becomes an attachment; text falls through to the box.
+            if self.paste_attachments(cx) {
+                cx.stop_propagation();
+            }
+            return;
+        }
         if k.modifiers.modified() {
             return;
         }
@@ -271,6 +278,45 @@ impl ChatView {
         }
         cx.stop_propagation();
         cx.notify();
+    }
+
+    /// Attach images or files from the clipboard. Returns false (so the text box handles the
+    /// paste) when the clipboard holds text or nothing attachable.
+    fn paste_attachments(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(item) = cx.read_from_clipboard() else { return false };
+        if item.text().is_some_and(|t| !t.is_empty()) {
+            return false;
+        }
+        let mut added = false;
+        for entry in item.entries() {
+            match entry {
+                ClipboardEntry::Image(img) => {
+                    let mime = match img.format {
+                        ImageFormat::Png => "image/png",
+                        ImageFormat::Jpeg => "image/jpeg",
+                        ImageFormat::Webp => "image/webp",
+                        ImageFormat::Gif => "image/gif",
+                        _ => continue,
+                    };
+                    match save_image(&img.bytes, mime) {
+                        Ok(path) => {
+                            self.attachments.push(path);
+                            added = true;
+                        }
+                        Err(e) => tracing::warn!("couldn't store pasted image: {e}"),
+                    }
+                }
+                ClipboardEntry::ExternalPaths(paths) => {
+                    self.attachments.extend(paths.paths().iter().cloned());
+                    added = true;
+                }
+                ClipboardEntry::String(_) => {}
+            }
+        }
+        if added {
+            cx.notify();
+        }
+        added
     }
 
     fn attach(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -525,8 +571,13 @@ impl ChatView {
                                     .line_height(relative(1.55))
                                     .child(text.clone()),
                             )
-                            .when(!attachments.is_empty(), |d| {
-                                d.child(h_flex().gap_1().flex_wrap().children(attachments.iter().map(|a| file_chip(&a.path, cx))))
+                            .when(attachments.iter().any(|a| is_image(&a.path)), |d| {
+                                d.child(h_flex().gap_2().flex_wrap().justify_end().children(
+                                    attachments.iter().filter(|a| is_image(&a.path)).enumerate().map(|(i, a)| image_view(&a.path, format!("att-{id}-{i}"), 220., 160., cx)),
+                                ))
+                            })
+                            .when(attachments.iter().any(|a| !is_image(&a.path)), |d| {
+                                d.child(h_flex().gap_1().flex_wrap().children(attachments.iter().filter(|a| !is_image(&a.path)).map(|a| file_chip(&a.path, cx))))
                             }),
                     )
                     .child(
@@ -620,6 +671,7 @@ impl ChatView {
                     .into_any_element()
             }
             Entry::Tool(t) => self.render_tool(t, cx),
+            Entry::Image { id, path, .. } => v_flex().w_full().child(image_view(path, format!("img-{id}"), 520., 380., cx)).into_any_element(),
             Entry::Plan { items, .. } => {
                 let done = items.iter().filter(|i| i.status == PlanStatus::Completed).count();
                 card(cx)
@@ -1285,7 +1337,7 @@ impl ChatView {
                     h_flex()
                         .gap_1()
                         .items_center()
-                        .child(file_chip(p, cx))
+                        .child(if is_image(p) { image_view(p, format!("compose-{i}"), 72., 56., cx).into_any_element() } else { file_chip(p, cx).into_any_element() })
                         .child(
                             Button::new(ElementId::Name(format!("rm-att-{i}").into()))
                                 .ghost()
@@ -1311,7 +1363,7 @@ impl ChatView {
                         Button::new("attach")
                             .ghost()
                             .icon(icon("paperclip"))
-                            .tooltip("Attach files (or drop them here)")
+                            .tooltip("Attach files or images (drop or paste them too)")
                             .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
                     )
                     .child(mode_menu("chat-mode", Some(agent), mode, weak, |this: &mut ChatView, m, window, cx| {
@@ -1536,6 +1588,35 @@ fn file_chip(path: &std::path::Path, cx: &App) -> impl IntoElement + use<> {
         .items_center()
         .child(icon(if image { "image" } else { "file" }).size(sz(12.)).text_color(theme.muted_foreground))
         .child(name)
+}
+
+fn is_image(p: &std::path::Path) -> bool {
+    mime_for(p).is_some_and(|m| m.starts_with("image/"))
+}
+
+/// A rounded, clickable image preview that fits within `max_w` × `max_h`; click opens it
+/// in the system viewer.
+fn image_view(path: &std::path::Path, id: String, max_w: f32, max_h: f32, cx: &App) -> impl IntoElement + use<> {
+    let theme = cx.theme();
+    let open = path.to_path_buf();
+    div()
+        .id(ElementId::Name(id.into()))
+        .rounded(sz(tokens::radius::MD))
+        .border_1()
+        .border_color(theme.border)
+        .overflow_hidden()
+        .cursor_pointer()
+        .on_click(move |_, _, cx| cx.open_with_system(&open))
+        .child(
+            img(path.to_path_buf())
+                .max_w(sz(max_w))
+                .max_h(sz(max_h))
+                .object_fit(ObjectFit::Contain)
+                .with_fallback({
+                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    move || div().p_2().text_xs().child(format!("Can't preview {name}")).into_any_element()
+                }),
+        )
 }
 
 fn mime_for(p: &std::path::Path) -> Option<String> {

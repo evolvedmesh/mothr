@@ -28,6 +28,8 @@ struct State {
     subagents: HashMap<(SessionId, String), SessionId>,
     /// Sessions whose file rewind finished (edit & resend handshake).
     rewound: HashSet<SessionId>,
+    /// Last known model list per agent (persisted to `models.json`).
+    models: BTreeMap<AgentKind, Vec<ModelInfo>>,
 }
 
 impl State {
@@ -66,6 +68,7 @@ impl Hub {
             settings: RwLock::new(settings),
         });
         hub.load_sessions();
+        hub.load_models();
         let h = hub.clone();
         rt.spawn(async move { h.pump(driver_rx).await });
         let h = hub.clone();
@@ -113,7 +116,8 @@ impl Hub {
                 .await
                 .unwrap_or_default();
             h.state.write().agents = agents.clone();
-            h.broadcast(HubEvent::Agents { agents });
+            h.broadcast(HubEvent::Agents { agents: agents.clone() });
+            h.probe_models(agents);
         });
     }
 
@@ -157,6 +161,85 @@ impl Hub {
             entry.clone()
         };
         self.broadcast(HubEvent::Usage { usage: merged });
+    }
+
+    // ------------------------------------------------------------------ model catalog
+
+    fn load_models(&self) {
+        let loaded: BTreeMap<AgentKind, Vec<ModelInfo>> = std::fs::read_to_string(models_path())
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        self.state.write().models = loaded;
+    }
+
+    /// Remember an agent's model list (persisted, broadcast) when it changed.
+    fn cache_models(&self, st: &mut State, agent: AgentKind, models: Vec<ModelInfo>) {
+        if st.models.get(&agent) == Some(&models) {
+            return;
+        }
+        st.models.insert(agent, models.clone());
+        let path = models_path();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match serde_json::to_vec_pretty(&st.models) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(&path, bytes) {
+                    tracing::warn!("saving {}: {e}", path.display());
+                }
+            }
+            Err(e) => tracing::warn!("encoding models: {e}"),
+        }
+        self.broadcast(HubEvent::AgentModels { agent, models });
+    }
+
+    /// Start each detected agent briefly (no prompt) to learn its model list, so the model
+    /// picker is populated before the user's first chat. Skips agents already cached.
+    fn probe_models(self: &Arc<Self>, agents: Vec<AgentInstall>) {
+        for install in agents {
+            let Some(transport) = install.transport.clone() else { continue };
+            let agent = install.kind;
+            if self.state.read().models.contains_key(&agent) {
+                continue;
+            }
+            let h = self.clone();
+            self.rt.spawn(async move {
+                let id = SessionId::new_v4();
+                let spec = SessionSpec {
+                    id,
+                    agent,
+                    kind: SessionKind::Chat,
+                    cwd: std::env::temp_dir(),
+                    mode: PermissionMode::Ask.for_agent(agent),
+                    model: None,
+                    resume: None,
+                    resume_at: None,
+                    system_prompt: None,
+                    title: "model probe".into(),
+                };
+                let (tx, mut rx) = mpsc::unbounded_channel();
+                let Ok(cmd) = mothr_agents::spawn(&transport, spec, tx) else { return };
+                let found = tokio::time::timeout(Duration::from_secs(45), async {
+                    while let Some(out) = rx.recv().await {
+                        match out {
+                            DriverOutput::Event(_, SessionEvent::Ready { models, .. }) if !models.is_empty() => return Some(models),
+                            DriverOutput::Exited(..) => return None,
+                            _ => {}
+                        }
+                    }
+                    None
+                })
+                .await
+                .ok()
+                .flatten();
+                let _ = cmd.send(SessionCommand::Shutdown);
+                if let Some(models) = found {
+                    let mut st = h.state.write();
+                    h.cache_models(&mut st, agent, models);
+                }
+            });
+        }
     }
 
     // ------------------------------------------------------------------ persistence
@@ -298,6 +381,14 @@ impl Hub {
         let Some(s) = st.session_mut(id) else { return };
         let before = s.meta.status.clone();
         s.apply(&event);
+        let learned = match &event {
+            SessionEvent::Ready { models, .. } if !models.is_empty() => Some((s.meta.agent, models.clone())),
+            _ => None,
+        };
+        if let Some((agent, models)) = learned {
+            self.cache_models(&mut st, agent, models);
+        }
+        let Some(s) = st.session_mut(id) else { return };
         if matches!(event, SessionEvent::Upsert { entry: Entry::TurnEnd { .. } }) {
             s.meta.unread = true;
         }
@@ -626,6 +717,7 @@ impl Hub {
             usage: st.usage.values().cloned().collect(),
             pinned_projects: self.projects.pinned(),
             recent_projects: self.projects.recent(12),
+            agent_models: st.models.clone(),
         }
     }
 }
@@ -759,4 +851,8 @@ impl HubApi for Hub {
     fn search_projects(&self, query: &str, limit: usize) -> Vec<ProjectHit> {
         self.projects.search(query, limit)
     }
+}
+
+fn models_path() -> PathBuf {
+    data_dir().join("models.json")
 }
