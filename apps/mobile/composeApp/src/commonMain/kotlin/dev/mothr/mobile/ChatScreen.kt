@@ -2,6 +2,10 @@ package dev.mothr.mobile
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -41,18 +45,26 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
@@ -65,6 +77,7 @@ import dev.mothr.client.Delivery
 import dev.mothr.client.EntryView
 import dev.mothr.client.ToolState
 import dev.mothr.mobile.resources.Res
+import dev.mothr.mobile.resources.ic_arrow_down
 import dev.mothr.mobile.resources.ic_arrow_left
 import dev.mothr.mobile.resources.ic_arrow_up
 import dev.mothr.mobile.resources.ic_book_open
@@ -77,17 +90,20 @@ import dev.mothr.mobile.resources.ic_circle_alert
 import dev.mothr.mobile.resources.ic_corner_down_right
 import dev.mothr.mobile.resources.ic_globe
 import dev.mothr.mobile.resources.ic_info
+import dev.mothr.mobile.resources.ic_layers
 import dev.mothr.mobile.resources.ic_list_checks
 import dev.mothr.mobile.resources.ic_message_circle_question_mark
 import dev.mothr.mobile.resources.ic_pencil
 import dev.mothr.mobile.resources.ic_play
 import dev.mothr.mobile.resources.ic_search
 import dev.mothr.mobile.resources.ic_shield_alert
+import dev.mothr.mobile.resources.ic_sparkles
 import dev.mothr.mobile.resources.ic_square
 import dev.mothr.mobile.resources.ic_terminal
 import dev.mothr.mobile.resources.ic_wifi_off
 import dev.mothr.mobile.resources.ic_x
 import dev.mothr.mobile.resources.ic_zap
+import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.DrawableResource
 
 @Composable
@@ -128,13 +144,17 @@ private fun TopBar(model: AppModel, chat: ChatDetail?) {
                 } else {
                     StatusDot(s.status, 6.dp)
                     Text(
-                        listOf(s.statusLabel, s.projectName, chat.model ?: s.agent.shortName).joinToString(" · "),
+                        listOf(s.statusLabel, s.projectName, chat.models.firstOrNull { it.id == chat.model }?.name ?: chat.model ?: s.agent.shortName).joinToString(" · "),
                         style = type.caption.copy(color = pal.textFaint),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
+        }
+        chat.creditsLabel?.let {
+            Pill(it)
+            Spacer(Modifier.width(6.dp))
         }
         if (chat.contextLabel.isNotEmpty()) {
             Row(
@@ -174,9 +194,30 @@ private fun SubagentStrip(model: AppModel, chat: ChatDetail) {
 
 @Composable
 private fun Transcript(model: AppModel, chat: ChatDetail) {
-    // Bottom-anchored (reverse) layout: the newest entry stays in view while text streams in
-    // and while markdown above it measures, and scrolling up to read history stays put.
-    val list = rememberLazyListState()
+    // Bottom-anchored (reverse) layout: index 0 is the newest entry. While `following`, the view
+    // stays glued to the bottom as entries arrive and the last one grows; the person scrolling up
+    // lets go, and the jump button (or sending a message) takes it up again.
+    val id = chat.summary.id
+    val list = key(id) { rememberLazyListState() }
+    var following by remember(id) { mutableStateOf(true) }
+    val scope = rememberCoroutineScope()
+    val nearBottom = with(LocalDensity.current) { 24.dp.toPx() }
+    val atBottom = { list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset <= nearBottom }
+    // Only gestures (drags and the flings after them) reach this connection, never our own
+    // programmatic scrolls, so only the person can stop or resume following by scrolling.
+    val userScroll = remember(list) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                following = atBottom()
+                return Offset.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                following = atBottom()
+                return Velocity.Zero
+            }
+        }
+    }
     val entries = chat.entries
     if (entries.isEmpty()) {
         Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -184,18 +225,43 @@ private fun Transcript(model: AppModel, chat: ChatDetail) {
         }
         return
     }
-    // Jump to the newest message when the user sends one.
+    // A new entry or growth of the last one (streaming text, tool output): stay at the bottom.
+    // The list keeps its place relative to the old newest item, so a new entry would otherwise
+    // land just below the screen.
+    val tail = entries.last()
+    LaunchedEffect(entries.size, tail) { if (following) list.scrollToItem(0) }
+    // Sending a message always takes you to it.
     val lastUser = entries.lastOrNull { it is EntryView.User }?.let { entryId(it) }
-    LaunchedEffect(lastUser) { if (list.firstVisibleItemIndex > 0) list.animateScrollToItem(0) }
-    SelectionContainer {
-        LazyColumn(
-            state = list,
-            reverseLayout = true,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
+    LaunchedEffect(lastUser) {
+        following = true
+        if (list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 0) list.animateScrollToItem(0)
+    }
+    Box(Modifier.fillMaxSize()) {
+        SelectionContainer {
+            LazyColumn(
+                state = list,
+                reverseLayout = true,
+                modifier = Modifier.fillMaxSize().nestedScroll(userScroll),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
+            ) {
+                items(entries.asReversed(), key = { entryId(it) }) { e -> EntryItem(model, chat, e) }
+            }
+        }
+        AnimatedVisibility(
+            visible = !following,
+            enter = fadeIn() + scaleIn(initialScale = 0.8f),
+            exit = fadeOut() + scaleOut(targetScale = 0.8f),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
         ) {
-            items(entries.asReversed(), key = { entryId(it) }) { e -> EntryItem(model, chat, e) }
+            Box(
+                Modifier.size(40.dp).clip(Radius.full).background(pal.raised).border(1.dp, pal.borderStrong, Radius.full)
+                    .tap(shape = Radius.full) {
+                        following = true
+                        scope.launch { list.animateScrollToItem(0) }
+                    },
+                contentAlignment = Alignment.Center,
+            ) { Ico(Res.drawable.ic_arrow_down, tint = pal.text, size = 20.dp) }
         }
     }
 }
@@ -542,8 +608,11 @@ private fun Composer(model: AppModel, chat: ChatDetail) {
                 )
             }
             Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                ModeMenu(model, chat)
-                Spacer(Modifier.weight(1f))
+                // Scrolls sideways when the settings don't fit, so the send button never squeezes.
+                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                    ModeMenu(model, chat)
+                    ChatSettings(model, chat)
+                }
                 if (busy && hasText) {
                     if (chat.canSteer) {
                         Text("Steer", style = type.label, modifier = Modifier.tap(shape = Radius.full) {
@@ -601,5 +670,55 @@ private fun ModeMenu(model: AppModel, chat: ChatDetail) {
                 )
             }
         }
+    }
+}
+
+private enum class ChatSheet { Model, Effort, Context }
+
+/** The model, reasoning and context of a running chat, each only when the agent offers it. */
+@Composable
+private fun ChatSettings(model: AppModel, chat: ChatDetail) {
+    var sheet by remember { mutableStateOf<ChatSheet?>(null) }
+    val id = chat.summary.id
+    val current = chat.models.firstOrNull { it.id == chat.model }
+    if (chat.models.isNotEmpty()) {
+        SettingChip(Res.drawable.ic_sparkles, current?.name ?: chat.model ?: "Model") { sheet = ChatSheet.Model }
+    }
+    val efforts = current?.efforts.orEmpty()
+    if (efforts.isNotEmpty()) {
+        SettingChip(Res.drawable.ic_brain, efforts.firstOrNull { it.id == chat.effort }?.label ?: "Reasoning") { sheet = ChatSheet.Effort }
+    }
+    val contexts = current?.contexts.orEmpty()
+    if (contexts.isNotEmpty()) {
+        SettingChip(Res.drawable.ic_layers, contexts.firstOrNull { it.id == chat.contextLimit }?.label ?: "Context") { sheet = ChatSheet.Context }
+    }
+    when (sheet) {
+        ChatSheet.Model -> ModelPickerSheet(chat.models, chat.model, onDismiss = { sheet = null }) { m ->
+            sheet = null
+            if (m != null && m != chat.model) model.act { setModel(id, m) }
+        }
+        ChatSheet.Effort -> ChoicePickerSheet("Reasoning", efforts, chat.effort, onDismiss = { sheet = null }) { e ->
+            sheet = null
+            if (e != null && e != chat.effort) model.act { setEffort(id, e) }
+        }
+        ChatSheet.Context -> ChoicePickerSheet("Context", contexts, chat.contextLimit, onDismiss = { sheet = null }) { c ->
+            sheet = null
+            // The desktop restarts the agent for this and refuses mid-turn; act() shows why.
+            if (c != null && c != chat.contextLimit) model.act { setContext(id, c) }
+        }
+        null -> {}
+    }
+}
+
+@Composable
+private fun SettingChip(icon: DrawableResource, label: String, onClick: () -> Unit) {
+    Row(
+        Modifier.clip(Radius.full).tap(shape = Radius.full, onClick = onClick).padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Ico(icon, size = 15.dp, tint = pal.textMuted)
+        Text(label, style = type.caption.copy(color = pal.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 110.dp))
+        Ico(Res.drawable.ic_chevron_down, size = 13.dp, tint = pal.textFaint)
     }
 }

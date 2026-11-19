@@ -39,8 +39,11 @@ fn mode_from_claude(m: &str) -> Option<PermissionMode> {
 
 enum Pending {
     Init,
+    /// `get_context_usage`: how full the window is and how big it is.
+    ContextUsage,
     SetMode(PermissionMode),
     SetModel(String),
+    SetEffort(String),
     RemoteControl(bool),
     Rewind,
     Other,
@@ -87,6 +90,8 @@ struct Driver {
     model: Option<String>,
     context_window: u64,
     last_context: u64,
+    /// What the last `Context` event said, so partial updates keep the rest (cost, totals).
+    usage: ContextUsage,
     mode: PermissionMode,
     working: bool,
 }
@@ -110,7 +115,14 @@ pub async fn run(program: PathBuf, spec: SessionSpec, mut commands: mpsc::Unboun
         claude_mode(spec.mode),
     ]);
     if let Some(m) = &spec.model {
-        cmd.args(["--model", m]);
+        cmd.args(["--model", &model_with_context(m, spec.context.as_deref())]);
+    }
+    if let Some(e) = &spec.effort {
+        cmd.args(["--effort", e]);
+    }
+    if spec.context.as_deref() == Some("200k") {
+        // The Claude 5 models default to a 1M window; this keeps the session at 200k.
+        cmd.env("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1");
     }
     if let Some(r) = &spec.resume {
         cmd.args(["--resume", r]);
@@ -189,6 +201,7 @@ pub async fn run(program: PathBuf, spec: SessionSpec, mut commands: mpsc::Unboun
         model: None,
         context_window: 0,
         last_context: 0,
+        usage: ContextUsage::default(),
         working: false,
     };
     d.control(json!({"subtype": "initialize", "hooks": null}), Pending::Init);
@@ -326,7 +339,16 @@ impl Driver {
                 self.control(json!({"subtype": "set_permission_mode", "mode": claude_mode(mode)}), Pending::SetMode(mode));
             }
             SessionCommand::SetModel { model } => {
-                self.control(json!({"subtype": "set_model", "model": model}), Pending::SetModel(model));
+                let wire = model_with_context(&model, self.spec.context.as_deref());
+                self.control(json!({"subtype": "set_model", "model": wire}), Pending::SetModel(model));
+            }
+            SessionCommand::SetEffort { effort } => {
+                self.control(json!({"subtype": "apply_flag_settings", "settings": {"effortLevel": effort}}), Pending::SetEffort(effort));
+            }
+            // The context window is fixed when the process starts; the hub restarts the chat for it.
+            SessionCommand::SetContext { context } => {
+                self.spec.context = Some(context);
+                self.emit_options();
             }
             SessionCommand::RespondPermission { entry_id, option_id } => self.resolve_permission(entry_id, option_id),
             SessionCommand::AnswerQuestion { entry_id, answers } => {
@@ -438,11 +460,22 @@ impl Driver {
                     .map(|a| {
                         a.iter()
                             .filter_map(|m| {
-                                Some(ModelInfo {
-                                    id: m["value"].as_str()?.to_string(),
-                                    name: m["displayName"].as_str().unwrap_or(m["value"].as_str()?).to_string(),
-                                    description: m["description"].as_str().map(str::to_string),
-                                })
+                                let supports_effort = m["supportsEffort"].as_bool().unwrap_or(false);
+                                let mut info = ModelInfo::new(
+                                    m["value"].as_str()?,
+                                    m["displayName"].as_str().unwrap_or(m["value"].as_str()?),
+                                    m["description"].as_str().map(str::to_string),
+                                );
+                                info.efforts = m["supportedEffortLevels"]
+                                    .as_array()
+                                    .map(|l| l.iter().filter_map(|e| e.as_str().map(str::to_string)).collect())
+                                    .unwrap_or_default();
+                                // Models with adjustable effort are the current generation, which can run
+                                // with a 1M window or be held to 200k.
+                                if supports_effort {
+                                    info.contexts = vec![ChoiceInfo::new("1m", "1M"), ChoiceInfo::new("200k", "200k")];
+                                }
+                                Some(info)
                             })
                             .collect()
                     })
@@ -452,6 +485,8 @@ impl Driver {
                     self.em.emit(SessionEvent::Mode { mode: m });
                 }
                 self.em.emit(SessionEvent::Ready { agent_session_id: None, model: None, models, modes: vec![] });
+                // The window size is known before the first message.
+                self.control(json!({"subtype": "get_context_usage"}), Pending::ContextUsage);
                 let commands: Vec<CommandInfo> = body["commands"]
                     .as_array()
                     .map(|a| {
@@ -478,9 +513,35 @@ impl Driver {
                     self.em.notice(NoticeLevel::Warning, format!("Couldn't switch to {}: {}", m.label(), err.unwrap_or_default()));
                 }
             }
+            Some(Pending::ContextUsage) => {
+                if ok {
+                    let max = body["maxTokens"].as_u64().filter(|m| *m > 0);
+                    let total = body["totalTokens"].as_u64();
+                    if let Some(max) = max {
+                        self.context_window = max;
+                    }
+                    if let Some(total) = total.filter(|t| *t > 0) {
+                        self.last_context = total;
+                    }
+                    if max.is_some() || total.is_some() {
+                        self.usage.window_tokens = self.context_window;
+                        self.usage.used_tokens = self.last_context;
+                        self.em.emit(SessionEvent::Context { usage: self.usage });
+                    }
+                }
+            }
+            Some(Pending::SetEffort(e)) => {
+                if ok {
+                    self.spec.effort = Some(e);
+                    self.emit_options();
+                } else {
+                    self.em.notice(NoticeLevel::Warning, format!("Couldn't change the reasoning effort: {}", err.unwrap_or_default()));
+                }
+            }
             Some(Pending::SetModel(m)) => {
                 if ok {
                     self.em.emit(SessionEvent::Model { model: m });
+                    self.control(json!({"subtype": "get_context_usage"}), Pending::ContextUsage);
                 } else {
                     self.em.notice(NoticeLevel::Warning, format!("Couldn't switch model: {}", err.unwrap_or_default()));
                 }
@@ -580,10 +641,17 @@ impl Driver {
         }
     }
 
+    fn emit_options(&self) {
+        self.em.emit(SessionEvent::Options { effort: self.spec.effort.clone(), context: self.spec.context.clone() });
+    }
+
     fn on_system(&mut self, v: &Value) {
         match v["subtype"].as_str().unwrap_or("") {
             "init" => {
                 self.model = v["model"].as_str().map(str::to_string);
+                if self.spec.effort.is_some() || self.spec.context.is_some() {
+                    self.emit_options();
+                }
                 if let Some(m) = v["permissionMode"].as_str().and_then(mode_from_claude) {
                     self.mode = m;
                     self.em.emit(SessionEvent::Mode { mode: m });
@@ -705,9 +773,9 @@ impl Driver {
             .sum::<u64>();
         if ctx > 0 && target.is_none() {
             self.last_context = ctx;
-            self.em.emit(SessionEvent::Context {
-                usage: ContextUsage { used_tokens: ctx, window_tokens: self.context_window, ..Default::default() },
-            });
+            self.usage.used_tokens = ctx;
+            self.usage.window_tokens = self.context_window;
+            self.em.emit(SessionEvent::Context { usage: self.usage });
         }
         for (bi, block) in m["content"].as_array().into_iter().flatten().enumerate() {
             match block["type"].as_str().unwrap_or("") {
@@ -857,18 +925,19 @@ impl Driver {
             }
         }
         let u = &v["usage"];
-        let cost = v["total_cost_usd"].as_f64();
-        self.em.emit(SessionEvent::Context {
-            usage: ContextUsage {
-                used_tokens: self.last_context,
-                window_tokens: self.context_window,
-                cost_usd: cost,
-                input_tokens: u["input_tokens"].as_u64().unwrap_or(0)
-                    + u["cache_read_input_tokens"].as_u64().unwrap_or(0)
-                    + u["cache_creation_input_tokens"].as_u64().unwrap_or(0),
-                output_tokens: u["output_tokens"].as_u64().unwrap_or(0),
-            },
-        });
+        self.usage = ContextUsage {
+            used_tokens: self.last_context,
+            window_tokens: self.context_window,
+            cost_usd: v["total_cost_usd"].as_f64(),
+            input_tokens: u["input_tokens"].as_u64().unwrap_or(0)
+                + u["cache_read_input_tokens"].as_u64().unwrap_or(0)
+                + u["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+            output_tokens: u["output_tokens"].as_u64().unwrap_or(0),
+            credits: None,
+        };
+        self.em.emit(SessionEvent::Context { usage: self.usage });
+        // The result only carries the window size when the model reports it; ask Claude too.
+        self.control(json!({"subtype": "get_context_usage"}), Pending::ContextUsage);
         // Failed tools that never got results (e.g. interrupted).
         // Only the orchestrator's own turn ended; background subagents keep running.
         let own: Vec<String> = self.tools.iter().filter(|(_, (_, t))| t.is_none()).map(|(k, _)| k.clone()).collect();
@@ -886,7 +955,7 @@ impl Driver {
                 id: new_entry_id(),
                 stop_reason: v["stop_reason"].as_str().or(v["subtype"].as_str()).unwrap_or("end_turn").to_string(),
                 duration_ms: v["duration_ms"].as_u64().or(self.turn_started.map(|t| t.elapsed().as_millis() as u64)),
-                cost_usd: cost,
+                cost_usd: self.usage.cost_usd,
             },
         });
         self.blocks.clear();
@@ -1000,8 +1069,17 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
 #[allow(dead_code)]
 fn _assert_send(_: CommandTx) {}
 
+/// The `--model` value for a context choice: "1m" pins the 1M window with the `[1m]` suffix.
+fn model_with_context(model: &str, context: Option<&str>) -> String {
+    if context == Some("1m") && !model.ends_with(']') && model != "default" {
+        format!("{model}[1m]")
+    } else {
+        model.to_string()
+    }
+}
+
 /// Append raw protocol lines to `$MOTHR_TRACE` (debugging aid).
-fn trace(line: &str) {
+pub(crate) fn trace(line: &str) {
     if let Some(path) = std::env::var_os("MOTHR_TRACE") {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
@@ -1010,7 +1088,7 @@ fn trace(line: &str) {
     }
 }
 
-fn parse_traced(line: &str) -> serde_json::Result<Value> {
+pub(crate) fn parse_traced(line: &str) -> serde_json::Result<Value> {
     trace(line);
     serde_json::from_str(line)
 }

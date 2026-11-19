@@ -6,7 +6,7 @@ use super::home::{Home, HomeEvent};
 use super::kit::*;
 use super::picker::{PickerEvent, ProjectPicker};
 use super::settings::SettingsView;
-use super::sidebar::{Sidebar, SidebarEvent};
+use super::sidebar::{DraftRow, Sidebar, SidebarEvent};
 use super::usage;
 use super::{theme, tokens};
 use crate::remote::RemoteController;
@@ -48,7 +48,11 @@ pub struct Workspace {
     remote: RemoteController,
     sidebar: Entity<Sidebar>,
     sidebar_open: bool,
+    /// The new-chat box on screen.
     home: Entity<Home>,
+    /// Drafts set aside while another new chat is started (shown in the sidebar).
+    drafts: Vec<Entity<Home>>,
+    next_draft: u64,
     designs: Entity<DesignsPage>,
     chats: HashMap<SessionId, Entity<ChatView>>,
     settings_view: Option<Entity<SettingsView>>,
@@ -65,7 +69,7 @@ impl Workspace {
     pub fn new(hub: Arc<Hub>, remote: RemoteController, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let store = cx.new(|cx| Store::new(hub, cx));
         let sidebar = cx.new(|cx| Sidebar::new(store.clone(), window, cx));
-        let home = cx.new(|cx| Home::new(store.clone(), window, cx));
+        let home = cx.new(|cx| Home::new(0, store.clone(), window, cx));
         let designs = cx.new(|cx| DesignsPage::new(store.clone(), window, cx));
         let mut subs = vec![];
         subs.push(cx.subscribe_in(&sidebar, window, |this, _, ev: &SidebarEvent, window, cx| match ev {
@@ -74,15 +78,14 @@ impl Workspace {
             SidebarEvent::OpenDesigns => this.open_designs(window, cx),
             SidebarEvent::NewGeneral => this.new_general_chat(window, cx),
             SidebarEvent::NewChatIn(p) => this.new_chat(Some(p.clone()), window, cx),
+            SidebarEvent::OpenDraft(id) => this.open_draft(*id, window, cx),
+            SidebarEvent::DiscardDraft(id) => this.discard_draft(*id, window, cx),
         }));
         subs.push(cx.subscribe_in(&designs, window, |this, _, ev: &DesignsEvent, window, cx| match ev {
             DesignsEvent::OpenChat(id) => this.open_session(*id, window, cx),
             DesignsEvent::PickProject => this.open_picker(PickerFor::Design, window, cx),
         }));
-        subs.push(cx.subscribe_in(&home, window, |this, _, ev: &HomeEvent, window, cx| match ev {
-            HomeEvent::Started(id) => this.open_session(*id, window, cx),
-            HomeEvent::PickProject => this.open_picker(PickerFor::Chat, window, cx),
-        }));
+        subs.push(Self::watch_home(&home, window, cx));
         subs.push(cx.subscribe_in(&store, window, |this, _, ev: &StoreEvent, window, cx| match ev {
             StoreEvent::Toast(level, text) => {
                 let n = match level {
@@ -125,6 +128,8 @@ impl Workspace {
             sidebar,
             sidebar_open,
             home,
+            drafts: Vec::new(),
+            next_draft: 1,
             designs,
             chats: HashMap::new(),
             settings_view: None,
@@ -140,6 +145,74 @@ impl Workspace {
         window.defer(cx, move |window, cx| home.update(cx, |h, cx| h.focus(window, cx)));
         this.dev_hooks(window, cx);
         this
+    }
+
+    fn watch_home(home: &Entity<Home>, window: &mut Window, cx: &mut Context<Self>) -> Subscription {
+        cx.subscribe_in(home, window, |this, home, ev: &HomeEvent, window, cx| {
+            let active = *home == this.home;
+            match ev {
+                HomeEvent::Started(id) if active => {
+                    this.open_session(*id, window, cx);
+                }
+                HomeEvent::PickProject if active => this.open_picker(PickerFor::Chat, window, cx),
+                HomeEvent::Changed => this.refresh_drafts(cx),
+                _ => {}
+            }
+        })
+    }
+
+    /// Tell the sidebar which drafts exist: the ones set aside, plus the box on screen if it has
+    /// something in it.
+    fn refresh_drafts(&mut self, cx: &mut Context<Self>) {
+        let on_home = self.route == Route::Home;
+        let mut rows = vec![];
+        for (home, active) in self.drafts.iter().map(|h| (h, false)).chain(std::iter::once((&self.home, on_home))) {
+            let h = home.read(cx);
+            if h.has_draft(cx) {
+                rows.push(DraftRow { id: h.id, preview: h.preview(cx), agent: h.agent(), project: h.project_name(), active: active || (home == &self.home && on_home) });
+            }
+        }
+        self.sidebar.update(cx, |s, cx| s.set_drafts(rows, cx));
+    }
+
+    fn fresh_home(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Home> {
+        let id = self.next_draft;
+        self.next_draft += 1;
+        let store = self.store.clone();
+        let home = cx.new(|cx| Home::new(id, store, window, cx));
+        let sub = Self::watch_home(&home, window, cx);
+        self._subs.push(sub);
+        home
+    }
+
+    /// Put the box on screen aside when it holds a draft; otherwise it can be reused.
+    fn stash_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.home.read(cx).has_draft(cx) {
+            let fresh = self.fresh_home(window, cx);
+            let old = std::mem::replace(&mut self.home, fresh);
+            self.drafts.push(old);
+        }
+    }
+
+    fn open_draft(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.home.read(cx).id != id {
+            let Some(i) = self.drafts.iter().position(|h| h.read(cx).id == id) else { return };
+            let wanted = self.drafts.remove(i);
+            self.stash_home(window, cx);
+            self.home = wanted;
+        }
+        self.navigate(Route::Home, window, cx);
+        self.home.update(cx, |h, cx| h.focus(window, cx));
+    }
+
+    fn discard_draft(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.home.read(cx).id == id {
+            self.home = self.fresh_home(window, cx);
+        } else {
+            self.drafts.retain(|h| h.read(cx).id != id);
+        }
+        self.refresh_drafts(cx);
+        cx.notify();
     }
 
     /// Developer hooks for screenshots / smoke tests:
@@ -185,6 +258,7 @@ impl Workspace {
         };
         let designs = route == Route::Designs;
         self.sidebar.update(cx, |s, cx| s.set_active(active, designs, cx));
+        self.refresh_drafts(cx);
         cx.notify();
     }
 
@@ -232,6 +306,10 @@ impl Workspace {
     }
 
     fn new_chat(&mut self, project: Option<ProjectRef>, window: &mut Window, cx: &mut Context<Self>) {
+        // A new chat while writing one starts a second draft; an empty box is just reused.
+        if self.route != Route::Home || self.home.read(cx).has_draft(cx) {
+            self.stash_home(window, cx);
+        }
         self.navigate(Route::Home, window, cx);
         self.home.update(cx, |h, cx| {
             if let Some(p) = project {
@@ -252,6 +330,8 @@ impl Workspace {
                     project: std::env::current_dir().unwrap_or_default(),
                     mode: PermissionMode::from_id(mode).unwrap_or_default(),
                     model: (!model.is_empty()).then(|| model.to_string()),
+                    effort: None,
+                    context: None,
                     prompt: Some(text.to_string()),
                 };
                 if let Some(id) = this.store.update(cx, |s, cx| s.dispatch(cmd, window, cx)) {
@@ -318,6 +398,9 @@ impl Workspace {
     }
 
     fn new_general_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.route != Route::Home || self.home.read(cx).has_draft(cx) {
+            self.stash_home(window, cx);
+        }
         self.navigate(Route::Home, window, cx);
         self.home.update(cx, |h, cx| {
             h.set_general(cx);
@@ -334,6 +417,13 @@ impl Workspace {
                     let p = p.clone();
                     this.picker = None;
                     match this.picker_for {
+                        PickerFor::Chat if this.route == Route::Home => {
+                            // Chosen from the new-chat box itself: this draft gets the project.
+                            this.home.update(cx, |h, cx| {
+                                h.set_project(p, cx);
+                                h.focus(window, cx);
+                            });
+                        }
                         PickerFor::Chat => this.new_chat(Some(p), window, cx),
                         PickerFor::Design => this.new_design(Some(p), window, cx),
                     }

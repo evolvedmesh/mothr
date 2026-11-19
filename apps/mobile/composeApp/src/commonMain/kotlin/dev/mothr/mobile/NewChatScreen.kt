@@ -46,17 +46,23 @@ import androidx.compose.ui.unit.dp
 import dev.mothr.client.ProjectView
 import dev.mothr.mobile.resources.Res
 import dev.mothr.mobile.resources.ic_arrow_up
+import dev.mothr.mobile.resources.ic_brain
 import dev.mothr.mobile.resources.ic_folder
 import dev.mothr.mobile.resources.ic_globe
+import dev.mothr.mobile.resources.ic_layers
 import dev.mothr.mobile.resources.ic_shield_alert
+import dev.mothr.mobile.resources.ic_sparkles
 import dev.mothr.mobile.resources.ic_x
 import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.DrawableResource
 
-private enum class Picker { Agent, Project, Mode }
+private enum class Picker { Agent, Project, Mode, Model, Effort, Context }
 
 /** A project choice; a null [project] means General, not tied to any project. */
 private data class ProjectPick(val project: ProjectView?)
+
+/** A choice that may be Default: a null [id] is a real answer, unlike no pick at all. */
+private data class Choice(val id: String?)
 
 private data class Starter(val label: String, val text: String)
 
@@ -90,6 +96,16 @@ fun NewChatScreen(model: AppModel) {
     val modes = agent?.modes.orEmpty()
     val wantedMode = modeId ?: model.lastMode ?: "ask"
     val mode = modes.firstOrNull { it.id == wantedMode } ?: modes.firstOrNull()
+
+    // Model, reasoning and context: what the person picked this time, else what this agent last
+    // started with. Whatever the agent (or the picked model) no longer offers falls back to Default.
+    var modelChoice by remember { mutableStateOf<Choice?>(null) }
+    var effortChoice by remember { mutableStateOf<Choice?>(null) }
+    var contextChoice by remember { mutableStateOf<Choice?>(null) }
+    val agentKey = agent?.agent?.id
+    val modelOption = agent?.models?.firstOrNull { it.id == (modelChoice ?: Choice(agentKey?.let(model::lastModel))).id }
+    val effort = modelOption?.efforts?.firstOrNull { it.id == (effortChoice ?: Choice(agentKey?.let(model::lastEffort))).id }
+    val context = modelOption?.contexts?.firstOrNull { it.id == (contextChoice ?: Choice(agentKey?.let(model::lastContext))).id }
 
     var picked by remember { mutableStateOf<ProjectPick?>(null) }
     val last = model.lastProject
@@ -131,7 +147,9 @@ fun NewChatScreen(model: AppModel) {
     }
     val canSend = agent != null && mode != null && field.text.isNotBlank() && !model.creatingChat
     val send = {
-        if (canSend) model.newChat(agent.agent.id, project?.path.orEmpty(), mode.id, field.text.trim(), design)
+        if (canSend) {
+            model.newChat(agent.agent.id, project?.path.orEmpty(), mode.id, modelOption?.id, effort?.id, context?.id, field.text.trim(), design)
+        }
     }
 
     val insets = WindowInsets.statusBars.union(WindowInsets.ime.union(WindowInsets.navigationBars))
@@ -206,6 +224,21 @@ fun NewChatScreen(model: AppModel) {
                 Chip(project?.name ?: "General", onClick = { open(Picker.Project) }) {
                     ChipIcon(if (project == null) Res.drawable.ic_globe else Res.drawable.ic_folder, pal.textMuted)
                 }
+                if (agent != null) {
+                    Chip(modelOption?.name ?: "Model", onClick = { open(Picker.Model) }) {
+                        ChipIcon(Res.drawable.ic_sparkles, pal.textMuted)
+                    }
+                    if (modelOption?.efforts?.isNotEmpty() == true) {
+                        Chip(effort?.label ?: "Reasoning", onClick = { open(Picker.Effort) }) {
+                            ChipIcon(Res.drawable.ic_brain, pal.textMuted)
+                        }
+                    }
+                    if (modelOption?.contexts?.isNotEmpty() == true) {
+                        Chip(context?.label ?: "Context", onClick = { open(Picker.Context) }) {
+                            ChipIcon(Res.drawable.ic_layers, pal.textMuted)
+                        }
+                    }
+                }
                 mode?.let { m ->
                     val color = if (m.dangerous) pal.danger else pal.textMuted
                     Chip(m.label, color = if (m.dangerous) pal.danger else pal.text, onClick = { open(Picker.Mode) }) {
@@ -229,6 +262,12 @@ fun NewChatScreen(model: AppModel) {
 
     when (picker) {
         Picker.Agent -> AgentPickerSheet(agents, agent?.agent?.id, onDismiss = { picker = null }) {
+            if (it != agent?.agent?.id) {
+                // Each agent has its own models; start from what it last used.
+                modelChoice = null
+                effortChoice = null
+                contextChoice = null
+            }
             agentId = it
             picker = null
         }
@@ -238,6 +277,18 @@ fun NewChatScreen(model: AppModel) {
         }
         Picker.Mode -> ModePickerSheet(modes, mode?.id, onDismiss = { picker = null }) {
             modeId = it
+            picker = null
+        }
+        Picker.Model -> ModelPickerSheet(agent?.models.orEmpty(), modelOption?.id, onDismiss = { picker = null }, defaultLabel = "Default") {
+            modelChoice = Choice(it)
+            picker = null
+        }
+        Picker.Effort -> ChoicePickerSheet("Reasoning", modelOption?.efforts.orEmpty(), effort?.id, onDismiss = { picker = null }, defaultLabel = "Default") {
+            effortChoice = Choice(it)
+            picker = null
+        }
+        Picker.Context -> ChoicePickerSheet("Context", modelOption?.contexts.orEmpty(), context?.id, onDismiss = { picker = null }, defaultLabel = "Default") {
+            contextChoice = Choice(it)
             picker = null
         }
         null -> {}

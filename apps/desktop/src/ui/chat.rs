@@ -4,8 +4,9 @@ use super::changes::{ChangesEvent, ChangesPanel};
 use super::diff::{InlineDiffs, stat_label};
 use super::home::mode_menu;
 use super::kit::*;
+use super::options::{Style, context_menu, effort_menu, settings_for};
 use super::tokens;
-use super::theme::card;
+use super::{clip, theme::card};
 use crate::store::{Store, StoreEvent};
 use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, WindowExt as _,
@@ -54,6 +55,8 @@ pub struct ChatView {
     /// Created the first time the Changes panel opens.
     changes: Option<Entity<ChangesPanel>>,
     changes_open: bool,
+    /// The composer placeholder currently set (it explains Enter, which depends on the state).
+    placeholder_busy: Option<bool>,
     /// Totals for the header button, recomputed when the session's edits change.
     change_summary: (u64, ChangeSummary),
     _subs: Vec<Subscription>,
@@ -70,7 +73,12 @@ impl ChatView {
         let weak = cx.entity().downgrade();
         let subs = vec![
             cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, window, cx| match ev {
-                InputEvent::PressEnter { shift: false, .. } => this.send(Delivery::Normal, window, cx),
+                // Enter steers a running turn (or sends when idle); Shift+Enter is handled in
+                // `on_keystroke`, which also keeps it from inserting a newline.
+                InputEvent::PressEnter { shift: false, .. } => {
+                    let delivery = this.enter_delivery(cx);
+                    this.send(delivery, window, cx)
+                }
                 InputEvent::Change => {
                     this.slash_sel = 0;
                     cx.notify();
@@ -127,6 +135,7 @@ impl ChatView {
             diffs: InlineDiffs::default(),
             changes: None,
             changes_open: false,
+            placeholder_busy: None,
             change_summary: (0, ChangeSummary::default()),
             _subs: subs,
         };
@@ -276,10 +285,41 @@ impl ChatView {
         let k = &ev.keystroke;
         if k.key == "v" && k.modifiers.secondary(cx) && !k.modifiers.shift && !k.modifiers.alt {
             // A pasted screenshot / copied file becomes an attachment; text falls through to the box.
-            if self.paste_attachments(cx) {
+            let pasted = clip::attachments_from_clipboard(cx);
+            if !pasted.is_empty() {
+                for p in pasted {
+                    if !self.attachments.contains(&p) {
+                        self.attachments.push(p);
+                    }
+                }
+                cx.notify();
                 cx.stop_propagation();
             }
             return;
+        }
+        if k.key == "enter" && self.editing.is_none() {
+            let busy = self.is_busy(cx);
+            let has_text = !self.input.read(cx).value().trim().is_empty() || !self.attachments.is_empty();
+            let m = &k.modifiers;
+            if m.alt && !m.shift && !m.secondary(cx) {
+                // A newline whenever Enter itself sends.
+                self.input.update(cx, |i, cx| i.insert("\n", window, cx));
+                cx.stop_propagation();
+                return;
+            }
+            if busy && has_text {
+                // Ctrl+Shift+Enter queues; Shift+Enter stops the turn and sends right away.
+                let delivery = match (m.shift, m.secondary(cx)) {
+                    (true, true) => Some(Delivery::Normal),
+                    (true, false) => Some(Delivery::Interrupt),
+                    _ => None,
+                };
+                if let Some(delivery) = delivery {
+                    self.send(delivery, window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+            }
         }
         if k.modifiers.modified() {
             return;
@@ -308,43 +348,15 @@ impl ChatView {
         cx.notify();
     }
 
-    /// Attach images or files from the clipboard. Returns false (so the text box handles the
-    /// paste) when the clipboard holds text or nothing attachable.
-    fn paste_attachments(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(item) = cx.read_from_clipboard() else { return false };
-        if item.text().is_some_and(|t| !t.is_empty()) {
-            return false;
-        }
-        let mut added = false;
-        for entry in item.entries() {
-            match entry {
-                ClipboardEntry::Image(img) => {
-                    let mime = match img.format {
-                        ImageFormat::Png => "image/png",
-                        ImageFormat::Jpeg => "image/jpeg",
-                        ImageFormat::Webp => "image/webp",
-                        ImageFormat::Gif => "image/gif",
-                        _ => continue,
-                    };
-                    match save_image(&img.bytes, mime) {
-                        Ok(path) => {
-                            self.attachments.push(path);
-                            added = true;
-                        }
-                        Err(e) => tracing::warn!("couldn't store pasted image: {e}"),
-                    }
-                }
-                ClipboardEntry::ExternalPaths(paths) => {
-                    self.attachments.extend(paths.paths().iter().cloned());
-                    added = true;
-                }
-                ClipboardEntry::String(_) => {}
-            }
-        }
-        if added {
-            cx.notify();
-        }
-        added
+    /// The agent is mid-turn (or waiting on you), so a new message queues or steers.
+    fn is_busy(&self, cx: &App) -> bool {
+        self.store.read(cx).session(self.id).is_some_and(|s| matches!(s.meta.status, SessionStatus::Working | SessionStatus::NeedsInput | SessionStatus::Starting))
+    }
+
+    /// What plain Enter does: steer the running turn where the agent allows it, else queue.
+    fn enter_delivery(&self, cx: &App) -> Delivery {
+        let steer = self.store.read(cx).session(self.id).is_some_and(|s| s.meta.agent.supports_steering());
+        if steer && self.is_busy(cx) { Delivery::Steer } else { Delivery::Normal }
     }
 
     fn attach(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -395,6 +407,8 @@ impl ChatView {
             .as_ref()
             .map(|cm| models.iter().find(|x| &x.id == cm).map(|x| x.name.clone()).unwrap_or_else(|| cm.clone()))
             .unwrap_or_else(|| "Default model".into());
+        let (efforts, contexts) = settings_for(&models, current_model.as_deref());
+        let (effort, context_limit) = (m.effort.clone(), m.context_limit.clone());
         let rc = m.remote_control.clone();
         let ctx = m.context;
         let store = self.store.clone();
@@ -489,10 +503,11 @@ impl ChatView {
                     .text_color(pal.text_muted)
                     .tooltip(move |window, cx| {
                         gpui_kit::component::tooltip::Tooltip::new(format!(
-                            "Context window: {} of {} tokens{}",
-                            format_tokens(ctx.used_tokens),
+                            "Context window: {} of {} tokens{}{}",
+                            format_tokens(if ctx.window_tokens > 0 { ctx.used_tokens.min(ctx.window_tokens) } else { ctx.used_tokens }),
                             if ctx.window_tokens > 0 { format_tokens(ctx.window_tokens) } else { "?".into() },
-                            ctx.cost_usd.map(|c| format!(" · session cost ${c:.2}")).unwrap_or_default()
+                            ctx.cost_usd.map(|c| format!(" · session cost ${c:.2}")).unwrap_or_default(),
+                            ctx.credits.map(|c| format!(" · {} used", format_credits(c))).unwrap_or_default()
                         ))
                         .build(window, cx)
                     })
@@ -505,8 +520,28 @@ impl ChatView {
                         "—".into()
                     })
             }))
+            .when_some(ctx.credits.filter(|_| !compact), |el, credits| {
+                let pal = tokens::p(cx);
+                el.child(
+                    h_flex()
+                        .id("aic")
+                        .gap(sz(6.))
+                        .px(sz(10.))
+                        .h(sz(30.))
+                        .items_center()
+                        .rounded(sz(tokens::radius::MD))
+                        .border_1()
+                        .border_color(pal.border)
+                        .text_size(sz(tokens::text::SM))
+                        .text_color(pal.text_muted)
+                        .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("GitHub Copilot AI credits (AIC) this chat has used").build(window, cx))
+                        .child(icon("coins").size(sz(14.)).text_color(pal.text_faint))
+                        .child(format_credits(credits)),
+                )
+            })
             .when(!models.is_empty(), |el| {
                 let weak = weak.clone();
+                let models = models.clone();
                 el.child(
                     Button::new("model-pick")
                         .ghost()
@@ -529,7 +564,7 @@ impl ChatView {
                                                 v.dispatch(SessionCommand::SetModel { model: mid.clone() }, window, cx);
                                                 let agent = v.store.read(cx).session(v.id).map(|s| s.meta.agent);
                                                 if let Some(agent) = agent {
-                                                    v.store.read(cx).record_selection(agent, Some(&mid));
+                                                    v.store.read(cx).record_model(agent, Some(&mid));
                                                 }
                                             });
                                         }
@@ -539,6 +574,28 @@ impl ChatView {
                             menu
                         }),
                 )
+            })
+            .when(!efforts.is_empty(), |el| {
+                el.child(effort_menu("chat-effort", efforts.clone(), effort.clone(), Style { allow_default: false, compact }, weak.clone(), |v: &mut ChatView, e, window, cx| {
+                    if let Some(effort) = e {
+                        v.dispatch(SessionCommand::SetEffort { effort: effort.clone() }, window, cx);
+                        if let Some(agent) = v.store.read(cx).session(v.id).map(|s| s.meta.agent) {
+                            let context = v.store.read(cx).session(v.id).and_then(|s| s.meta.context_limit.clone());
+                            v.store.read(cx).record_options(agent, Some(&effort), context.as_deref());
+                        }
+                    }
+                }))
+            })
+            .when(!contexts.is_empty(), |el| {
+                el.child(context_menu("chat-context", contexts.clone(), context_limit.clone(), Style { allow_default: false, compact }, weak.clone(), |v: &mut ChatView, c, window, cx| {
+                    if let Some(context) = c {
+                        v.dispatch(SessionCommand::SetContext { context: context.clone() }, window, cx);
+                        if let Some(agent) = v.store.read(cx).session(v.id).map(|s| s.meta.agent) {
+                            let effort = v.store.read(cx).session(v.id).and_then(|s| s.meta.effort.clone());
+                            v.store.read(cx).record_options(agent, effort.as_deref(), Some(&context));
+                        }
+                    }
+                }))
             })
             .when(m.agent.supports_remote_control(), |el| {
                 el.child(
@@ -618,7 +675,8 @@ impl ChatView {
                             .max_w(relative(0.82))
                             .gap_1()
                             .items_end()
-                            .child(
+                            .child({
+                                let state = self.markdown_for(id, &user_markdown(text), cx);
                                 div()
                                     .px(sz(16.))
                                     .py(sz(10.))
@@ -629,8 +687,8 @@ impl ChatView {
                                     .border_color(if being_edited { pal.warning.opacity(0.6) } else { pal.border })
                                     .text_size(sz(tokens::text::READ))
                                     .line_height(relative(1.55))
-                                    .child(text.clone()),
-                            )
+                                    .child(TextView::new(&state).selectable(true).style(markdown_style(cx)))
+                            })
                             .when(attachments.iter().any(|a| is_image(&a.path)), |d| {
                                 d.child(h_flex().gap_2().flex_wrap().justify_end().children(
                                     attachments.iter().filter(|a| is_image(&a.path)).enumerate().map(|(i, a)| image_view(&a.path, format!("att-{id}-{i}"), 220., 160., cx)),
@@ -1339,6 +1397,15 @@ impl ChatView {
         let queue = s.meta.queue.clone();
         let editing = self.editing.is_some();
         let steer = agent.supports_steering();
+        if self.placeholder_busy != Some(working) {
+            self.placeholder_busy = Some(working);
+            let text = match (working, steer) {
+                (true, true) => "Steer… (↵ steer · ⇧↵ send now · Ctrl⇧↵ queue · Alt↵ newline)",
+                (true, false) => "Queue… (↵ queue · ⇧↵ send now · Alt↵ newline)",
+                _ => "Reply… (↵ to send, ⇧↵ for a newline)",
+            };
+            self.input.update(cx, |i, cx| i.set_placeholder(text, window, cx));
+        }
 
         // Messages waiting for the current turn to end.
         let queue_view = (!queue.is_empty()).then(|| {
@@ -1524,12 +1591,12 @@ impl ChatView {
                     .when(working && has_text && !editing, |d| {
                         d.when(steer, |d| {
                             d.child(
-                                Button::new("steer")
+                                Button::new("queue")
                                     .ghost()
-                                    .icon(icon("corner-down-right"))
-                                    .label("Steer")
-                                    .tooltip("Send into the running turn; the agent reads it at its next step")
-                                    .on_click(cx.listener(|this, _, window, cx| this.send(Delivery::Steer, window, cx))),
+                                    .icon(icon("list-plus"))
+                                    .label("Queue")
+                                    .tooltip("Send when the agent finishes this turn  (Ctrl+Shift+Enter)")
+                                    .on_click(cx.listener(|this, _, window, cx| this.send(Delivery::Normal, window, cx))),
                             )
                         })
                         .child(
@@ -1537,7 +1604,7 @@ impl ChatView {
                                 .ghost()
                                 .icon(icon("zap"))
                                 .label("Send now")
-                                .tooltip("Stop the current turn and send this immediately")
+                                .tooltip("Stop the current turn and send this immediately  (Shift+Enter)")
                                 .on_click(cx.listener(|this, _, window, cx| this.send(Delivery::Interrupt, window, cx))),
                         )
                     })
@@ -1564,10 +1631,18 @@ impl ChatView {
                             .cursor_pointer()
                             .when(has_text, |d| d.hover(|d| d.opacity(0.85)))
                             .tooltip(move |window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(if working && !editing { "Queue — sends when the agent finishes (Enter)" } else { "Send (Enter)" }).build(window, cx)
+                                let tip = match (working && !editing, steer) {
+                                    (true, true) => "Steer — the agent reads it at its next step  (Enter)",
+                                    (true, false) => "Queue — sends when the agent finishes  (Enter)",
+                                    _ => "Send  (Enter)",
+                                };
+                                gpui_kit::component::tooltip::Tooltip::new(tip).build(window, cx)
                             })
-                            .on_click(cx.listener(|this, _, window, cx| this.send(Delivery::Normal, window, cx)))
-                            .child(icon(if working && !editing { "list-plus" } else { "arrow-up" }).size(sz(17.))),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let delivery = this.enter_delivery(cx);
+                                this.send(delivery, window, cx)
+                            }))
+                            .child(icon(if working && !editing { if steer { "corner-down-right" } else { "list-plus" } } else { "arrow-up" }).size(sz(17.))),
                     ),
             );
 
@@ -1614,8 +1689,12 @@ impl Render for ChatView {
                 _ => None,
             })
             .collect();
+        let show_thinking = self.store.read(cx).hub.settings().show_thinking;
         for e in &s.entries {
             if matches!(e, Entry::Tool(t) if under_review.contains(t.id.as_str())) {
+                continue;
+            }
+            if !show_thinking && matches!(e, Entry::Thinking { .. }) {
                 continue;
             }
             let el = self.render_entry(e, live, cx);
@@ -1728,7 +1807,7 @@ fn shimmer_text(text: &'static str, id: impl Into<ElementId>, cx: &App) -> impl 
         .with_animation(id, Animation::new(Duration::from_millis(1600)).repeat().with_easing(pulsating_between(0.45, 1.0)), |d, t| d.opacity(t))
 }
 
-fn file_chip(path: &std::path::Path, cx: &App) -> impl IntoElement + use<> {
+pub(super) fn file_chip(path: &std::path::Path, cx: &App) -> impl IntoElement + use<> {
     let theme = cx.theme();
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let image = mime_for(path).is_some_and(|m| m.starts_with("image/"));
@@ -1745,13 +1824,13 @@ fn file_chip(path: &std::path::Path, cx: &App) -> impl IntoElement + use<> {
         .child(name)
 }
 
-fn is_image(p: &std::path::Path) -> bool {
+pub(super) fn is_image(p: &std::path::Path) -> bool {
     mime_for(p).is_some_and(|m| m.starts_with("image/"))
 }
 
 /// A rounded, clickable image preview that fits within `max_w` × `max_h`; click opens it
 /// in the system viewer.
-fn image_view(path: &std::path::Path, id: String, max_w: f32, max_h: f32, cx: &App) -> impl IntoElement + use<> {
+pub(super) fn image_view(path: &std::path::Path, id: String, max_w: f32, max_h: f32, cx: &App) -> impl IntoElement + use<> {
     let theme = cx.theme();
     let open = path.to_path_buf();
     div()
@@ -1774,7 +1853,7 @@ fn image_view(path: &std::path::Path, id: String, max_w: f32, max_h: f32, cx: &A
         )
 }
 
-fn mime_for(p: &std::path::Path) -> Option<String> {
+pub(super) fn mime_for(p: &std::path::Path) -> Option<String> {
     let ext = p.extension()?.to_str()?.to_ascii_lowercase();
     Some(
         match ext.as_str() {
@@ -1792,6 +1871,27 @@ fn mime_for(p: &std::path::Path) -> Option<String> {
 #[allow(dead_code)]
 fn _n(window: &mut Window, cx: &mut App) {
     window.push_notification(Notification::info(""), cx);
+}
+
+/// A message you typed as Markdown. A single newline stays a line break, as typed.
+fn user_markdown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut fenced = false;
+    let lines: Vec<&str> = text.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        out.push_str(line);
+        if line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~") {
+            fenced = !fenced;
+        }
+        if i + 1 < lines.len() {
+            let next_blank = lines[i + 1].trim().is_empty();
+            if !fenced && !line.trim().is_empty() && !next_blank {
+                out.push_str("  ");
+            }
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Markdown styling for agent replies: comfortable rhythm and framed code blocks.

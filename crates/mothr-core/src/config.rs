@@ -198,6 +198,8 @@ pub struct Settings {
     pub warn_threshold: f32,
     /// Notify (toast) when a background session needs input.
     pub notify_needs_input: bool,
+    /// Show the agent's reasoning ("Thought · N words") in chats.
+    pub show_thinking: bool,
     /// Interface scale: 1.0 compact, 1.15 default, 1.3 large.
     pub ui_scale: f32,
     /// Start new chats with the agent and model you used last.
@@ -205,6 +207,10 @@ pub struct Settings {
     pub last_agent: Option<AgentKind>,
     /// Last model chosen per agent.
     pub last_models: BTreeMap<AgentKind, String>,
+    /// Last reasoning effort chosen per agent.
+    pub last_efforts: BTreeMap<AgentKind, String>,
+    /// Last context window chosen per agent.
+    pub last_contexts: BTreeMap<AgentKind, String>,
     /// Whether the sidebar was open when the app last ran.
     pub sidebar_open: bool,
 }
@@ -234,10 +240,13 @@ impl Default for Settings {
             usage_poll_secs: 120,
             warn_threshold: 0.8,
             notify_needs_input: true,
+            show_thinking: true,
             ui_scale: 1.15,
             remember_last_selection: true,
             last_agent: None,
             last_models: BTreeMap::new(),
+            last_efforts: BTreeMap::new(),
+            last_contexts: BTreeMap::new(),
             sidebar_open: true,
         }
     }
@@ -275,6 +284,55 @@ impl Settings {
             self.last_models.insert(agent, m.to_string());
         }
         changed
+    }
+
+    /// Record the model chosen for `agent`; `None` (the agent's own default) clears it. No-op
+    /// unless remembering is enabled. Returns whether it changed.
+    pub fn record_model(&mut self, agent: AgentKind, model: Option<&str>) -> bool {
+        if !self.remember_last_selection {
+            return false;
+        }
+        let mut changed = self.last_agent != Some(agent);
+        self.last_agent = Some(agent);
+        match model {
+            Some(m) => {
+                changed |= self.last_models.get(&agent).map(String::as_str) != Some(m);
+                self.last_models.insert(agent, m.to_string());
+            }
+            None => changed |= self.last_models.remove(&agent).is_some(),
+        }
+        changed
+    }
+
+    /// Reasoning effort new chats with `agent` should start with (None = the agent's default).
+    pub fn preferred_effort(&self, agent: AgentKind) -> Option<String> {
+        self.remember_last_selection.then(|| self.last_efforts.get(&agent).cloned()).flatten()
+    }
+
+    /// Context window new chats with `agent` should start with (None = the agent's default).
+    pub fn preferred_context(&self, agent: AgentKind) -> Option<String> {
+        self.remember_last_selection.then(|| self.last_contexts.get(&agent).cloned()).flatten()
+    }
+
+    /// Record the reasoning / context choice for `agent`; `None` clears it back to the agent's
+    /// default. No-op unless remembering is enabled. Returns whether anything changed.
+    pub fn record_options(&mut self, agent: AgentKind, effort: Option<&str>, context: Option<&str>) -> bool {
+        if !self.remember_last_selection {
+            return false;
+        }
+        fn set(map: &mut BTreeMap<AgentKind, String>, agent: AgentKind, v: Option<&str>) -> bool {
+            match v {
+                Some(v) if map.get(&agent).map(String::as_str) != Some(v) => {
+                    map.insert(agent, v.to_string());
+                    true
+                }
+                None => map.remove(&agent).is_some(),
+                _ => false,
+            }
+        }
+        let a = set(&mut self.last_efforts, agent, effort);
+        let b = set(&mut self.last_contexts, agent, context);
+        a | b
     }
 
     pub fn load() -> Self {
@@ -326,6 +384,18 @@ mod tests {
         assert!(!s.record_selection(AgentKind::ClaudeCode, Some("opus")));
         assert_eq!(s.preferred_agent(), Some(AgentKind::Hermes));
         assert_eq!(s.preferred_model(AgentKind::Hermes).as_deref(), Some("anthropic:claude-sonnet-5"));
+    }
+
+    #[test]
+    fn remembered_options_are_per_agent_and_clearable() {
+        let mut s = Settings::default();
+        assert!(s.record_options(AgentKind::Copilot, Some("high"), Some("long_context")));
+        assert!(!s.record_options(AgentKind::Copilot, Some("high"), Some("long_context")));
+        assert_eq!(s.preferred_effort(AgentKind::Copilot).as_deref(), Some("high"));
+        assert_eq!(s.preferred_context(AgentKind::Copilot).as_deref(), Some("long_context"));
+        assert_eq!(s.preferred_effort(AgentKind::ClaudeCode), None);
+        assert!(s.record_options(AgentKind::Copilot, None, None));
+        assert_eq!(s.preferred_effort(AgentKind::Copilot), None);
     }
 
     #[test]

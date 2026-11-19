@@ -254,6 +254,7 @@ impl MothrClient {
         Ok(hits.iter().map(model::hit_view).collect())
     }
 
+    #[allow(clippy::too_many_arguments)]
     /// Start a chat. An empty `project_path` starts a general chat. Returns the new chat id.
     pub fn new_chat(
         &self,
@@ -261,6 +262,8 @@ impl MothrClient {
         project_path: String,
         mode_id: String,
         model: Option<String>,
+        effort: Option<String>,
+        context: Option<String>,
         prompt: Option<String>,
         design: bool,
     ) -> Result<String, ClientError> {
@@ -272,6 +275,8 @@ impl MothrClient {
             project: project_path.into(),
             mode: mode.for_agent(agent),
             model: model.filter(|m| !m.is_empty()),
+            effort: effort.filter(|e| !e.is_empty()),
+            context: context.filter(|c| !c.is_empty()),
             prompt: prompt.filter(|p| !p.trim().is_empty()),
         })?;
         reply.map(|id| id.to_string()).ok_or_else(|| ClientError::Rejected { reason: "Mothr didn't return the new chat".into() })
@@ -311,6 +316,17 @@ impl MothrClient {
 
     pub fn set_model(&self, chat_id: String, model_id: String) -> Result<(), ClientError> {
         self.session(&chat_id, SessionCommand::SetModel { model: model_id })
+    }
+
+    /// Change the reasoning effort ([`ChoiceOption::id`]).
+    pub fn set_effort(&self, chat_id: String, effort: String) -> Result<(), ClientError> {
+        self.session(&chat_id, SessionCommand::SetEffort { effort })
+    }
+
+    /// Change the context window ([`ChoiceOption::id`]). The desktop restarts the agent for it,
+    /// so this is refused while a turn is running.
+    pub fn set_context(&self, chat_id: String, context: String) -> Result<(), ClientError> {
+        self.session(&chat_id, SessionCommand::SetContext { context })
     }
 
     /// Remove a queued message.

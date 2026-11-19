@@ -20,7 +20,9 @@ with the app.
   - tool cards with diffs and output
   - plan checklists, turn timing and cost
   - file and image attachments (picker or drag and drop)
-  - model switching
+  - model, reasoning-effort and context-window (200k, 1M) pickers, remembered for new chats
+  - generated chat titles (a small Claude model names each chat when Claude Code is installed)
+  - a Settings switch to hide the agent's reasoning text
 - **Interactive agents.** Permission requests appear as inline Allow / Always allow / Deny cards.
   Agent questions (`AskUserQuestion`, ACP elicitation) appear as option chips with a free-text
   "Other" field. Plan approval (`ExitPlanMode`) can switch the chat to accept-edits.
@@ -40,6 +42,10 @@ with the app.
     truncating resume, and sends the new text.
   - **Queue:** messages sent while the agent is busy wait in a visible queue and send
     themselves when the turn ends. Each queued item has "Send now" and remove.
+  - **Keys:** Enter steers a running turn (Claude Code; other agents queue), Shift+Enter stops the
+    turn and sends now, Ctrl+Shift+Enter queues, Alt+Enter inserts a newline.
+  - **Drafts:** text typed in a new-chat box shows up under *Drafts* in the sidebar, so you can
+    start another chat without losing it.
   - **Steer** (Claude Code): inject a message into the running turn; the agent reads it at its
     next step.
   - **Send now:** stops the current turn and sends immediately.
@@ -64,7 +70,7 @@ with the app.
   - Claude 5-hour, weekly and per-model weekly windows (OAuth usage API, plus live
     `rate_limit_event`s)
   - Codex 5h and weekly (from rollout logs)
-  - Copilot AI credits (AIC)
+  - Copilot AI credits (AIC), also per chat
   - Hermes, via `hermes usage --json`
   - context-window usage and cost per chat
   - warnings at a threshold you configure

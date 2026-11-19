@@ -42,6 +42,18 @@ pub enum SidebarEvent {
     OpenDesigns,
     NewGeneral,
     NewChatIn(ProjectRef),
+    OpenDraft(u64),
+    DiscardDraft(u64),
+}
+
+/// An unsent new-chat box, listed until it is sent or discarded.
+#[derive(Clone)]
+pub struct DraftRow {
+    pub id: u64,
+    pub preview: String,
+    pub agent: Option<AgentKind>,
+    pub project: String,
+    pub active: bool,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -54,6 +66,7 @@ pub struct Sidebar {
     active: Option<SessionId>,
     /// The Design page is showing.
     designs_active: bool,
+    drafts: Vec<DraftRow>,
     collapsed: std::collections::HashSet<String>,
     /// Orchestrator chats whose subagent list is folded.
     folded: std::collections::HashSet<SessionId>,
@@ -72,13 +85,72 @@ impl Sidebar {
                 }
             }),
         ];
-        Self { store, search, query: String::new(), mode: GroupMode::Smart, active: None, designs_active: false, collapsed: Default::default(), folded: Default::default(), _subs: subs }
+        Self { store, search, query: String::new(), mode: GroupMode::Smart, active: None, designs_active: false, drafts: vec![], collapsed: Default::default(), folded: Default::default(), _subs: subs }
     }
 
     pub fn set_active(&mut self, id: Option<SessionId>, designs: bool, cx: &mut Context<Self>) {
         self.active = id;
         self.designs_active = designs;
         cx.notify();
+    }
+
+    pub fn set_drafts(&mut self, drafts: Vec<DraftRow>, cx: &mut Context<Self>) {
+        self.drafts = drafts;
+        cx.notify();
+    }
+
+    fn render_draft(&self, d: &DraftRow, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pal = tokens::p(cx);
+        let (id, active) = (d.id, d.active);
+        h_flex()
+            .id(ElementId::Name(format!("draft-{id}").into()))
+            .group("draft")
+            .relative()
+            .mx_2()
+            .pl(sz(10.))
+            .pr_2()
+            .py(sz(7.))
+            .gap(sz(10.))
+            .rounded(sz(tokens::radius::MD))
+            .cursor_pointer()
+            .items_center()
+            .when(active, |x| x.bg(pal.surface_hover))
+            .when(!active, |x| x.hover(|x| x.bg(pal.surface_hover.opacity(0.6))))
+            .on_click(cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::OpenDraft(id))))
+            .when(active, |x| x.child(div().absolute().left(sz(0.)).top(sz(9.)).bottom(sz(9.)).w(sz(2.5)).rounded_full().bg(pal.brand)))
+            .child(match d.agent {
+                Some(a) => agent_avatar(a, 26.).into_any_element(),
+                None => div().size(sz(26.)).flex().items_center().justify_center().child(icon("square-pen").size(sz(15.)).text_color(pal.text_faint)).into_any_element(),
+            })
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(sz(1.))
+                    .child(div().text_size(sz(tokens::text::BASE)).truncate().text_color(pal.text.opacity(0.88)).child(d.preview.clone()))
+                    .child(
+                        div()
+                            .text_size(sz(tokens::text::XS))
+                            .truncate()
+                            .text_color(pal.text_faint)
+                            .child(if d.project.is_empty() { "Draft".to_string() } else { format!("Draft · {}", d.project) }),
+                    ),
+            )
+            .child(
+                div()
+                    .id(ElementId::Name(format!("draft-x-{id}").into()))
+                    .invisible()
+                    .group_hover("draft", |x| x.visible())
+                    .p(sz(4.))
+                    .rounded(sz(tokens::radius::SM))
+                    .hover(|x| x.bg(pal.surface_hover))
+                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("Discard draft").build(window, cx))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.emit(SidebarEvent::DiscardDraft(id));
+                    }))
+                    .child(icon("x").size(sz(12.)).text_color(pal.text_faint)),
+            )
     }
 
     /// The way into the Design page, carrying the state of design agents.
@@ -402,13 +474,29 @@ impl Render for Sidebar {
         let weak = cx.entity().downgrade();
 
         let mut list = v_flex().gap(sz(1.)).pb_3();
-        if groups.is_empty() {
+        if groups.is_empty() && self.drafts.is_empty() {
             list = list.child(empty_state(
                 "message-square-plus",
                 if total == 0 { "No chats yet" } else { "No matches" },
                 if total == 0 { "Start a chat with any installed agent." } else { "Try a different search." },
                 cx,
             ));
+        }
+        let q = self.query.to_lowercase();
+        let drafts: Vec<DraftRow> = self.drafts.iter().filter(|d| q.is_empty() || d.preview.to_lowercase().contains(&q)).cloned().collect();
+        if !drafts.is_empty() {
+            list = list.child(
+                h_flex()
+                    .px(sz(18.))
+                    .pt(sz(14.))
+                    .pb(sz(5.))
+                    .gap(sz(6.))
+                    .child(div().text_size(sz(tokens::text::XS)).font_weight(FontWeight::MEDIUM).text_color(pal.text_faint).child("Drafts"))
+                    .child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint.opacity(0.7)).child(drafts.len().to_string())),
+            );
+            for d in &drafts {
+                list = list.child(self.render_draft(d, cx));
+            }
         }
         for (name, metas) in groups {
             let collapsed = self.collapsed.contains(&name);

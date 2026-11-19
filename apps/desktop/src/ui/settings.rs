@@ -565,6 +565,17 @@ impl Render for SettingsView {
                             h_flex()
                                 .gap_3()
                                 .items_center()
+                                .child(div().w(sz(220.)).text_sm().child("Show agent reasoning"))
+                                .child(Switch::new("show-thinking").checked(s.show_thinking).on_change(cx.listener(|this, v: &bool, _, cx| {
+                                    let v = *v;
+                                    this.update(cx, |s| s.show_thinking = v)
+                                })))
+                                .child(div().text_xs().text_color(tokens::p(cx).text_faint).child("The collapsed “Thought” lines in a chat")),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_3()
+                                .items_center()
                                 .child(div().w(sz(220.)).text_sm().child("Warn at limit usage"))
                                 .children([0.7f32, 0.8, 0.9].map(|t| {
                                     let sel = (s.warn_threshold - t).abs() < 0.01;

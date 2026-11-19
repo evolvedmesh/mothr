@@ -112,12 +112,19 @@ impl DesignComposer {
             },
         };
         let settings = self.store.read(cx).hub.settings();
+        let model = settings.preferred_model(agent);
+        // Remembered reasoning / context only if the model offers them.
+        let (efforts, contexts) = crate::ui::options::settings_for(&self.store.read(cx).known_models(agent), model.as_deref());
+        let effort = settings.preferred_effort(agent).filter(|e| efforts.contains(e));
+        let context = settings.preferred_context(agent).filter(|c| contexts.iter().any(|x| &x.id == c));
         let cmd = AppCommand::NewSession {
             agent,
             kind: SessionKind::Design,
             project: project.clone(),
             mode: settings.default_mode.for_agent(agent),
-            model: settings.preferred_model(agent),
+            model,
+            effort,
+            context,
             prompt: (!text.is_empty()).then_some(text),
         };
         if let Some(session) = self.store.update(cx, |s, cx| s.dispatch(cmd, window, cx)) {

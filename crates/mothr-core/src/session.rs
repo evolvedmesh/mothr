@@ -71,11 +71,49 @@ pub struct ModeInfo {
     pub description: Option<String>,
 }
 
+/// One selectable value of a model setting (a context window size, say).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChoiceInfo {
+    pub id: String,
+    /// Short label for menus: "200k", "1M".
+    pub label: String,
+}
+
+impl ChoiceInfo {
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self { id: id.into(), label: label.into() }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+    /// Reasoning-effort levels this model accepts ("low" … "max"); empty = no such setting.
+    #[serde(default)]
+    pub efforts: Vec<String>,
+    /// Context window sizes this model can run with; empty = a single fixed size.
+    #[serde(default)]
+    pub contexts: Vec<ChoiceInfo>,
+}
+
+impl ModelInfo {
+    pub fn new(id: impl Into<String>, name: impl Into<String>, description: Option<String>) -> Self {
+        Self { id: id.into(), name: name.into(), description, ..Default::default() }
+    }
+}
+
+/// "xhigh" → "Extra high", for menus.
+pub fn effort_label(effort: &str) -> String {
+    match effort {
+        "xhigh" => "Extra high".into(),
+        "none" => "Off".into(),
+        other => {
+            let mut c = other.chars();
+            c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+        }
+    }
 }
 
 /// Details of a subagent session spawned by an orchestrator chat.
@@ -110,6 +148,15 @@ pub struct SessionMeta {
     pub status: SessionStatus,
     pub permission_mode: PermissionMode,
     pub model: Option<String>,
+    /// Reasoning effort (None = the agent's default).
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Context window choice, a [`ChoiceInfo::id`] (None = the agent's default).
+    #[serde(default)]
+    pub context_limit: Option<String>,
+    /// The title was written by Mothr (generated or renamed), so agent titles don't replace it.
+    #[serde(default)]
+    pub titled: bool,
     /// The agent's own session id (for resume / load).
     pub agent_session_id: Option<String>,
     pub pinned: bool,
@@ -185,6 +232,9 @@ impl SessionMeta {
             status: SessionStatus::Starting,
             permission_mode: mode,
             model: None,
+            effort: None,
+            context_limit: None,
+            titled: false,
             agent_session_id: None,
             pinned: false,
             group: None,
@@ -478,6 +528,8 @@ pub enum SessionEvent {
     Context { usage: ContextUsage },
     Mode { mode: PermissionMode },
     Model { model: String },
+    /// Reasoning effort / context window the session now runs with.
+    Options { effort: Option<String>, context: Option<String> },
     Title { title: String },
     RemoteControl { state: RemoteControlState },
     /// The agent acknowledged a user message and told us its ids.
@@ -535,6 +587,14 @@ impl SessionState {
             modes: Vec::new(),
             commands: Vec::new(),
         }
+    }
+
+    /// An agent "title" that is just the first message again.
+    fn echoes_first_prompt(&self, title: &str) -> bool {
+        let t = title.trim().trim_end_matches('…').trim();
+        let Some(Entry::User { text, .. }) = self.entries.iter().find(|e| matches!(e, Entry::User { .. })) else { return false };
+        let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+        !t.is_empty() && first.starts_with(t)
     }
 
     fn position(&self, id: &str) -> Option<usize> {
@@ -657,8 +717,16 @@ impl SessionState {
                 self.meta.model = Some(model.clone());
                 false
             }
+            SessionEvent::Options { effort, context } => {
+                self.meta.effort = effort.clone();
+                self.meta.context_limit = context.clone();
+                false
+            }
             SessionEvent::Title { title } => {
-                self.meta.title = title.clone();
+                // Mothr's own title wins, and so does anything better than echoing the prompt.
+                if !self.meta.titled && !self.echoes_first_prompt(title) {
+                    self.meta.title = title.clone();
+                }
                 false
             }
             SessionEvent::RemoteControl { state } => {
@@ -730,6 +798,8 @@ pub enum SessionCommand {
     Cancel,
     SetMode { mode: PermissionMode },
     SetModel { model: String },
+    SetEffort { effort: String },
+    SetContext { context: String },
     RespondPermission { entry_id: EntryId, option_id: String },
     AnswerQuestion { entry_id: EntryId, answers: Vec<Vec<String>> },
     SetRemoteControl { enabled: bool },
@@ -766,6 +836,31 @@ mod tests {
             entry: Entry::User { id: "u".into(), text: "\n  Fix the login bug\nmore".into(), attachments: vec![], at: chrono::Utc::now(), agent_ref: None, prev_ref: None },
         });
         assert_eq!(s.meta.title, "Fix the login bug");
+    }
+
+    #[test]
+    fn agent_titles_that_echo_the_prompt_are_ignored() {
+        let mut s = state();
+        s.apply(&SessionEvent::Upsert {
+            entry: Entry::User { id: "u".into(), text: "Fix the login bug please".into(), attachments: vec![], at: chrono::Utc::now(), agent_ref: None, prev_ref: None },
+        });
+        s.meta.title = "Login redirect loop".into();
+        s.meta.titled = true;
+        s.apply(&SessionEvent::Title { title: "Fix the login bug please".into() });
+        assert_eq!(s.meta.title, "Login redirect loop");
+        // Without a generated title, a real agent title is taken but an echo isn't.
+        s.meta.titled = false;
+        s.apply(&SessionEvent::Title { title: "Fix the login…".into() });
+        assert_eq!(s.meta.title, "Login redirect loop");
+        s.apply(&SessionEvent::Title { title: "Auth redirect fix".into() });
+        assert_eq!(s.meta.title, "Auth redirect fix");
+    }
+
+    #[test]
+    fn options_event_sets_effort_and_context() {
+        let mut s = state();
+        s.apply(&SessionEvent::Options { effort: Some("high".into()), context: Some("1m".into()) });
+        assert_eq!((s.meta.effort.as_deref(), s.meta.context_limit.as_deref()), (Some("high"), Some("1m")));
     }
 
     #[test]

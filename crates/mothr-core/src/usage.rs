@@ -134,6 +134,9 @@ pub struct ContextUsage {
     pub cost_usd: Option<f64>,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Credits the session has used so far (GitHub Copilot AIC), when the agent reports them.
+    #[serde(default)]
+    pub credits: Option<f64>,
 }
 
 impl ContextUsage {
@@ -141,8 +144,19 @@ impl ContextUsage {
         if self.window_tokens == 0 {
             0.0
         } else {
-            (self.used_tokens as f64 / self.window_tokens as f64) as f32
+            ((self.used_tokens as f64 / self.window_tokens as f64) as f32).min(1.0)
         }
+    }
+}
+
+/// Format AI credits: "6.2 AIC", "0.04 AIC", "212 AIC".
+pub fn format_credits(c: f64) -> String {
+    if c >= 100.0 {
+        format!("{c:.0} AIC")
+    } else if c >= 1.0 {
+        format!("{c:.1} AIC")
+    } else {
+        format!("{c:.2} AIC")
     }
 }
 

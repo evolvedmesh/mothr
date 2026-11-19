@@ -94,14 +94,18 @@ fn pairs_streams_and_sends_commands() {
 
     // Commands reach the hub as AppCommands.
     client.send(id.to_string(), "hello".into(), Delivery::Steer).unwrap();
-    let new_id = client.new_chat("copilot".into(), String::new(), "plan".into(), None, Some("hi".into()), false).unwrap();
+    let new_id = client.new_chat("copilot".into(), String::new(), "plan".into(), Some("claude-opus-5.5".into()), Some("high".into()), Some("long_context".into()), Some("hi".into()), false).unwrap();
     assert!(uuid::Uuid::parse_str(&new_id).is_ok());
     let hits = client.search_projects("web".into()).unwrap();
     assert_eq!(hits[0].display_path, "~/web");
     {
         let d = hub.dispatched.lock().unwrap();
         assert!(matches!(&d[0], AppCommand::Session { command: SessionCommand::Prompt { delivery: mothr_core::Delivery::Steer, .. }, .. }));
-        assert!(matches!(&d[1], AppCommand::NewSession { agent: AgentKind::Copilot, mode: PermissionMode::Plan, .. }));
+        assert!(matches!(
+            &d[1],
+            AppCommand::NewSession { agent: AgentKind::Copilot, mode: PermissionMode::Plan, model: Some(m), effort: Some(e), context: Some(c), .. }
+                if m == "claude-opus-5.5" && e == "high" && c == "long_context"
+        ));
     }
     assert!(matches!(client.send(id.to_string(), "  ".into(), Delivery::Normal), Err(ClientError::Invalid { .. })));
 

@@ -414,7 +414,16 @@ function applyEvent(st, ev) {
     case 'context': m.context = ev.usage; return [];
     case 'mode': m.permission_mode = ev.mode; return [];
     case 'model': m.model = ev.model; return [];
-    case 'title': m.title = ev.title; return [];
+    case 'options': m.effort = ev.effort != null ? ev.effort : null; m.context_limit = ev.context != null ? ev.context : null; return [];
+    case 'title': {
+      // Mothr's own title wins, and so does anything better than echoing the prompt.
+      const first = st.entries.find((e) => e.type === 'user');
+      const t = String(ev.title).trim().replace(/…+$/, '').trim();
+      const firstLine = first ? (String(first.text).split('\n').find((l) => l.trim() !== '') || '').trim() : '';
+      const echoes = t !== '' && firstLine.startsWith(t);
+      if (!m.titled && !echoes) m.title = ev.title;
+      return [];
+    }
     case 'remote_control': m.remote_control = ev.state; return [];
     case 'resolved': {
       const i = findPos(st, ev.entry_id), e = i >= 0 ? st.entries[i] : null;

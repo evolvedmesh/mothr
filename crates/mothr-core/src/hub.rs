@@ -59,6 +59,11 @@ pub enum AppCommand {
         #[serde(default)]
         model: Option<String>,
         #[serde(default)]
+        effort: Option<String>,
+        /// A [`crate::ChoiceInfo::id`] from the model's `contexts`.
+        #[serde(default)]
+        context: Option<String>,
+        #[serde(default)]
         prompt: Option<String>,
     },
     Session {

@@ -32,7 +32,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.mothr.client.AgentView
+import dev.mothr.client.ChoiceOption
 import dev.mothr.client.ModeOption
+import dev.mothr.client.ModelOption
 import dev.mothr.client.ProjectView
 import dev.mothr.mobile.resources.Res
 import dev.mothr.mobile.resources.ic_check
@@ -191,6 +193,46 @@ fun ModePickerSheet(modes: List<ModeOption>, selected: String?, onDismiss: () ->
             modes.forEach { m ->
                 PickRow(m.label, m.description, m.id == selected, titleColor = if (m.dangerous) pal.danger else pal.text, onClick = { onPick(m.id) })
             }
+        }
+    }
+}
+
+/**
+ * Models to pick from. With a [defaultLabel] the first row is the agent's own default and picks
+ * null; without one (a running chat) a model is always chosen.
+ */
+@Composable
+fun ModelPickerSheet(
+    models: List<ModelOption>,
+    selected: String?,
+    onDismiss: () -> Unit,
+    defaultLabel: String? = null,
+    onPick: (String?) -> Unit,
+) {
+    Sheet(onDismiss) {
+        PickerBody("Model") {
+            if (defaultLabel != null) PickRow(defaultLabel, "Let the agent choose", selected == null, onClick = { onPick(null) })
+            models.forEach { m ->
+                PickRow(m.name, m.description, m.id == selected, onClick = { onPick(m.id) })
+            }
+        }
+    }
+}
+
+/** A setting with a few values, such as reasoning effort or context size. Same rules as [ModelPickerSheet]. */
+@Composable
+fun ChoicePickerSheet(
+    title: String,
+    options: List<ChoiceOption>,
+    selected: String?,
+    onDismiss: () -> Unit,
+    defaultLabel: String? = null,
+    onPick: (String?) -> Unit,
+) {
+    Sheet(onDismiss) {
+        PickerBody(title) {
+            if (defaultLabel != null) PickRow(defaultLabel, null, selected == null, onClick = { onPick(null) })
+            options.forEach { o -> PickRow(o.label, null, o.id == selected, onClick = { onPick(o.id) }) }
         }
     }
 }

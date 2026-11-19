@@ -2,10 +2,12 @@
 
 pub mod changes;
 pub mod chat;
+pub mod clip;
 pub mod design;
 pub mod diff;
 pub mod home;
 pub mod kit;
+pub mod options;
 pub mod picker;
 pub mod settings;
 pub mod sidebar;

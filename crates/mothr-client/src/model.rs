@@ -5,7 +5,7 @@
 use crate::views::*;
 use chrono::{DateTime, Local, Utc};
 use mothr_core::{
-    AgentInstall, AgentKind, Entry, HubEvent, HubSnapshot, NoticeLevel, PermissionMode, PermissionOptionKind,
+    AgentInstall, AgentKind, Entry, HubEvent, HubSnapshot, ModelInfo, NoticeLevel, PermissionMode, PermissionOptionKind,
     PlanStatus, ProjectRef, ProviderUsage, SessionId, SessionKind, SessionState, SessionStatus, ToolKind,
     ToolStatus, UsageLevel,
 };
@@ -41,6 +41,8 @@ pub struct Store {
     pub usage: Vec<ProviderUsage>,
     pub pinned_projects: Vec<ProjectRef>,
     pub recent_projects: Vec<ProjectRef>,
+    /// Models each agent offers, so a new chat can pick one before any session exists.
+    pub agent_models: std::collections::BTreeMap<AgentKind, Vec<ModelInfo>>,
     pub toasts: Vec<Toast>,
     /// True once the first snapshot arrived.
     pub loaded: bool,
@@ -55,6 +57,7 @@ impl Store {
         self.usage = snap.usage;
         self.pinned_projects = snap.pinned_projects;
         self.recent_projects = snap.recent_projects;
+        self.agent_models = snap.agent_models;
         self.loaded = true;
     }
 
@@ -114,7 +117,11 @@ impl Store {
                 self.recent_projects = recent;
                 None
             }
-            HubEvent::ProjectsIndexed { .. } | HubEvent::AgentModels { .. } => None,
+            HubEvent::AgentModels { agent, models } => {
+                self.agent_models.insert(agent, models);
+                None
+            }
+            HubEvent::ProjectsIndexed { .. } => None,
             HubEvent::Toast { level, text } => {
                 self.toasts.push(Toast { level: level_name(level).into(), text });
                 if self.toasts.len() > 20 {
@@ -303,7 +310,9 @@ impl Store {
             mode: mode_option(m.permission_mode),
             modes: m.agent.supported_modes().iter().map(|&p| mode_option(p)).collect(),
             model: m.model.clone(),
-            models: s.models.iter().map(|x| ModelOption { id: x.id.clone(), name: x.name.clone() }).collect(),
+            models: model_options(if s.models.is_empty() { self.agent_models.get(&m.agent).map(Vec::as_slice).unwrap_or_default() } else { &s.models }),
+            effort: m.effort.clone(),
+            context_limit: m.context_limit.clone(),
             commands: s
                 .commands
                 .iter()
@@ -315,13 +324,14 @@ impl Store {
             context_label: if ctx.window_tokens > 0 {
                 format!(
                     "{} / {}",
-                    mothr_core::format_tokens(ctx.used_tokens),
+                    mothr_core::format_tokens(ctx.used_tokens.min(ctx.window_tokens)),
                     mothr_core::format_tokens(ctx.window_tokens)
                 )
             } else {
                 String::new()
             },
             cost_label: ctx.cost_usd.map(|c| format!("${c:.2}")),
+            credits_label: ctx.credits.map(mothr_core::format_credits),
             busy: matches!(m.status, SessionStatus::Working | SessionStatus::NeedsInput | SessionStatus::Starting),
             live: m.status.is_live(),
             can_steer: m.agent.supports_steering(),
@@ -340,6 +350,7 @@ impl Store {
                     version: install.and_then(|a| a.version.clone()),
                     note: install.and_then(|a| a.note.clone()),
                     modes: k.supported_modes().iter().map(|&p| mode_option(p)).collect(),
+                    models: self.agent_models.get(&k).map(|m| model_options(m)).unwrap_or_default(),
                 }
             })
             .collect();
@@ -664,6 +675,19 @@ pub fn entry_view(e: &Entry) -> EntryView {
     }
 }
 
+fn model_options(models: &[ModelInfo]) -> Vec<ModelOption> {
+    models
+        .iter()
+        .map(|m| ModelOption {
+            id: m.id.clone(),
+            name: m.name.clone(),
+            description: m.description.clone(),
+            efforts: m.efforts.iter().map(|e| ChoiceOption { id: e.clone(), label: mothr_core::effort_label(e) }).collect(),
+            contexts: m.contexts.iter().map(|c| ChoiceOption { id: c.id.clone(), label: c.label.clone() }).collect(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -836,3 +860,4 @@ mod tests {
         assert_eq!(relative_time(now - chrono::Duration::days(2), now), "2d");
     }
 }
+

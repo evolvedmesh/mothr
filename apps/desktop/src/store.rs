@@ -215,6 +215,22 @@ impl Store {
         }
     }
 
+    /// Persist the model the user just chose (`None` = the agent's default), if "remember" is on.
+    pub fn record_model(&self, agent: AgentKind, model: Option<&str>) {
+        let mut s = self.hub.settings();
+        if s.record_model(agent, model) {
+            self.hub.update_settings(s);
+        }
+    }
+
+    /// Persist the reasoning / context choice for `agent` (`None` = the agent's default).
+    pub fn record_options(&self, agent: AgentKind, effort: Option<&str>, context: Option<&str>) {
+        let mut s = self.hub.settings();
+        if s.record_options(agent, effort, context) {
+            self.hub.update_settings(s);
+        }
+    }
+
     pub fn available_agents(&self) -> Vec<AgentKind> {
         self.agents.iter().filter(|a| a.available()).map(|a| a.kind).collect()
     }

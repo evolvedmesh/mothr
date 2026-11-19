@@ -29,6 +29,10 @@ pub struct SessionSpec {
     pub cwd: PathBuf,
     pub mode: PermissionMode,
     pub model: Option<String>,
+    /// Reasoning effort ("low" … "max"); None = the agent's default.
+    pub effort: Option<String>,
+    /// Context window choice (a `ChoiceInfo::id`); None = the agent's default.
+    pub context: Option<String>,
     /// Agent-side session id to resume, if any.
     pub resume: Option<String>,
     /// Resume only up to this agent message (truncating resume, used by edit & resend).

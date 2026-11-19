@@ -543,7 +543,16 @@ class AppModel(private val scope: CoroutineScope) {
         }
     }
 
-    fun newChat(agentId: String, projectPath: String, modeId: String, prompt: String, design: Boolean) {
+    fun newChat(
+        agentId: String,
+        projectPath: String,
+        modeId: String,
+        modelId: String?,
+        effort: String?,
+        context: String?,
+        prompt: String,
+        design: Boolean,
+    ) {
         val computer = current ?: return
         if (creatingChat) return
         creatingChat = true
@@ -551,12 +560,16 @@ class AppModel(private val scope: CoroutineScope) {
         scope.launch {
             try {
                 val id = try {
-                    withContext(Dispatchers.IO) { c.newChat(agentId, projectPath, modeId, null, prompt, design) }
+                    withContext(Dispatchers.IO) { c.newChat(agentId, projectPath, modeId, modelId, effort, context, prompt, design) }
                 } finally {
                     creatingChat = false
                 }
                 prefs.putString(KEY_AGENT, agentId)
                 prefs.putString(KEY_MODE, modeId)
+                // Default (null) is remembered too, by dropping the key.
+                saveChoice(modelKey(agentId), modelId)
+                saveChoice(effortKey(agentId), effort)
+                saveChoice(contextKey(agentId), context)
                 prefs.putString(projectKey(computer.id), projectPath)
                 newChatDraft = ""
                 if (computer !== current) return@launch
@@ -573,6 +586,15 @@ class AppModel(private val scope: CoroutineScope) {
             }
         }
     }
+
+    private fun saveChoice(key: String, value: String?) {
+        if (value != null) prefs.putString(key, value) else prefs.remove(key)
+    }
+
+    /** What new chats with [agentId] last started with; null means the agent's default. */
+    fun lastModel(agentId: String): String? = prefs.getStringOrNull(modelKey(agentId))
+    fun lastEffort(agentId: String): String? = prefs.getStringOrNull(effortKey(agentId))
+    fun lastContext(agentId: String): String? = prefs.getStringOrNull(contextKey(agentId))
 
     val lastAgent: String? get() = prefs.getStringOrNull(KEY_AGENT)
     val lastMode: String? get() = prefs.getStringOrNull(KEY_MODE)
@@ -592,6 +614,9 @@ class AppModel(private val scope: CoroutineScope) {
         private fun nameKey(id: String) = "computer.$id.name"
         private fun hostKey(id: String) = "computer.$id.host"
         private fun projectKey(id: String) = "computer.$id.project"
+        private fun modelKey(agentId: String) = "model.$agentId"
+        private fun effortKey(agentId: String) = "effort.$agentId"
+        private fun contextKey(agentId: String) = "context.$agentId"
     }
 }
 

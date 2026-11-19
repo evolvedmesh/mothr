@@ -62,10 +62,24 @@ pub struct ModeOption {
     pub dangerous: bool,
 }
 
+/// One value of a setting: a reasoning effort or a context window size.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ChoiceOption {
+    /// What to send back ("high", "1m", "long_context").
+    pub id: String,
+    /// What to show ("High", "1M").
+    pub label: String,
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ModelOption {
     pub id: String,
     pub name: String,
+    pub description: Option<String>,
+    /// Reasoning levels this model accepts; empty when it has no such setting.
+    pub efforts: Vec<ChoiceOption>,
+    /// Context window sizes this model can run with; empty when it has one fixed size.
+    pub contexts: Vec<ChoiceOption>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -162,6 +176,10 @@ pub struct ChatDetail {
     pub modes: Vec<ModeOption>,
     pub model: Option<String>,
     pub models: Vec<ModelOption>,
+    /// The reasoning effort the chat runs with, a [`ChoiceOption::id`]; None = the agent's default.
+    pub effort: Option<String>,
+    /// The context window the chat runs with, a [`ChoiceOption::id`]; None = the agent's default.
+    pub context_limit: Option<String>,
     pub commands: Vec<CommandView>,
     pub queue: Vec<QueuedView>,
     pub entries: Vec<EntryView>,
@@ -169,6 +187,8 @@ pub struct ChatDetail {
     /// "61.0k / 200.0k", empty when unknown.
     pub context_label: String,
     pub cost_label: Option<String>,
+    /// Credits used so far ("6.2 AIC"), for agents that bill in them (GitHub Copilot).
+    pub credits_label: Option<String>,
     /// Working, starting or waiting on the user: new messages queue.
     pub busy: bool,
     /// The agent process is running (otherwise the chat can be resumed).
@@ -184,6 +204,8 @@ pub struct AgentView {
     pub version: Option<String>,
     pub note: Option<String>,
     pub modes: Vec<ModeOption>,
+    /// Models new chats can start with, as last reported by the desktop.
+    pub models: Vec<ModelOption>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]

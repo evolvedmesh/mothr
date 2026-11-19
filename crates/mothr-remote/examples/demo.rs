@@ -197,6 +197,7 @@ impl DemoHub {
                         cost_usd: Some(0.42),
                         input_tokens: 50_000,
                         output_tokens: 11_000,
+                        credits: None,
                     },
                 },
             );
@@ -431,6 +432,7 @@ fn demo_sessions() -> Vec<SessionState> {
         cost_usd: Some(1.84),
         input_tokens: 0,
         output_tokens: 0,
+        credits: None,
     };
     a.commands = ["compact|Summarize the conversation to free up context|", "review|Review the current changes|[focus]", "init|Write a CLAUDE.md for this project|", "model|Switch the model|<name>"]
         .iter()

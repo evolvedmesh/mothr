@@ -24,6 +24,7 @@ enum Call {
     Prompt,
     SetMode(PermissionMode),
     SetModel(String),
+    SetEffort(String),
 }
 
 struct PendingPermission {
@@ -46,6 +47,10 @@ struct Driver {
     current_mode_id: Option<String>,
     mode_config_id: Option<String>,
     model_config_id: Option<String>,
+    /// The `thought_level` config option (reasoning effort), when the agent has one.
+    effort_config_id: Option<String>,
+    /// Effort the session runs with now (the agent's choice until the user picks one).
+    effort: Option<String>,
     mode: PermissionMode,
     /// Agent message segment currently being streamed.
     segment: Option<(EntryId, bool)>,
@@ -58,6 +63,8 @@ struct Driver {
     deferred: Vec<SessionCommand>,
     turn_active: bool,
     context_window: u64,
+    /// Latest usage, shared with the background task that adds Copilot credits.
+    usage: std::sync::Arc<std::sync::Mutex<ContextUsage>>,
     ready: bool,
     auth_methods: Vec<Value>,
 }
@@ -71,6 +78,11 @@ pub async fn run(
     out: OutputTx,
 ) {
     let em = Emitter::new(spec.id, out);
+    let mut args = args;
+    if spec.agent == AgentKind::Copilot
+        && let Some(tier) = spec.context.as_deref().filter(|t| !t.is_empty()) {
+            args.extend(["--context".to_string(), tier.to_string()]);
+        }
     let mut cmd = Command::new(&program);
     cmd.args(&args)
         .envs(env)
@@ -136,6 +148,8 @@ pub async fn run(
         current_mode_id: None,
         mode_config_id: None,
         model_config_id: None,
+        effort_config_id: None,
+        effort: None,
         segment: None,
         tools: HashMap::new(),
         permissions: HashMap::new(),
@@ -145,6 +159,7 @@ pub async fn run(
         deferred: vec![],
         turn_active: false,
         context_window: 0,
+        usage: Default::default(),
         ready: false,
         auth_methods: vec![],
     };
@@ -162,7 +177,7 @@ pub async fn run(
     loop {
         tokio::select! {
             line = lines.next_line() => match line {
-                Ok(Some(l)) if !l.trim().is_empty() => match serde_json::from_str::<Value>(&l) {
+                Ok(Some(l)) if !l.trim().is_empty() => match crate::claude::parse_traced(&l) {
                     Ok(v) => d.on_message(v).await,
                     Err(_) => tracing::debug!(target: "acp", "non-json: {l}"),
                 },
@@ -192,6 +207,7 @@ pub async fn run(
 
 impl Driver {
     fn send(&self, v: Value) {
+        crate::claude::trace(&format!("> {v}"));
         let _ = self.writer.send(v.to_string());
     }
 
@@ -241,7 +257,7 @@ impl Driver {
                 if self.turn_active {
                     // ACP has no mid-turn input: interrupt-and-send cancels first; anything else
                     // waits for the turn to finish.
-                    if delivery != Delivery::Normal {
+                    if delivery == Delivery::Interrupt {
                         self.notify("session/cancel", json!({"sessionId": self.sid()}));
                     }
                     self.deferred.push(SessionCommand::Prompt { text, attachments, delivery: Delivery::Normal });
@@ -294,6 +310,17 @@ impl Driver {
                 } else {
                     self.call("session/set_model", json!({"sessionId": self.sid(), "modelId": model}), Call::SetModel(model));
                 }
+            }
+            SessionCommand::SetEffort { effort } => match self.effort_config_id.clone() {
+                Some(cfg) => {
+                    self.call("session/set_config_option", json!({"sessionId": self.sid(), "configId": cfg, "value": effort}), Call::SetEffort(effort));
+                }
+                None => self.em.notice(NoticeLevel::Info, format!("{} has no reasoning setting.", self.spec.agent.display_name())),
+            },
+            // The context window is fixed when the process starts; the hub restarts the chat for it.
+            SessionCommand::SetContext { context } => {
+                self.spec.context = Some(context);
+                self.emit_options();
             }
             SessionCommand::RespondPermission { entry_id, option_id } => {
                 if let Some(p) = self.permissions.remove(&entry_id) {
@@ -434,6 +461,13 @@ impl Driver {
                 if let Some(m) = self.spec.model.clone() {
                     self.on_command(SessionCommand::SetModel { model: m });
                 }
+                if let Some(e) = self.spec.effort.clone()
+                    && self.effort_config_id.is_some()
+                    && self.effort.as_deref() != Some(e.as_str()) {
+                        self.on_command(SessionCommand::SetEffort { effort: e });
+                    }
+                self.emit_options();
+                self.refresh_credits(false);
                 for c in std::mem::take(&mut self.queued) {
                     self.on_command(c);
                 }
@@ -451,7 +485,7 @@ impl Driver {
                     self.em.notice(NoticeLevel::Error, e.clone());
                 }
                 if let Some(u) = result.get("usage").filter(|u| u.is_object()) {
-                    self.on_usage_update(u);
+                    self.on_turn_usage(u);
                 }
                 self.em.emit(SessionEvent::Upsert {
                     entry: Entry::TurnEnd {
@@ -463,6 +497,7 @@ impl Driver {
                 });
                 self.set_status(SessionStatus::Idle);
                 self.turn_active = false;
+                self.refresh_credits(true);
                 if !self.deferred.is_empty() {
                     let next = self.deferred.remove(0);
                     self.on_command(next);
@@ -475,6 +510,13 @@ impl Driver {
                 // Client-side policy still applies.
                 self.em.emit(SessionEvent::Mode { mode: m });
             }
+            Call::SetEffort(e) => match err_msg {
+                Some(msg) => self.em.notice(NoticeLevel::Warning, format!("Couldn't change the reasoning effort: {msg}")),
+                None => {
+                    self.effort = Some(e);
+                    self.emit_options();
+                }
+            },
             Call::SetModel(m) => match err_msg {
                 Some(e) => self.em.notice(NoticeLevel::Warning, format!("Couldn't switch model: {e}")),
                 None => self.em.emit(SessionEvent::Model { model: m }),
@@ -497,16 +539,17 @@ impl Driver {
             .map(|a| {
                 a.iter()
                     .filter_map(|m| {
-                        Some(ModelInfo {
-                            id: m["modelId"].as_str()?.to_string(),
-                            name: m["name"].as_str().unwrap_or(m["modelId"].as_str()?).to_string(),
-                            description: m["description"].as_str().map(str::to_string),
-                        })
+                        Some(ModelInfo::new(
+                            m["modelId"].as_str()?,
+                            m["name"].as_str().unwrap_or(m["modelId"].as_str()?),
+                            m["description"].as_str().map(str::to_string),
+                        ))
                     })
                     .collect()
             })
             .unwrap_or_default();
         let mut current_model = r["models"]["currentModelId"].as_str().map(str::to_string);
+        let mut efforts: Vec<String> = vec![];
         self.current_mode_id = r["modes"]["currentModeId"].as_str().map(str::to_string);
         self.modes = r["modes"]["availableModes"]
             .as_array()
@@ -543,11 +586,16 @@ impl Driver {
                 "model" => {
                     self.model_config_id = Some(id);
                     if models.is_empty() {
-                        models = options.iter().map(|(v, n, d)| ModelInfo { id: v.clone(), name: n.clone(), description: d.clone() }).collect();
+                        models = options.iter().map(|(v, n, d)| ModelInfo::new(v.clone(), n.clone(), d.clone())).collect();
                     }
                     if current_model.is_none() {
                         current_model = opt["currentValue"].as_str().map(str::to_string);
                     }
+                }
+                "thought_level" => {
+                    self.effort = opt["currentValue"].as_str().map(str::to_string);
+                    self.effort_config_id = Some(id);
+                    efforts = options.iter().map(|(v, ..)| v.clone()).collect();
                 }
                 "mode" if (id == "mode" || self.modes.is_empty())
                     // Only adopt the config option if it carries the same ids as session modes.
@@ -561,6 +609,16 @@ impl Driver {
         // Dedupe models by id (Copilot lists "auto" twice).
         let mut seen = std::collections::HashSet::new();
         models.retain(|m| seen.insert(m.id.clone()));
+        for m in &mut models {
+            // "auto" lets Copilot choose, so it has no effort setting of its own.
+            if m.id != "auto" {
+                m.efforts = efforts.clone();
+            }
+            // Copilot's long-context tier (≈1M) exists for its Claude models.
+            if self.spec.agent == AgentKind::Copilot && m.id.starts_with("claude-") {
+                m.contexts = vec![ChoiceInfo::new("default", "Standard"), ChoiceInfo::new("long_context", "1M")];
+            }
+        }
         self.em.emit(SessionEvent::Ready {
             agent_session_id: self.session_id.clone(),
             model: current_model,
@@ -657,6 +715,12 @@ impl Driver {
             }
             "config_option_update" => {
                 for opt in u["configOptions"].as_array().into_iter().flatten() {
+                    if opt["category"] == "thought_level"
+                        && let Some(e) = opt["currentValue"].as_str()
+                        && self.effort.as_deref() != Some(e) {
+                            self.effort = Some(e.to_string());
+                            self.emit_options();
+                        }
                     if opt["category"] == "model"
                         && let Some(m) = opt["currentValue"].as_str() {
                             self.em.emit(SessionEvent::Model { model: m.to_string() });
@@ -667,21 +731,74 @@ impl Driver {
         }
     }
 
+    /// `usage_update`: how full the context window is right now.
     fn on_usage_update(&mut self, u: &Value) {
-        let used = u["used"].as_u64().or(u["totalTokens"].as_u64()).or(u["total_tokens"].as_u64()).unwrap_or(0);
-        let size = u["size"].as_u64().or(u["contextWindow"].as_u64()).unwrap_or(self.context_window);
-        if size > 0 {
+        let used = u["used"].as_u64().or(u["totalTokens"].as_u64()).or(u["total_tokens"].as_u64());
+        let size = u["size"].as_u64().or(u["contextWindow"].as_u64()).filter(|s| *s > 0);
+        if let Some(size) = size {
             self.context_window = size;
         }
         let cost = u["cost"]["amount"].as_f64().or(u["cost"].as_f64());
-        self.em.emit(SessionEvent::Context {
-            usage: ContextUsage {
-                used_tokens: used,
-                window_tokens: size,
-                cost_usd: cost,
-                input_tokens: u["inputTokens"].as_u64().unwrap_or(0),
-                output_tokens: u["outputTokens"].as_u64().unwrap_or(0),
-            },
+        self.update_usage(|c| {
+            if let Some(used) = used {
+                c.used_tokens = used;
+            }
+            if self.context_window > 0 {
+                c.window_tokens = self.context_window;
+            }
+            if cost.is_some() {
+                c.cost_usd = cost;
+            }
+        });
+    }
+
+    /// The `usage` on a finished prompt: tokens billed this turn, summed over every model call
+    /// (tool loops re-read the whole context each time). It says nothing about how full the
+    /// window is, so it only adds to the session's running totals.
+    fn on_turn_usage(&mut self, u: &Value) {
+        let input = u["inputTokens"].as_u64().unwrap_or(0);
+        let output = u["outputTokens"].as_u64().unwrap_or(0);
+        self.update_usage(|c| {
+            c.input_tokens += input;
+            c.output_tokens += output;
+        });
+    }
+
+    fn update_usage(&self, f: impl FnOnce(&mut ContextUsage)) {
+        let usage = {
+            let mut c = self.usage.lock().unwrap_or_else(|e| e.into_inner());
+            f(&mut c);
+            *c
+        };
+        self.em.emit(SessionEvent::Context { usage });
+    }
+
+    fn emit_options(&self) {
+        self.em.emit(SessionEvent::Options { effort: self.effort.clone().or_else(|| self.spec.effort.clone()), context: self.spec.context.clone() });
+    }
+
+    /// GitHub Copilot keeps a running credit total (AIC) in its session log, not in ACP. Read it
+    /// once the log has caught up with the turn.
+    fn refresh_credits(&self, after_turn: bool) {
+        if self.spec.agent != AgentKind::Copilot {
+            return;
+        }
+        let Some(sid) = self.session_id.clone() else { return };
+        let (em, usage) = (self.em.clone(), self.usage.clone());
+        tokio::spawn(async move {
+            if after_turn {
+                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+            }
+            let Some(credits) = tokio::task::spawn_blocking(move || copilot_credits(&sid)).await.ok().flatten() else { return };
+            let snapshot = {
+                let mut c = usage.lock().unwrap_or_else(|e| e.into_inner());
+                if c.credits == Some(credits) {
+                    return;
+                }
+                c.credits = Some(credits);
+                *c
+            };
+            em.emit(SessionEvent::Context { usage: snapshot });
         });
     }
 
@@ -939,5 +1056,50 @@ fn content_text(c: &Value) -> String {
         Some("resource_link") => format!("[{}]({})", c["name"].as_str().unwrap_or("link"), c["uri"].as_str().unwrap_or("")),
         Some("resource") => c["resource"]["text"].as_str().unwrap_or("").to_string(),
         _ => c.as_str().unwrap_or("").to_string(),
+    }
+}
+
+
+/// Credits (AIC) a Copilot session has used, from the last `session.usage_checkpoint` in its log.
+fn copilot_credits(session_id: &str) -> Option<f64> {
+    let home = std::env::var_os("COPILOT_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".copilot")))?;
+    copilot_credits_in(&home, session_id)
+}
+
+fn copilot_credits_in(home: &std::path::Path, session_id: &str) -> Option<f64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let path = home.join("session-state").join(session_id).join("events.jsonl");
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    // Checkpoints are the last thing written each turn; the tail is enough.
+    f.seek(SeekFrom::Start(len.saturating_sub(4 << 20))).ok()?;
+    let mut bytes = Vec::new();
+    f.take(4 << 20).read_to_end(&mut bytes).ok()?;
+    let tail = String::from_utf8_lossy(&bytes);
+    tail.lines().rev().filter(|l| l.contains("\"session.usage_checkpoint\"")).find_map(|l| {
+        let v: Value = serde_json::from_str(l).ok()?;
+        Some(v["data"]["totalNanoAiu"].as_f64()? / 1e9)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credits_come_from_the_last_usage_checkpoint() {
+        let home = std::env::temp_dir().join(format!("mothr-copilot-test-{}", std::process::id()));
+        let dir = home.join("session-state").join("abc");
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = [
+            r#"{"type":"session.usage_checkpoint","data":{"totalNanoAiu":1000000000}}"#,
+            r#"{"type":"assistant.message","data":{}}"#,
+            r#"{"type":"session.usage_checkpoint","data":{"totalNanoAiu":6244550000,"totalPremiumRequests":1}}"#,
+        ]
+        .join("\n");
+        std::fs::write(dir.join("events.jsonl"), log).unwrap();
+        assert_eq!(copilot_credits_in(&home, "abc"), Some(6.24455));
+        assert_eq!(copilot_credits_in(&home, "missing"), None);
+        let _ = std::fs::remove_dir_all(home);
     }
 }

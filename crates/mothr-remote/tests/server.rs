@@ -268,6 +268,8 @@ async fn http_auth_and_api() {
         project: "/home/u/x".into(),
         mode: PermissionMode::AcceptEdits,
         model: None,
+        effort: None,
+        context: None,
         prompt: Some("hi".into()),
     };
     let res = http

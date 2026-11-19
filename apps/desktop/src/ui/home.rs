@@ -1,8 +1,11 @@
 //! The launcher: pick an agent, a project and a permission mode, then start chatting.
 
+use super::chat::{file_chip, image_view, is_image, mime_for};
 use super::kit::*;
-use super::tokens;
+use super::options::{Style, context_menu, effort_menu, settings_for};
+use super::{clip, tokens};
 use crate::store::Store;
+use std::path::PathBuf;
 use gpui_kit::component::{
     WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -10,6 +13,7 @@ use gpui_kit::component::{
     input::{InputEvent, Textarea, TextareaState},
     menu::{DropdownMenu as _, PopupMenuItem},
     notification::Notification,
+    Sizable as _,
     v_flex,
 };
 use gpui_kit::*;
@@ -20,25 +24,33 @@ use mothr_core::*;
 pub enum HomeEvent {
     Started(SessionId),
     PickProject,
+    /// The text or attachments of the draft changed.
+    Changed,
 }
 
 impl EventEmitter<HomeEvent> for Home {}
 
 pub struct Home {
+    /// Which draft this is (the workspace keeps several).
+    pub id: u64,
     store: Entity<Store>,
     input: Entity<TextareaState>,
+    attachments: Vec<PathBuf>,
     agent: Option<AgentKind>,
     project: Option<ProjectRef>,
     /// A general chat, not tied to any project folder.
     general: bool,
     /// Model for the next chat (None = the agent's own default).
     model: Option<String>,
+    /// Reasoning effort / context window for the next chat (None = the agent's own default).
+    effort: Option<String>,
+    context: Option<String>,
     slash_sel: usize,
     _subs: Vec<Subscription>,
 }
 
 impl Home {
-    pub fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(id: u64, store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(3, 12)
@@ -50,6 +62,7 @@ impl Home {
                 InputEvent::PressEnter { shift: false, .. } => this.start(window, cx),
                 InputEvent::Change => {
                     this.slash_sel = 0;
+                    cx.emit(HomeEvent::Changed);
                     cx.notify();
                 }
                 _ => {}
@@ -62,22 +75,63 @@ impl Home {
                     }
                 })
             },
-            cx.observe(&store, |this, store, cx| {
-                // Default to the first available agent once detection finishes.
-                if this.agent.is_none() {
-                    let s = store.read(cx);
-                    let settings = s.hub.settings();
-                    let pref = settings.preferred_agent();
-                    this.agent = pref.filter(|k| s.available_agents().contains(k)).or_else(|| s.available_agents().first().copied());
-                    this.model = this.agent.and_then(|a| settings.preferred_model(a));
-                }
-                if this.project.is_none() {
-                    this.project = store.read(cx).recent.first().cloned();
-                }
+            cx.observe(&store, |this, _, cx| {
+                this.sync_defaults(cx);
                 cx.notify();
             }),
         ];
-        Self { store, input, agent: None, project: None, general: false, model: None, slash_sel: 0, _subs: subs }
+        let mut this = Self { id, store, input, attachments: vec![], agent: None, project: None, general: false, model: None, effort: None, context: None, slash_sel: 0, _subs: subs };
+        this.sync_defaults(cx);
+        this
+    }
+
+    /// Fill in the agent (and the last project) once they are known.
+    fn sync_defaults(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        if self.agent.is_none() {
+            let s = store.read(cx);
+            let settings = s.hub.settings();
+            let pref = settings.preferred_agent();
+            self.agent = pref.filter(|k| s.available_agents().contains(k)).or_else(|| s.available_agents().first().copied());
+            self.model = self.agent.and_then(|a| settings.preferred_model(a));
+            self.effort = self.agent.and_then(|a| settings.preferred_effort(a));
+            self.context = self.agent.and_then(|a| settings.preferred_context(a));
+        }
+        self.normalize_options(cx);
+        if self.project.is_none() && !self.general {
+            self.project = store.read(cx).recent.first().cloned();
+        }
+    }
+
+    /// There is something written (or attached) here.
+    pub fn has_draft(&self, cx: &App) -> bool {
+        !self.input.read(cx).value().trim().is_empty() || !self.attachments.is_empty()
+    }
+
+    /// First line of the draft, for the sidebar.
+    pub fn preview(&self, cx: &App) -> String {
+        let text = self.input.read(cx).value();
+        let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+        if line.is_empty() {
+            return match self.attachments.len() {
+                0 => String::new(),
+                1 => "1 attachment".into(),
+                n => format!("{n} attachments"),
+            };
+        }
+        let mut out: String = line.chars().take(60).collect();
+        if line.chars().count() > 60 {
+            out.push('…');
+        }
+        out
+    }
+
+    pub fn agent(&self) -> Option<AgentKind> {
+        self.agent
+    }
+
+    pub fn project_name(&self) -> String {
+        if self.general { "General".into() } else { self.project.as_ref().map(|p| p.name.clone()).unwrap_or_default() }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -99,18 +153,77 @@ impl Home {
     fn select_agent(&mut self, agent: AgentKind, cx: &mut Context<Self>) {
         if self.agent != Some(agent) {
             self.agent = Some(agent);
-            self.model = self.store.read(cx).hub.settings().preferred_model(agent);
+            let settings = self.store.read(cx).hub.settings();
+            self.model = settings.preferred_model(agent);
+            self.effort = settings.preferred_effort(agent);
+            self.context = settings.preferred_context(agent);
+            self.normalize_options(cx);
             self.store.read(cx).record_selection(agent, None);
         }
         cx.notify();
     }
 
     fn select_model(&mut self, model: Option<String>, cx: &mut Context<Self>) {
-        if let Some(agent) = self.agent {
-            self.store.read(cx).record_selection(agent, model.as_deref());
-        }
         self.model = model;
+        self.normalize_options(cx);
+        self.remember(cx);
         cx.notify();
+    }
+
+    fn select_effort(&mut self, effort: Option<String>, cx: &mut Context<Self>) {
+        self.effort = effort;
+        self.remember(cx);
+        cx.notify();
+    }
+
+    fn select_context(&mut self, context: Option<String>, cx: &mut Context<Self>) {
+        self.context = context;
+        self.remember(cx);
+        cx.notify();
+    }
+
+    /// Save the picks so the next new chat starts with them.
+    fn remember(&self, cx: &App) {
+        if let Some(agent) = self.agent {
+            let store = self.store.read(cx);
+            store.record_model(agent, self.model.as_deref());
+            store.record_options(agent, self.effort.as_deref(), self.context.as_deref());
+        }
+    }
+
+    /// Drop a reasoning / context pick the chosen model doesn't offer (once the list is known).
+    fn normalize_options(&mut self, cx: &App) {
+        let Some(agent) = self.agent else { return };
+        let models = self.store.read(cx).known_models(agent);
+        if models.is_empty() {
+            return;
+        }
+        if self.model.as_ref().is_some_and(|m| !models.iter().any(|x| &x.id == m)) {
+            self.model = None;
+        }
+        let (efforts, contexts) = settings_for(&models, self.model.as_deref());
+        if self.effort.as_ref().is_some_and(|e| !efforts.contains(e)) {
+            self.effort = None;
+        }
+        if self.context.as_ref().is_some_and(|c| !contexts.iter().any(|x| &x.id == c)) {
+            self.context = None;
+        }
+    }
+
+    /// Reasoning and context dropdowns, when the chosen model has those settings.
+    fn option_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some(agent) = self.agent else { return vec![] };
+        let models = self.store.read(cx).known_models(agent);
+        let (efforts, contexts) = settings_for(&models, self.model.as_deref());
+        let weak = cx.entity().downgrade();
+        let mut out = vec![];
+        if !efforts.is_empty() {
+            out.push(effort_menu("home-effort", efforts, self.effort.clone(), Style { allow_default: true, compact: false }, weak.clone(), |h: &mut Home, e, _, cx| h.select_effort(e, cx)).into_any_element());
+        }
+        if !contexts.is_empty() {
+            out.push(context_menu("home-context", contexts, self.context.clone(), Style { allow_default: true, compact: false }, weak, |h: &mut Home, c, _, cx| h.select_context(c, cx)).into_any_element());
+        }
+        out
     }
 
     fn model_menu_button(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -165,7 +278,20 @@ impl Home {
     }
 
     fn on_keystroke(&mut self, ev: &KeystrokeEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.input.read(cx).focus_handle(cx).is_focused(window) || ev.keystroke.modifiers.modified() {
+        if !self.input.read(cx).focus_handle(cx).is_focused(window) {
+            return;
+        }
+        let k = &ev.keystroke;
+        if k.key == "v" && k.modifiers.secondary(cx) && !k.modifiers.shift && !k.modifiers.alt {
+            // A pasted screenshot or copied file becomes an attachment; text goes to the box.
+            let pasted = clip::attachments_from_clipboard(cx);
+            if !pasted.is_empty() {
+                self.add_attachments(pasted, cx);
+                cx.stop_propagation();
+            }
+            return;
+        }
+        if k.modifiers.modified() {
             return;
         }
         let matches = self.slash_matches(cx);
@@ -184,6 +310,26 @@ impl Home {
         }
         cx.stop_propagation();
         cx.notify();
+    }
+
+    fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        for p in paths {
+            if !self.attachments.contains(&p) {
+                self.attachments.push(p);
+            }
+        }
+        cx.emit(HomeEvent::Changed);
+        cx.notify();
+    }
+
+    fn attach(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Attach".into()) });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = rx.await {
+                let _ = this.update(cx, |this, cx| this.add_attachments(paths, cx));
+            }
+        })
+        .detach();
     }
 
     /// The app-wide default permission mode (persisted in settings).
@@ -205,7 +351,7 @@ impl Home {
             window.push_notification(Notification::warning("No agent is installed. Install Claude Code, Codex, Copilot, OpenCode or Hermes."), cx);
             return;
         };
-        if text.is_empty() {
+        if text.is_empty() && self.attachments.is_empty() {
             return;
         }
         let project = match &self.project {
@@ -217,9 +363,29 @@ impl Home {
             }
         };
         let mode = self.default_mode(cx).for_agent(agent);
-        let cmd = AppCommand::NewSession { agent, kind: SessionKind::Chat, project, mode, model: self.model.clone(), prompt: Some(text) };
+        self.remember(cx);
+        // Attachments travel with the first message, so it goes as a prompt of its own.
+        let attachments: Vec<Attachment> = self.attachments.iter().map(|path| Attachment { mime: mime_for(path), path: path.clone() }).collect();
+        let prompt = if attachments.is_empty() { Some(text.clone()) } else { None };
+        let cmd = AppCommand::NewSession {
+            agent,
+            kind: SessionKind::Chat,
+            project,
+            mode,
+            model: self.model.clone(),
+            effort: self.effort.clone(),
+            context: self.context.clone(),
+            prompt,
+        };
         let id = self.store.update(cx, |s, cx| s.dispatch(cmd, window, cx));
         if let Some(id) = id {
+            if !attachments.is_empty() {
+                let command = SessionCommand::Prompt { text, attachments, delivery: Delivery::Normal };
+                self.store.update(cx, |s, cx| {
+                    s.dispatch(AppCommand::Session { id, command }, window, cx);
+                });
+            }
+            self.attachments.clear();
             self.input.update(cx, |i, cx| i.set_value("", window, cx));
             cx.emit(HomeEvent::Started(id));
         }
@@ -318,6 +484,8 @@ impl Render for Home {
         let pal = tokens::p(cx);
         let agent_button = self.agent_menu_button(cx).into_any_element();
         let model_button = self.model_menu_button(cx);
+        let option_buttons = self.option_buttons(cx);
+        let attachments = self.attachments.clone();
         let store = self.store.read(cx);
         let no_agents = store.agents_scanned && store.available_agents().is_empty();
         let general = self.general;
@@ -330,7 +498,7 @@ impl Render for Home {
             Some(p) => p.name.clone(),
             None => "Choose project".into(),
         };
-        let send_enabled = self.agent.is_some();
+        let send_enabled = self.agent.is_some() && (self.has_draft(cx));
 
         let matches = self.slash_matches(cx);
         let sel = self.slash_sel.min(matches.len().saturating_sub(1));
@@ -381,7 +549,29 @@ impl Render for Home {
             .border_color(if focused { pal.text_faint } else { pal.border_strong })
             .bg(pal.surface)
             .shadow(tokens::shadow_md(&pal))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.add_attachments(paths.paths().to_vec(), cx)))
             .when_some(slash_menu, |d, m| d.child(m))
+            .when(!attachments.is_empty(), |d| {
+                d.child(h_flex().px_3().pt_3().gap_1().flex_wrap().children(attachments.iter().enumerate().map(|(i, p)| {
+                    h_flex()
+                        .gap_1()
+                        .items_center()
+                        .child(if is_image(p) { image_view(p, format!("home-att-{i}"), 72., 56., cx).into_any_element() } else { file_chip(p, cx).into_any_element() })
+                        .child(
+                            Button::new(ElementId::Name(format!("home-rm-att-{i}").into()))
+                                .ghost()
+                                .small()
+                                .icon(icon("x"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if i < this.attachments.len() {
+                                        this.attachments.remove(i);
+                                    }
+                                    cx.emit(HomeEvent::Changed);
+                                    cx.notify();
+                                })),
+                        )
+                })))
+            })
             .child(div().px(sz(18.)).pt(sz(16.)).pb_1().text_size(sz(tokens::text::READ)).child(Textarea::new(&self.input).appearance(false)))
             .child(
                 h_flex()
@@ -399,8 +589,16 @@ impl Render for Home {
                             .flex_wrap()
                             .gap_1()
                             .items_center()
+                            .child(
+                                Button::new("home-attach")
+                                    .ghost()
+                                    .icon(icon("paperclip"))
+                                    .tooltip("Attach files or images (drop or paste them too)")
+                                    .on_click(cx.listener(|this, _, _, cx| this.attach(cx))),
+                            )
                             .child(agent_button)
                             .child(model_button)
+                            .children(option_buttons)
                             .child(
                                 Button::new("project-pick")
                                     .ghost()

@@ -200,7 +200,11 @@ impl Hub {
         for install in agents {
             let Some(transport) = install.transport.clone() else { continue };
             let agent = install.kind;
-            if self.state.read().models.contains_key(&agent) {
+            let cached_ok = self.state.read().models.get(&agent).is_some_and(|ms| {
+                // Lists cached before reasoning/context options existed are learned again.
+                !matches!(agent, AgentKind::ClaudeCode | AgentKind::Copilot) || ms.iter().any(|m| !m.efforts.is_empty() || !m.contexts.is_empty())
+            });
+            if cached_ok {
                 continue;
             }
             let h = self.clone();
@@ -213,6 +217,8 @@ impl Hub {
                     cwd: std::env::temp_dir(),
                     mode: PermissionMode::Ask.for_agent(agent),
                     model: None,
+                    effort: None,
+                    context: None,
                     resume: None,
                     resume_at: None,
                     system_prompt: None,
@@ -258,6 +264,12 @@ impl Hub {
                 s.meta.status = SessionStatus::Ended;
             }
             s.meta.remote_control = RemoteControlState::default();
+            // Older versions counted tokens billed across a whole turn as context; that can't
+            // exceed the window, so it's unknown until the agent next reports it.
+            let c = &mut s.meta.context;
+            if c.window_tokens > 0 && c.used_tokens > c.window_tokens {
+                c.used_tokens = 0;
+            }
             // Dangling questions can't be answered after a restart.
             for e in &mut s.entries {
                 match e {
@@ -404,6 +416,15 @@ impl Hub {
             _ => None,
         };
         let title = s.meta.title.clone();
+        // The first message of a chat gets a generated title.
+        let titling = match &event {
+            SessionEvent::Upsert { entry: Entry::User { text, .. } }
+                if !s.meta.titled && s.meta.parent.is_none() && s.meta.kind == SessionKind::Chat && s.entries.iter().filter(|e| matches!(e, Entry::User { .. })).count() == 1 =>
+            {
+                Some(text.clone())
+            }
+            _ => None,
+        };
         // Persist on anything except streaming deltas.
         if !matches!(event, SessionEvent::AppendText { .. }) {
             st.dirty.insert(id);
@@ -424,6 +445,9 @@ impl Hub {
             }
         }
         drop(st);
+        if let Some(text) = titling {
+            self.generate_title(id, text);
+        }
         if needs_input_now && self.settings.read().notify_needs_input {
             self.broadcast(HubEvent::Toast { level: NoticeLevel::Info, text: format!("“{title}” needs your input") });
         }
@@ -633,6 +657,8 @@ impl Hub {
             cwd: meta.project.clone(),
             mode: meta.permission_mode,
             model: meta.model.clone().or(default_model),
+            effort: meta.effort.clone(),
+            context: meta.context_limit.clone(),
             resume: if resume { meta.agent_session_id.clone() } else { None },
             resume_at,
             system_prompt,
@@ -642,7 +668,18 @@ impl Hub {
         mothr_agents::spawn(&transport, spec, self.driver_tx.clone())
     }
 
-    fn create_session(&self, agent: AgentKind, kind: SessionKind, mut project: PathBuf, mode: PermissionMode, model: Option<String>, prompt: Option<String>) -> anyhow::Result<SessionId> {
+    #[allow(clippy::too_many_arguments)]
+    fn create_session(
+        &self,
+        agent: AgentKind,
+        kind: SessionKind,
+        mut project: PathBuf,
+        mode: PermissionMode,
+        model: Option<String>,
+        effort: Option<String>,
+        context: Option<String>,
+        prompt: Option<String>,
+    ) -> anyhow::Result<SessionId> {
         let general = project.as_os_str().is_empty() && kind == SessionKind::Chat;
         if general {
             // General chats aren't tied to a project; they run from the home directory so the
@@ -657,6 +694,8 @@ impl Hub {
         anyhow::ensure!(project.is_dir(), "{} is not a folder", project.display());
         let mut meta = SessionMeta::new(agent, kind, project.clone(), mode.for_agent(agent));
         meta.model = model;
+        meta.effort = effort.filter(|e| !e.is_empty());
+        meta.context_limit = context.filter(|c| !c.is_empty());
         meta.general = general;
         let tx = self.spawn_driver(&meta, false)?;
         let id = meta.id;
@@ -676,6 +715,90 @@ impl Hub {
             let _ = tx.send(SessionCommand::Prompt { text, attachments: vec![], delivery: Delivery::Normal });
         }
         Ok(id)
+    }
+
+    /// Change the context window of a running chat. Agents fix it when they start, so the
+    /// process is restarted, resuming the same conversation.
+    fn change_context(&self, id: SessionId, context: String) -> anyhow::Result<()> {
+        let (agent, status, current) = {
+            let st = self.state.read();
+            let s = st.session(id).ok_or_else(|| anyhow::anyhow!("no such session"))?;
+            (s.meta.agent, s.meta.status.clone(), s.meta.context_limit.clone())
+        };
+        if current.as_deref() == Some(context.as_str()) {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            !matches!(status, SessionStatus::Working | SessionStatus::NeedsInput | SessionStatus::Starting),
+            "Wait for the current turn to finish before changing the context window"
+        );
+        self.update_meta(id, |m| m.context_limit = Some(context))?;
+        let Some(tx) = self.state.read().drivers.get(&id).cloned() else { return Ok(()) };
+        if !matches!(agent, AgentKind::ClaudeCode | AgentKind::Copilot) {
+            let _ = tx; // Other agents have no context choice to apply.
+            return Ok(());
+        }
+        let hub = self.me.upgrade().ok_or_else(|| anyhow::anyhow!("hub is shutting down"))?;
+        self.rt.spawn(async move {
+            let _ = tx.send(SessionCommand::Shutdown);
+            for _ in 0..160 {
+                if !hub.state.read().drivers.contains_key(&id) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            if let Err(e) = hub.resume(id) {
+                hub.broadcast(HubEvent::Toast { level: NoticeLevel::Error, text: format!("Couldn't restart the chat: {e}") });
+            }
+        });
+        Ok(())
+    }
+
+    /// Write a short title for a chat from its first message, with a small Claude model when
+    /// Claude Code is installed. Until then (and without Claude) the chat keeps the message's
+    /// first line as its title.
+    fn generate_title(&self, id: SessionId, first_message: String) {
+        let program = self.state.read().agents.iter().find_map(|a| match &a.transport {
+            Some(Transport::ClaudeStreamJson { program }) => Some(program.clone()),
+            _ => None,
+        });
+        let (Some(program), Some(hub)) = (program, self.me.upgrade()) else { return };
+        self.rt.spawn(async move {
+            let excerpt: String = first_message.chars().take(1200).collect();
+            let run = tokio::process::Command::new(&program)
+                .args([
+                    "-p",
+                    &excerpt,
+                    "--model",
+                    "haiku",
+                    "--output-format",
+                    "text",
+                    "--no-session-persistence",
+                    "--tools",
+                    "",
+                    "--disable-slash-commands",
+                    "--strict-mcp-config",
+                    "--setting-sources",
+                    "",
+                    "--system-prompt",
+                    TITLE_PROMPT,
+                ])
+                .current_dir(std::env::temp_dir())
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output();
+            let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(45), run).await else { return };
+            if !out.status.success() {
+                return;
+            }
+            let Some(title) = clean_title(&String::from_utf8_lossy(&out.stdout)) else { return };
+            let _ = hub.update_meta(id, |m| {
+                if !m.titled {
+                    m.title = title;
+                    m.titled = true;
+                }
+            });
+        });
     }
 
     fn resume(&self, id: SessionId) -> anyhow::Result<CommandTx> {
@@ -748,8 +871,8 @@ impl HubApi for Hub {
 
     fn dispatch(&self, command: AppCommand) -> anyhow::Result<Option<SessionId>> {
         match command {
-            AppCommand::NewSession { agent, kind, project, mode, model, prompt } => {
-                return self.create_session(agent, kind, project, mode, model, prompt).map(Some);
+            AppCommand::NewSession { agent, kind, project, mode, model, effort, context, prompt } => {
+                return self.create_session(agent, kind, project, mode, model, effort, context, prompt).map(Some);
             }
             AppCommand::Session { id, command } => {
                 let sub = self.state.read().session(id).and_then(|s| Some((s.meta.parent?, s.meta.subagent.as_ref()?.tool_use_id.clone())));
@@ -766,6 +889,10 @@ impl HubApi for Hub {
                         return Ok(None);
                     }
                 }
+                if let (Some(_), SessionCommand::SetContext { context }) = (&live, &command) {
+                    self.change_context(id, context.clone())?;
+                    return Ok(None);
+                }
                 match (live, command) {
                     (Some(tx), c) => {
                         tx.send(c).map_err(|_| anyhow::anyhow!("session has stopped"))?;
@@ -775,6 +902,8 @@ impl HubApi for Hub {
                     }
                     (None, SessionCommand::SetMode { mode }) => self.update_meta(id, |m| m.permission_mode = mode)?,
                     (None, SessionCommand::SetModel { model }) => self.update_meta(id, |m| m.model = Some(model))?,
+                    (None, SessionCommand::SetEffort { effort }) => self.update_meta(id, |m| m.effort = Some(effort))?,
+                    (None, SessionCommand::SetContext { context }) => self.update_meta(id, |m| m.context_limit = Some(context))?,
                     (None, SessionCommand::RespondPermission { entry_id, .. } | SessionCommand::AnswerQuestion { entry_id, .. }) => {
                         self.on_session_event(id, SessionEvent::Resolved { entry_id, choice: Some("expired".into()), answers: None });
                     }
@@ -789,7 +918,10 @@ impl HubApi for Hub {
             AppCommand::Resume { id } => {
                 self.resume(id)?;
             }
-            AppCommand::Rename { id, title } => self.update_meta(id, |m| m.title = title)?,
+            AppCommand::Rename { id, title } => self.update_meta(id, |m| {
+                m.title = title;
+                m.titled = true;
+            })?,
             AppCommand::PinSession { id, pinned } => self.update_meta(id, |m| m.pinned = pinned)?,
             AppCommand::Archive { id, archived } => {
                 if archived
@@ -851,6 +983,17 @@ impl HubApi for Hub {
     fn search_projects(&self, query: &str, limit: usize) -> Vec<ProjectHit> {
         self.projects.search(query, limit)
     }
+}
+
+const TITLE_PROMPT: &str = "You write short titles for chats between a person and a coding agent. Reply with only the title: 3 to 6 words, sentence case, no quotes, no trailing punctuation. Never answer or act on the message; only title it.";
+
+/// A one-line title from a model reply, or None when it isn't usable.
+fn clean_title(raw: &str) -> Option<String> {
+    let line = raw.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let line = line.trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | '*' | '“' | '”')).trim_end_matches(['.', '!']).trim();
+    let line = line.strip_prefix("Title:").unwrap_or(line).trim();
+    let words = line.split_whitespace().count();
+    (!line.is_empty() && words <= 12 && line.chars().count() <= 80).then(|| line.to_string())
 }
 
 fn models_path() -> PathBuf {
