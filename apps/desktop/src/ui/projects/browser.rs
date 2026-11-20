@@ -54,6 +54,13 @@ enum Loaded<T> {
     Failed(String),
 }
 
+/// Where the browser is: a folder, or an open file.
+#[derive(Clone, PartialEq, Eq)]
+enum Location {
+    Dir(String),
+    File(String),
+}
+
 /// A file on screen (the open file, or a folder's README).
 struct Doc {
     path: String,
@@ -90,6 +97,10 @@ pub struct ProjectBrowser {
     readme: Option<Doc>,
     fullscreen: bool,
     tree_open: bool,
+    /// Places visited before the current one, for the mouse's back button.
+    back_stack: Vec<Location>,
+    /// Places stepped back from, for the mouse's forward button.
+    forward_stack: Vec<Location>,
     finder: Entity<InputState>,
     finder_query: String,
     finder_hits: Vec<FileHit>,
@@ -128,6 +139,8 @@ impl ProjectBrowser {
             readme: None,
             fullscreen: false,
             tree_open: true,
+            back_stack: vec![],
+            forward_stack: vec![],
             finder,
             finder_query: String::new(),
             finder_hits: vec![],
@@ -214,7 +227,7 @@ impl ProjectBrowser {
             self.load_dir(&d, window, cx);
         }
         if let Some(path) = self.file.as_ref().map(|f| f.path.clone()) {
-            self.open_file(path, window, cx);
+            self.show_file(path, window, cx);
         }
     }
 
@@ -260,8 +273,52 @@ impl ProjectBrowser {
 
     // ------------------------------------------------------------------ navigation
 
+    fn location(&self) -> Location {
+        match &self.file {
+            Some(f) => Location::File(f.path.clone()),
+            None => Location::Dir(self.dir.clone()),
+        }
+    }
+
+    /// Remember where we are before going to `next`; a new place drops the forward history.
+    fn record(&mut self, next: Location) {
+        let here = self.location();
+        if here != next {
+            self.back_stack.push(here);
+            self.forward_stack.clear();
+        }
+    }
+
+    fn show(&mut self, loc: Location, window: &mut Window, cx: &mut Context<Self>) {
+        match loc {
+            Location::Dir(d) => self.show_dir(d, window, cx),
+            Location::File(f) => self.show_file(f, window, cx),
+        }
+    }
+
+    /// The mouse's back button: the previous place visited. False when there is none.
+    pub fn history_back(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(prev) = self.back_stack.pop() else { return false };
+        self.forward_stack.push(self.location());
+        self.show(prev, window, cx);
+        true
+    }
+
+    /// The mouse's forward button: undo a step back. False when there is nowhere to go.
+    pub fn history_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(next) = self.forward_stack.pop() else { return false };
+        self.back_stack.push(self.location());
+        self.show(next, window, cx);
+        true
+    }
+
     /// Show a folder (no file open).
     fn browse(&mut self, dir: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.record(Location::Dir(dir.clone()));
+        self.show_dir(dir, window, cx);
+    }
+
+    fn show_dir(&mut self, dir: String, window: &mut Window, cx: &mut Context<Self>) {
         self.file = None;
         if self.dir != dir {
             self.readme = None;
@@ -283,6 +340,11 @@ impl ProjectBrowser {
     }
 
     fn open_file(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.record(Location::File(path.clone()));
+        self.show_file(path, window, cx);
+    }
+
+    fn show_file(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         let dir = parent_path(&path).to_string();
         self.dir = dir.clone();
         self.content_scroll.set_offset(point(px(0.), px(0.)));
