@@ -194,7 +194,7 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 - `MOTHR_OPEN=settings|remote|picker|usage|latest|changes|designs|design|subagent|projects`: open
   a view at startup (`MOTHR_OPEN_DELAY_MS` delays it). `changes` opens the newest chat's Changes
   panel; `design` opens the newest design. `project:<path>[:<file>[:full]]` opens a project, a
-  file in it, and full screen.
+  file in it, and full screen. `image:<path>` opens the image viewer.
 - `MOTHR_DESIGN_PAGE=overview|color|type|space|elevation|component:<n>|screen:<n>`: the page a
   design opens on. `MOTHR_DESIGN_EXPORT=menu|html|storybook` opens the export menu or exports.
 - `MOTHR_DEV_REVIEW=accept|reject`: answer the first waiting edits from the Changes panel.

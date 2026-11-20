@@ -1800,8 +1800,8 @@ pub(super) fn is_image(p: &std::path::Path) -> bool {
     mime_for(p).is_some_and(|m| m.starts_with("image/"))
 }
 
-/// A rounded, clickable image preview that fits within `max_w` × `max_h`; click opens it
-/// in the system viewer.
+/// A rounded, clickable image preview that fits within `max_w` × `max_h`; click opens it in
+/// Mothr's image viewer.
 pub(super) fn image_view(path: &std::path::Path, id: String, max_w: f32, max_h: f32, cx: &App) -> impl IntoElement + use<> {
     let theme = cx.theme();
     let open = path.to_path_buf();
@@ -1812,7 +1812,7 @@ pub(super) fn image_view(path: &std::path::Path, id: String, max_w: f32, max_h: 
         .border_color(theme.border)
         .overflow_hidden()
         .cursor_pointer()
-        .on_click(move |_, _, cx| cx.open_with_system(&open))
+        .on_click(move |_, window, cx| window.dispatch_action(Box::new(super::lightbox::ViewImage { path: open.clone() }), cx))
         .child(
             img(path.to_path_buf())
                 .max_w(sz(max_w))

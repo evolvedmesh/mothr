@@ -7,6 +7,7 @@ pub mod design;
 pub mod diff;
 pub mod home;
 pub mod kit;
+pub mod lightbox;
 pub mod options;
 pub mod picker;
 pub mod projects;

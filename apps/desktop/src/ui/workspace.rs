@@ -4,6 +4,7 @@ use super::chat::{ChatEvent, ChatView};
 use super::design::{DesignPage, DesignsEvent, DesignsPage};
 use super::home::{Home, HomeEvent};
 use super::kit::*;
+use super::lightbox::{Lightbox, LightboxEvent, ViewImage};
 use super::picker::{PickerEvent, ProjectPicker};
 use super::projects::{Location, ProjectsEvent, ProjectsPage};
 use super::settings::SettingsView;
@@ -86,6 +87,10 @@ pub struct Workspace {
     picker: Option<Entity<ProjectPicker>>,
     picker_for: PickerFor,
     usage_open: bool,
+    /// The image viewer, over everything below the title bar.
+    lightbox: Option<Entity<Lightbox>>,
+    /// Where focus was before the viewer opened, to put it back.
+    lightbox_return: Option<FocusHandle>,
     route: Route,
     history: History,
     focus: FocusHandle,
@@ -178,6 +183,8 @@ impl Workspace {
             picker: None,
             picker_for: PickerFor::Chat,
             usage_open: false,
+            lightbox: None,
+            lightbox_return: None,
             route: Route::Home,
             history: History { here: Some(Place::Home), ..Default::default() },
             focus,
@@ -351,6 +358,7 @@ impl Workspace {
         self.queue_history_sync(cx);
         self.picker = None;
         self.usage_open = false;
+        self.lightbox = None;
         if route == Route::Settings && self.settings_view.is_none() {
             let store = self.store.clone();
             let remote = self.remote.clone();
@@ -491,6 +499,12 @@ impl Workspace {
             }
             Some("designs") => this.open_designs(window, cx),
             Some("projects") => this.open_projects(window, cx),
+            // MOTHR_OPEN=image:<path> opens the image viewer (for screenshots).
+            Some(p) if p.starts_with("image:") => {
+                let path = PathBuf::from(&p["image:".len()..]);
+                let ws = cx.entity();
+                window.defer(cx, move |window, cx| ws.update(cx, |ws, cx| ws.view_image(path, window, cx)));
+            }
             Some(p) if p.starts_with("project:") => {
                 // MOTHR_OPEN=project:<path>[:<file>[:full]] opens a project (and a file) for screenshots.
                 let mut parts = p["project:".len()..].splitn(3, ':');
@@ -539,6 +553,40 @@ impl Workspace {
             h.set_general(cx);
             h.focus(window, cx);
         });
+    }
+
+    /// Show an image in Mothr's viewer. In a chat you can step through all of its images.
+    fn view_image(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let mut images: Vec<PathBuf> = match self.route {
+            Route::Session(id) => self.store.read(cx).session(id).map(|s| chat_images(&s.entries)).unwrap_or_default(),
+            _ => vec![],
+        };
+        let index = match images.iter().position(|p| *p == path) {
+            Some(i) => i,
+            None => {
+                // Not part of the transcript (a composer attachment): show it on its own.
+                images = vec![path];
+                0
+            }
+        };
+        let lightbox = cx.new(|cx| Lightbox::new(images, index, cx));
+        self._subs.push(cx.subscribe_in(&lightbox, window, |this, _, ev: &LightboxEvent, window, cx| match ev {
+            LightboxEvent::Close => this.close_image(window, cx),
+        }));
+        if self.lightbox.is_none() {
+            self.lightbox_return = window.focused(cx);
+        }
+        lightbox.update(cx, |l, cx| l.focus(window, cx));
+        self.lightbox = Some(lightbox);
+        cx.notify();
+    }
+
+    fn close_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.lightbox = None;
+        if let Some(f) = self.lightbox_return.take() {
+            window.focus(&f, cx);
+        }
+        cx.notify();
     }
 
     fn open_picker(&mut self, purpose: PickerFor, window: &mut Window, cx: &mut Context<Self>) {
@@ -711,6 +759,7 @@ impl Render for Workspace {
             .bg(theme.background)
             .text_color(theme.foreground)
             .font_family(theme.font_family.clone())
+            .on_action(cx.listener(|this, a: &ViewImage, window, cx| this.view_image(a.path.clone(), window, cx)))
             .on_action(cx.listener(|this, _: &NewChat, window, cx| this.new_chat(None, window, cx)))
             .on_action(cx.listener(|this, _: &NewDesign, window, cx| this.new_design(None, window, cx)))
             .on_action(cx.listener(|this, _: &crate::NewGeneralChat, window, cx| this.new_general_chat(window, cx)))
@@ -834,9 +883,23 @@ impl Render for Workspace {
                                 .justify_center()
                                 .child(div().occlude().child(picker)),
                         )
-                    }),
+                    })
+                    .when_some(self.lightbox.clone(), |el, lightbox| el.child(div().absolute().inset_0().child(lightbox))),
             )
     }
+}
+
+/// Every image in a transcript, in order: attachments on your messages and images the agent showed.
+fn chat_images(entries: &[Entry]) -> Vec<PathBuf> {
+    let mut out = vec![];
+    for e in entries {
+        match e {
+            Entry::User { attachments, .. } => out.extend(attachments.iter().filter(|a| super::chat::is_image(&a.path)).map(|a| a.path.clone())),
+            Entry::Image { path, .. } => out.push(path.clone()),
+            _ => {}
+        }
+    }
+    out
 }
 
 impl History {
