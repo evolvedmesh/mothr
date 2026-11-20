@@ -42,7 +42,7 @@ pub enum BrowserEvent {
     /// Back to the list of projects.
     Back,
     NewChat(ProjectRef),
-    /// Full screen was entered or left.
+    /// Full screen was entered or left, or another folder or file is on screen.
     Changed,
 }
 
@@ -54,9 +54,9 @@ enum Loaded<T> {
     Failed(String),
 }
 
-/// Where the browser is: a folder, or an open file.
-#[derive(Clone, PartialEq, Eq)]
-enum Location {
+/// Where a project browser is: a folder, or an open file.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Location {
     Dir(String),
     File(String),
 }
@@ -97,10 +97,6 @@ pub struct ProjectBrowser {
     readme: Option<Doc>,
     fullscreen: bool,
     tree_open: bool,
-    /// Places visited before the current one, for the mouse's back button.
-    back_stack: Vec<Location>,
-    /// Places stepped back from, for the mouse's forward button.
-    forward_stack: Vec<Location>,
     finder: Entity<InputState>,
     finder_query: String,
     finder_hits: Vec<FileHit>,
@@ -139,8 +135,6 @@ impl ProjectBrowser {
             readme: None,
             fullscreen: false,
             tree_open: true,
-            back_stack: vec![],
-            forward_stack: vec![],
             finder,
             finder_query: String::new(),
             finder_hits: vec![],
@@ -161,6 +155,10 @@ impl ProjectBrowser {
             self.go_to(f, None, window, cx);
         }
         self.set_fullscreen(full, cx);
+    }
+
+    pub fn project_path(&self) -> PathBuf {
+        self.project.path.clone()
     }
 
     pub fn fullscreen(&self) -> bool {
@@ -227,7 +225,7 @@ impl ProjectBrowser {
             self.load_dir(&d, window, cx);
         }
         if let Some(path) = self.file.as_ref().map(|f| f.path.clone()) {
-            self.show_file(path, window, cx);
+            self.open_file(path, window, cx);
         }
     }
 
@@ -273,52 +271,27 @@ impl ProjectBrowser {
 
     // ------------------------------------------------------------------ navigation
 
-    fn location(&self) -> Location {
+    /// The folder or file on screen (the app's back/forward history records it).
+    pub fn location(&self) -> Location {
         match &self.file {
             Some(f) => Location::File(f.path.clone()),
             None => Location::Dir(self.dir.clone()),
         }
     }
 
-    /// Remember where we are before going to `next`; a new place drops the forward history.
-    fn record(&mut self, next: Location) {
-        let here = self.location();
-        if here != next {
-            self.back_stack.push(here);
-            self.forward_stack.clear();
+    /// Return to a place from the history.
+    pub fn show(&mut self, loc: Location, window: &mut Window, cx: &mut Context<Self>) {
+        if loc == self.location() {
+            return;
         }
-    }
-
-    fn show(&mut self, loc: Location, window: &mut Window, cx: &mut Context<Self>) {
         match loc {
-            Location::Dir(d) => self.show_dir(d, window, cx),
-            Location::File(f) => self.show_file(f, window, cx),
+            Location::Dir(d) => self.browse(d, window, cx),
+            Location::File(f) => self.open_file(f, window, cx),
         }
-    }
-
-    /// The mouse's back button: the previous place visited. False when there is none.
-    pub fn history_back(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(prev) = self.back_stack.pop() else { return false };
-        self.forward_stack.push(self.location());
-        self.show(prev, window, cx);
-        true
-    }
-
-    /// The mouse's forward button: undo a step back. False when there is nowhere to go.
-    pub fn history_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(next) = self.forward_stack.pop() else { return false };
-        self.back_stack.push(self.location());
-        self.show(next, window, cx);
-        true
     }
 
     /// Show a folder (no file open).
     fn browse(&mut self, dir: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.record(Location::Dir(dir.clone()));
-        self.show_dir(dir, window, cx);
-    }
-
-    fn show_dir(&mut self, dir: String, window: &mut Window, cx: &mut Context<Self>) {
         self.file = None;
         if self.dir != dir {
             self.readme = None;
@@ -336,15 +309,11 @@ impl ProjectBrowser {
         for a in ancestors {
             self.load_dir(&a, window, cx);
         }
+        cx.emit(BrowserEvent::Changed);
         cx.notify();
     }
 
     fn open_file(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.record(Location::File(path.clone()));
-        self.show_file(path, window, cx);
-    }
-
-    fn show_file(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         let dir = parent_path(&path).to_string();
         self.dir = dir.clone();
         self.content_scroll.set_offset(point(px(0.), px(0.)));
@@ -353,6 +322,7 @@ impl ProjectBrowser {
             self.load_dir(&a, window, cx);
         }
         self.reveal_in_tree(&dir, cx);
+        cx.emit(BrowserEvent::Changed);
         cx.notify();
     }
 

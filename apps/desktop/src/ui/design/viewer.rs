@@ -24,13 +24,15 @@ use std::rc::Rc;
 
 pub enum ViewerEvent {
     Back,
+    /// Another page is on screen.
+    Moved,
     OpenChat(SessionId),
 }
 
 impl EventEmitter<ViewerEvent> for DesignViewer {}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) enum Page {
+pub enum Page {
     Overview,
     Color,
     Type,
@@ -163,6 +165,7 @@ impl DesignViewer {
         self.page = page;
         self.zoom = None;
         self.scroll.set_offset(point(px(0.), px(0.)));
+        cx.emit(ViewerEvent::Moved);
         cx.notify();
     }
 

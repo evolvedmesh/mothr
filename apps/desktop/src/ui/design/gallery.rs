@@ -2,7 +2,7 @@
 
 use super::canvas::Renderer;
 use super::composer::{ComposerEvent, DesignComposer};
-use super::viewer::{DesignViewer, ViewerEvent};
+use super::viewer::{DesignViewer, Page, ViewerEvent};
 use super::*;
 use crate::store::StoreEvent;
 use crate::ui::kit::*;
@@ -143,6 +143,8 @@ impl DesignsPage {
                 cx.notify();
             }
             ViewerEvent::OpenChat(id) => cx.emit(DesignsEvent::OpenChat(*id)),
+            // Lets the app's back/forward history see the page change.
+            ViewerEvent::Moved => cx.notify(),
         }));
         self.viewers.insert(project, viewer.clone());
         viewer
@@ -179,6 +181,35 @@ impl DesignsPage {
             }
             c.focus(window, cx);
         });
+        self.refresh(cx);
+        cx.notify();
+    }
+
+    /// Where the page is, for the app's back/forward history: the gallery (`None`) or a page
+    /// of one design.
+    pub fn place(&self, cx: &App) -> Option<(PathBuf, Page)> {
+        let v = self.open.as_ref()?.read(cx);
+        Some((v.project.clone(), v.page))
+    }
+
+    /// Return to a place from the history.
+    pub fn restore(&mut self, place: Option<(PathBuf, Page)>, window: &mut Window, cx: &mut Context<Self>) {
+        match place {
+            Some((project, page)) => {
+                let viewer = self.viewer_for(project, cx);
+                viewer.update(cx, |v, cx| {
+                    if v.page != page {
+                        v.go(page, cx);
+                    }
+                    v.focus(window, cx);
+                });
+                self.open = Some(viewer);
+            }
+            None => {
+                self.open = None;
+                self.composer.update(cx, |c, cx| c.focus(window, cx));
+            }
+        }
         self.refresh(cx);
         cx.notify();
     }

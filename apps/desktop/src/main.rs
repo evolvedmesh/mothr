@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 actions!(
     mothr,
-    [NewChat, NewDesign, NewGeneralChat, OpenProjectPalette, OpenProjects, ToggleSidebar, OpenSettings, FocusComposer, Quit]
+    [NewChat, NewDesign, NewGeneralChat, OpenProjectPalette, OpenProjects, ToggleSidebar, OpenSettings, FocusComposer, GoBack, GoForward, Quit]
 );
 
 #[cfg(target_os = "macos")]
@@ -83,6 +83,15 @@ fn main() {
                 KeyBinding::new(k!(","), OpenSettings, None),
                 KeyBinding::new(k!("l"), FocusComposer, None),
                 KeyBinding::new(k!("q"), Quit, None),
+                // Back/forward through the places visited (the mouse's side buttons do the same).
+                #[cfg(target_os = "macos")]
+                KeyBinding::new("cmd-[", GoBack, None),
+                #[cfg(target_os = "macos")]
+                KeyBinding::new("cmd-]", GoForward, None),
+                #[cfg(not(target_os = "macos"))]
+                KeyBinding::new("alt-left", GoBack, None),
+                #[cfg(not(target_os = "macos"))]
+                KeyBinding::new("alt-right", GoForward, None),
             ]);
             cx.on_action(|_: &Quit, cx| cx.quit());
 

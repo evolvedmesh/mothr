@@ -8,6 +8,7 @@ mod pages;
 mod viewer;
 
 pub use gallery::{DesignsEvent, DesignsPage};
+pub use viewer::Page as DesignPage;
 
 use crate::store::Store;
 use gpui_kit::*;

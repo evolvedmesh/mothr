@@ -1,18 +1,18 @@
 //! The root view: title bar, sidebar, routed main area and overlays.
 
 use super::chat::{ChatEvent, ChatView};
-use super::design::{DesignsEvent, DesignsPage};
+use super::design::{DesignPage, DesignsEvent, DesignsPage};
 use super::home::{Home, HomeEvent};
 use super::kit::*;
 use super::picker::{PickerEvent, ProjectPicker};
-use super::projects::{ProjectsEvent, ProjectsPage};
+use super::projects::{Location, ProjectsEvent, ProjectsPage};
 use super::settings::SettingsView;
 use super::sidebar::{DraftRow, Sidebar, SidebarEvent};
 use super::usage;
 use super::{theme, tokens};
 use crate::remote::RemoteController;
 use crate::store::{Store, StoreEvent};
-use crate::{FocusComposer, NewChat, NewDesign, OpenProjectPalette, OpenProjects, OpenSettings, ToggleSidebar};
+use crate::{FocusComposer, GoBack, GoForward, NewChat, NewDesign, OpenProjectPalette, OpenProjects, OpenSettings, ToggleSidebar};
 use gpui_kit::component::{
     ActiveTheme as _, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -37,6 +37,29 @@ pub enum Route {
     Designs,
     Projects,
     Settings,
+}
+
+/// A place in the app, as the back/forward history remembers it.
+#[derive(Clone, PartialEq, Debug)]
+enum Place {
+    Home,
+    Session(SessionId),
+    Settings,
+    /// The gallery, or one page of a design.
+    Designs(Option<(PathBuf, DesignPage)>),
+    /// The list, or a folder or file of one project.
+    Projects(Option<(PathBuf, Location)>),
+}
+
+/// Back/forward through the places visited, like a browser.
+#[derive(Default)]
+struct History {
+    back: Vec<Place>,
+    forward: Vec<Place>,
+    /// Where we are, as last recorded.
+    here: Option<Place>,
+    /// A sync is queued for the end of the current update.
+    sync_queued: bool,
 }
 
 /// Who asked for the project picker.
@@ -64,6 +87,7 @@ pub struct Workspace {
     picker_for: PickerFor,
     usage_open: bool,
     route: Route,
+    history: History,
     focus: FocusHandle,
     _subs: Vec<Subscription>,
     _ticker: Task<()>,
@@ -95,8 +119,12 @@ impl Workspace {
         subs.push(cx.subscribe_in(&projects, window, |this, _, ev: &ProjectsEvent, window, cx| match ev {
             ProjectsEvent::NewChatIn(p) => this.new_chat(Some(p.clone()), window, cx),
         }));
-        // Full screen in a project hides the sidebar.
-        subs.push(cx.observe(&projects, |_, _, cx| cx.notify()));
+        // Full screen in a project hides the sidebar; moving around in it is history.
+        subs.push(cx.observe(&projects, |this, _, cx| {
+            this.queue_history_sync(cx);
+            cx.notify();
+        }));
+        subs.push(cx.observe(&designs, |this, _, cx| this.queue_history_sync(cx)));
         subs.push(Self::watch_home(&home, window, cx));
         subs.push(cx.subscribe_in(&store, window, |this, _, ev: &StoreEvent, window, cx| match ev {
             StoreEvent::Toast(level, text) => {
@@ -109,6 +137,7 @@ impl Workspace {
             }
             StoreEvent::Removed(id) => {
                 this.chats.remove(id);
+                this.history.forget(&Place::Session(*id));
                 if this.route == Route::Session(*id) {
                     this.navigate(Route::Home, window, cx);
                 }
@@ -150,6 +179,7 @@ impl Workspace {
             picker_for: PickerFor::Chat,
             usage_open: false,
             route: Route::Home,
+            history: History { here: Some(Place::Home), ..Default::default() },
             focus,
             _subs: subs,
             _ticker: ticker,
@@ -256,8 +286,69 @@ impl Workspace {
         .detach();
     }
 
+    /// Where we are now, in history terms.
+    fn place(&self, cx: &App) -> Place {
+        match self.route {
+            Route::Home => Place::Home,
+            Route::Session(id) => Place::Session(id),
+            Route::Settings => Place::Settings,
+            Route::Designs => Place::Designs(self.designs.read(cx).place(cx)),
+            Route::Projects => Place::Projects(self.projects.read(cx).place(cx)),
+        }
+    }
+
+    /// Record the place once the current update has settled, so a move that changes the
+    /// route and then the page within it is one step, not two.
+    fn queue_history_sync(&mut self, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.history.sync_queued, true) {
+            return;
+        }
+        let this = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = this.update(cx, |this, cx| {
+                this.history.sync_queued = false;
+                let place = this.place(cx);
+                this.history.arrive(place);
+            });
+        });
+    }
+
+    /// The mouse's back/forward buttons (and Alt+←/→, Cmd+[/] on macOS).
+    fn go_history(&mut self, dir: NavigationDirection, window: &mut Window, cx: &mut Context<Self>) {
+        let here = self.place(cx);
+        let (from, to) = match dir {
+            NavigationDirection::Back => (&mut self.history.back, &mut self.history.forward),
+            NavigationDirection::Forward => (&mut self.history.forward, &mut self.history.back),
+        };
+        let Some(target) = from.pop() else { return };
+        to.push(here);
+        self.restore(target, window, cx);
+        // Whatever we actually landed on is "here" now, so the step isn't recorded again.
+        self.history.here = Some(self.place(cx));
+    }
+
+    fn restore(&mut self, place: Place, window: &mut Window, cx: &mut Context<Self>) {
+        match place {
+            Place::Home => {
+                self.navigate(Route::Home, window, cx);
+                self.home.update(cx, |h, cx| h.focus(window, cx));
+            }
+            Place::Session(id) => self.open_session(id, window, cx),
+            Place::Settings => self.navigate(Route::Settings, window, cx),
+            Place::Designs(p) => {
+                self.navigate(Route::Designs, window, cx);
+                self.designs.update(cx, |d, cx| d.restore(p, window, cx));
+            }
+            Place::Projects(p) => {
+                self.navigate(Route::Projects, window, cx);
+                self.projects.update(cx, |pr, cx| pr.restore(p, window, cx));
+            }
+        }
+    }
+
     fn navigate(&mut self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
         self.route = route;
+        self.queue_history_sync(cx);
         self.picker = None;
         self.usage_open = false;
         if route == Route::Settings && self.settings_view.is_none() {
@@ -627,6 +718,15 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.navigate(Route::Settings, window, cx)))
             .on_action(cx.listener(|this, _: &OpenProjects, window, cx| this.open_projects(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
+            .on_action(cx.listener(|this, _: &GoBack, window, cx| this.go_history(NavigationDirection::Back, window, cx)))
+            .on_action(cx.listener(|this, _: &GoForward, window, cx| this.go_history(NavigationDirection::Forward, window, cx)))
+            // Capture phase, so chats, viewers and inputs can't swallow the side buttons.
+            .capture_any_mouse_down(cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                if let MouseButton::Navigate(dir) = ev.button {
+                    cx.stop_propagation();
+                    this.go_history(dir, window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &FocusComposer, window, cx| match this.route {
                 Route::Session(id) => {
                     if let Some(c) = this.chats.get(&id).cloned() {
@@ -736,5 +836,52 @@ impl Render for Workspace {
                         )
                     }),
             )
+    }
+}
+
+impl History {
+    /// Note the place we're at; a new place pushes the old one and drops the forward steps.
+    fn arrive(&mut self, place: Place) {
+        match self.here.replace(place.clone()) {
+            Some(prev) if prev != place => {
+                self.back.push(prev);
+                self.forward.clear();
+            }
+            _ => {}
+        }
+    }
+
+    /// Drop a place that no longer exists (a deleted chat).
+    fn forget(&mut self, place: &Place) {
+        for stack in [&mut self.back, &mut self.forward] {
+            stack.retain(|p| p != place);
+            stack.dedup();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{History, Place};
+
+    #[test]
+    fn history_records_new_places_and_drops_forward_steps() {
+        let mut h = History { here: Some(Place::Home), ..Default::default() };
+        h.arrive(Place::Home);
+        assert!(h.back.is_empty(), "staying put isn't a step");
+        h.arrive(Place::Settings);
+        h.arrive(Place::Projects(None));
+        assert_eq!(h.back, vec![Place::Home, Place::Settings]);
+        h.forward.push(Place::Designs(None));
+        h.arrive(Place::Home);
+        assert!(h.forward.is_empty(), "a new place drops the forward steps");
+        assert_eq!(h.back, vec![Place::Home, Place::Settings, Place::Projects(None)]);
+    }
+
+    #[test]
+    fn forgetting_a_place_collapses_repeats() {
+        let mut h = History { back: vec![Place::Home, Place::Settings, Place::Home], ..Default::default() };
+        h.forget(&Place::Settings);
+        assert_eq!(h.back, vec![Place::Home]);
     }
 }

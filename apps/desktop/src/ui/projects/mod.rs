@@ -3,7 +3,7 @@
 mod browser;
 mod outline;
 
-pub use browser::{BrowserEvent, ProjectBrowser};
+pub use browser::{BrowserEvent, Location, ProjectBrowser};
 
 use crate::store::Store;
 use crate::ui::kit::*;
@@ -55,8 +55,6 @@ pub struct ProjectsPage {
     seen: (Option<usize>, Vec<PathBuf>),
     browsers: HashMap<PathBuf, Entity<ProjectBrowser>>,
     open: Option<Entity<ProjectBrowser>>,
-    /// The project last left for the list, which the mouse's forward button reopens.
-    left: Option<Entity<ProjectBrowser>>,
     _subs: Vec<Subscription>,
 }
 
@@ -90,7 +88,6 @@ impl ProjectsPage {
             seen: (None, vec![]),
             browsers: HashMap::new(),
             open: None,
-            left: None,
             _subs: subs,
         };
         this.run_search(cx);
@@ -111,7 +108,7 @@ impl ProjectsPage {
 
     /// Back to the list of projects.
     pub fn show_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.left = self.open.take().or(self.left.take());
+        self.open = None;
         self.run_search(cx);
         self.search.update(cx, |i, cx| i.focus(window, cx));
         cx.notify();
@@ -170,30 +167,29 @@ impl ProjectsPage {
         };
         browser.update(cx, |b, cx| b.focus(window, cx));
         self.open = Some(browser);
-        self.left = None;
         cx.notify();
     }
 
-    /// The mouse's back and forward buttons: step through the open project's history, back
-    /// out to the list when it runs out, and forward again into the project just left.
-    fn navigate(&mut self, dir: NavigationDirection, window: &mut Window, cx: &mut Context<Self>) {
-        match (dir, self.open.clone()) {
-            (NavigationDirection::Back, Some(b)) => {
-                if !b.update(cx, |b, cx| b.history_back(window, cx)) {
-                    self.show_list(window, cx);
-                }
+    /// Where the page is, for the app's back/forward history: the list (`None`) or a place in
+    /// one project.
+    pub fn place(&self, cx: &App) -> Option<(PathBuf, Location)> {
+        let b = self.open.as_ref()?.read(cx);
+        Some((b.project_path(), b.location()))
+    }
+
+    /// Return to a place from the history.
+    pub fn restore(&mut self, place: Option<(PathBuf, Location)>, window: &mut Window, cx: &mut Context<Self>) {
+        let browser = place.as_ref().and_then(|(path, _)| self.browsers.get(path).cloned());
+        match (browser, place) {
+            (Some(b), Some((_, loc))) => {
+                b.update(cx, |b, cx| {
+                    b.show(loc, window, cx);
+                    b.focus(window, cx);
+                });
+                self.open = Some(b);
+                cx.notify();
             }
-            (NavigationDirection::Forward, Some(b)) => {
-                b.update(cx, |b, cx| b.history_forward(window, cx));
-            }
-            (NavigationDirection::Back, None) => {}
-            (NavigationDirection::Forward, None) => {
-                if let Some(b) = self.left.take() {
-                    b.update(cx, |b, cx| b.focus(window, cx));
-                    self.open = Some(b);
-                    cx.notify();
-                }
-            }
+            _ => self.show_list(window, cx),
         }
     }
 
@@ -425,19 +421,9 @@ impl ProjectsPage {
 
 impl Render for ProjectsPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let content = match self.open.clone() {
-            Some(b) => b.into_any_element(),
+        match self.open.clone() {
+            Some(b) => div().size_full().child(b).into_any_element(),
             None => self.render_list(cx).into_any_element(),
-        };
-        // Capture phase, so viewers and inputs inside can't swallow the side buttons.
-        div()
-            .size_full()
-            .capture_any_mouse_down(cx.listener(|this, ev: &MouseDownEvent, window, cx| {
-                if let MouseButton::Navigate(dir) = ev.button {
-                    cx.stop_propagation();
-                    this.navigate(dir, window, cx);
-                }
-            }))
-            .child(content)
+        }
     }
 }
