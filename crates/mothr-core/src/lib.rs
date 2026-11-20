@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod config;
 pub mod diff;
+pub mod files;
 pub mod hub;
 pub mod session;
 pub mod usage;
@@ -10,6 +11,7 @@ pub mod usage;
 pub use agent::*;
 pub use config::*;
 pub use diff::*;
+pub use files::*;
 pub use hub::*;
 pub use session::*;
 pub use usage::*;

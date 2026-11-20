@@ -94,6 +94,20 @@ impl HubApi for FakeHub {
             })
             .collect()
     }
+    fn list_dir(&self, project: &std::path::Path, dir: &str) -> anyhow::Result<DirListing> {
+        if project != std::path::Path::new("/home/u/shep") || !dir.is_empty() {
+            anyhow::bail!("no such folder");
+        }
+        Ok(DirListing {
+            path: String::new(),
+            entries: vec![FileEntry { name: "README.md".into(), path: "README.md".into(), dir: false, size: 8 }],
+            truncated: false,
+            readme: Some("README.md".into()),
+        })
+    }
+    fn read_file(&self, _project: &std::path::Path, file: &str) -> anyhow::Result<FileContent> {
+        Ok(FileContent { path: file.into(), size: 8, language: language_for(file).into(), text: Some("# Shep\n".into()), truncated: false })
+    }
 }
 
 async fn start(hub: Arc<FakeHub>, port: u16) -> (RemoteServer, String, String) {
@@ -260,6 +274,45 @@ async fn http_auth_and_api() {
         .unwrap();
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].project.name, "shep0");
+
+    // Project files.
+    let listing: DirListing = http
+        .get(format!("{base}api/projects/files"))
+        .query(&[("project", "/home/u/shep"), ("path", "")])
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listing.readme.as_deref(), Some("README.md"));
+    let file: FileContent = http
+        .get(format!("{base}api/projects/file"))
+        .query(&[("project", "/home/u/shep"), ("path", "README.md")])
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(file.is_markdown());
+    let res = http
+        .get(format!("{base}api/projects/files"))
+        .query(&[("project", "/elsewhere"), ("path", "")])
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let res = http
+        .get(format!("{base}api/projects/files"))
+        .query(&[("project", "/home/u/shep")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
     // Commands.
     let cmd = AppCommand::NewSession {

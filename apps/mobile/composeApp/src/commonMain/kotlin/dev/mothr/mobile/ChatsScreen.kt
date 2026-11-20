@@ -48,6 +48,7 @@ import dev.mothr.client.ConnectionState
 import dev.mothr.mobile.resources.Res
 import dev.mothr.mobile.resources.ic_bell
 import dev.mothr.mobile.resources.ic_check
+import dev.mothr.mobile.resources.ic_folder_git_2
 import dev.mothr.mobile.resources.ic_chevron_down
 import dev.mothr.mobile.resources.ic_layers
 import dev.mothr.mobile.resources.ic_monitor
@@ -125,6 +126,7 @@ private fun Header(model: AppModel) {
             Text("Chats", style = type.display)
             ComputerSwitcher(model)
         }
+        IconBtn(Res.drawable.ic_folder_git_2) { model.showProjects = true }
         UsageButton(model)
         Box {
             IconBtn(Res.drawable.ic_settings_2) { menu = true }

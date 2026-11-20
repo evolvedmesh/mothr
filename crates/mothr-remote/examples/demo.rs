@@ -403,6 +403,20 @@ impl HubApi for DemoHub {
             .take(limit)
             .collect()
     }
+
+    // Browsing serves this repository as the "mothr" project, so the Projects screens have
+    // real files to show.
+    fn list_dir(&self, project: &std::path::Path, dir: &str) -> anyhow::Result<DirListing> {
+        mothr_projects::browse::list_dir(&demo_root(project)?, dir)
+    }
+
+    fn read_file(&self, project: &std::path::Path, file: &str) -> anyhow::Result<FileContent> {
+        mothr_projects::browse::read_file(&demo_root(project)?, file)
+    }
+
+    fn find_files(&self, project: &std::path::Path, query: &str, limit: usize) -> anyhow::Result<Vec<FileHit>> {
+        mothr_projects::browse::find_files(&demo_root(project)?, query, limit)
+    }
 }
 
 static HUB: std::sync::OnceLock<Arc<DemoHub>> = std::sync::OnceLock::new();
@@ -555,4 +569,12 @@ async fn main() -> anyhow::Result<()> {
     tokio::signal::ctrl_c().await?;
     server.stop().await;
     Ok(())
+}
+
+/// The folder the demo serves for a project: this repository for "mothr", nothing else.
+fn demo_root(project: &std::path::Path) -> anyhow::Result<PathBuf> {
+    if project != std::path::Path::new("/home/me/projects/mothr") {
+        anyhow::bail!("The demo only has files for the mothr project");
+    }
+    Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
 }

@@ -54,6 +54,26 @@ impl HubApi for FakeHub {
             display_path: format!("~/{query}"),
         }]
     }
+    fn list_dir(&self, _project: &std::path::Path, dir: &str) -> anyhow::Result<DirListing> {
+        if dir == "missing" {
+            anyhow::bail!("“missing” doesn't exist");
+        }
+        Ok(DirListing {
+            path: dir.into(),
+            entries: vec![
+                FileEntry { name: "src".into(), path: "src".into(), dir: true, size: 0 },
+                FileEntry { name: "README.md".into(), path: "README.md".into(), dir: false, size: 2048 },
+            ],
+            truncated: false,
+            readme: Some("README.md".into()),
+        })
+    }
+    fn read_file(&self, _project: &std::path::Path, file: &str) -> anyhow::Result<FileContent> {
+        Ok(FileContent { path: file.into(), size: 12, language: language_for(file).into(), text: Some("# Hi\n\nThere\n".into()), truncated: false })
+    }
+    fn find_files(&self, _project: &std::path::Path, _query: &str, _limit: usize) -> anyhow::Result<Vec<FileHit>> {
+        Ok(vec![FileHit { path: "src/ui/sidebar.rs".into(), indices: vec![7, 9, 10] }])
+    }
 }
 
 fn wait_until(client: &MothrClient, what: &str, mut ok: impl FnMut(&MothrClient) -> bool) {
@@ -98,6 +118,7 @@ fn pairs_streams_and_sends_commands() {
     assert!(uuid::Uuid::parse_str(&new_id).is_ok());
     let hits = client.search_projects("web".into()).unwrap();
     assert_eq!(hits[0].display_path, "~/web");
+    assert_eq!(client.find_projects("web".into(), 500).unwrap()[0].name, "web");
     {
         let d = hub.dispatched.lock().unwrap();
         assert!(matches!(&d[0], AppCommand::Session { command: SessionCommand::Prompt { delivery: mothr_core::Delivery::Steer, .. }, .. }));
@@ -108,6 +129,20 @@ fn pairs_streams_and_sends_commands() {
         ));
     }
     assert!(matches!(client.send(id.to_string(), "  ".into(), Delivery::Normal), Err(ClientError::Invalid { .. })));
+
+    // Project files.
+    let dir = client.list_dir("/home/u/web".into(), String::new()).unwrap();
+    assert!(dir.entries[0].dir);
+    assert!(dir.entries[1].markdown);
+    assert_eq!(dir.entries[1].size_label, "2.0 KB");
+    let file = client.read_file("/home/u/web".into(), "README.md".into()).unwrap();
+    assert!(file.markdown);
+    assert_eq!(file.name, "README.md");
+    assert_eq!(file.line_count, 3);
+    let found = client.find_files("/home/u/web".into(), "sb".into()).unwrap();
+    assert_eq!((found[0].name.as_str(), found[0].folder.as_str()), ("sidebar.rs", "src/ui"));
+    assert_eq!(found[0].name_indices, vec![0, 2, 3]);
+    assert_eq!(client.list_dir("/home/u/web".into(), "missing".into()), Err(ClientError::Rejected { reason: "“missing” doesn't exist".into() }));
 
     // A wrong token is reported as unauthorized, not retried forever.
     let bad = MothrClient::new(link.replace(&token, "wrong-token-wrong-token")).unwrap();

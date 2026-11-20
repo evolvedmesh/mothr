@@ -38,12 +38,14 @@ fun App() {
                 model.client == null || model.addingComputer -> "pair"
                 model.showNewChat -> "new"
                 model.stack.isNotEmpty() -> "chat"
+                model.openProject != null -> "project"
+                model.showProjects -> "projects"
                 else -> "chats"
             }
             AnimatedContent(
                 targetState = screen,
                 transitionSpec = {
-                    val forward = targetState == "chat"
+                    val forward = depth(targetState) > depth(initialState)
                     if (targetState == "new" || initialState == "new") {
                         // New chat rises over the list, like a compose window.
                         val rising = targetState == "new"
@@ -58,16 +60,20 @@ fun App() {
                     "pair" -> PairScreen(model)
                     "new" -> NewChatScreen(model)
                     "chats" -> ChatsScreen(model)
+                    "projects" -> ProjectsScreen(model)
+                    "project" -> ProjectScreen(model)
                     else -> ChatScreen(model)
                 }
             }
 
-            BackHandler(enabled = model.stack.isNotEmpty() || model.showNewChat || model.showUsage || model.addingComputer) {
+            val inProjects = model.showProjects || model.openProject != null
+            BackHandler(enabled = model.stack.isNotEmpty() || model.showNewChat || model.showUsage || model.addingComputer || inProjects) {
                 when {
                     model.addingComputer -> model.cancelAdding()
                     model.showNewChat -> model.showNewChat = false
                     model.showUsage -> model.showUsage = false
-                    else -> model.back()
+                    model.stack.isNotEmpty() -> model.back()
+                    else -> model.projectBack()
                 }
             }
 
@@ -94,4 +100,13 @@ fun App() {
             }
         }
     }
+}
+
+/** How deep a screen sits, so moving deeper slides in from the right. */
+private fun depth(screen: String) = when (screen) {
+    "chats" -> 0
+    "projects" -> 1
+    "project" -> 2
+    "chat" -> 3
+    else -> 0
 }

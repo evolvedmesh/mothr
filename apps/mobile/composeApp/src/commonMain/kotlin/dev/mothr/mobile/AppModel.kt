@@ -12,6 +12,9 @@ import dev.mothr.client.ChatGroup
 import dev.mothr.client.ClientException
 import dev.mothr.client.ConnectionInfo
 import dev.mothr.client.ConnectionState
+import dev.mothr.client.DirView
+import dev.mothr.client.FileHitView
+import dev.mothr.client.FileView
 import dev.mothr.client.MothrClient
 import dev.mothr.client.ProjectView
 import dev.mothr.client.UsageView
@@ -107,6 +110,20 @@ class AppModel(private val scope: CoroutineScope) {
     var newChatDraft by mutableStateOf("")
     var creatingChat by mutableStateOf(false)
         private set
+
+    /** The Projects list is open. */
+    var showProjects by mutableStateOf(false)
+
+    /** The project being browsed, the folder on screen ("" is its root) and the open file. */
+    var openProject: ProjectView? by mutableStateOf(null)
+        private set
+    var projectDir by mutableStateOf("")
+        private set
+    var projectFile: String? by mutableStateOf(null)
+        private set
+
+    /** The project a "New chat here" starts in; taken once by the new-chat screen. */
+    private var newChatProject: ProjectView? = null
 
     /** The pairing screen is open on top of an already paired phone. */
     var addingComputer by mutableStateOf(false)
@@ -346,6 +363,8 @@ class AppModel(private val scope: CoroutineScope) {
         query = ""
         showNewChat = false
         showUsage = false
+        showProjects = false
+        closeProject()
     }
 
     /** Give a computer a name on this phone; a blank name goes back to the desktop's own. */
@@ -540,6 +559,70 @@ class AppModel(private val scope: CoroutineScope) {
         } catch (e: Throwable) {
             toast = e.friendly()
             emptyList()
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Projects
+
+    fun openProject(project: ProjectView) {
+        openProject = project
+        projectDir = ""
+        projectFile = null
+    }
+
+    fun closeProject() {
+        openProject = null
+        projectDir = ""
+        projectFile = null
+    }
+
+    /** Show a folder of the open project. */
+    fun browse(dir: String) {
+        projectDir = dir
+        projectFile = null
+    }
+
+    fun openFile(path: String) {
+        projectDir = path.substringBeforeLast('/', "")
+        projectFile = path
+    }
+
+    /** One step back: file → its folder → the parent folder → the project list → chats. */
+    fun projectBack() {
+        when {
+            projectFile != null -> projectFile = null
+            projectDir.isNotEmpty() -> projectDir = projectDir.substringBeforeLast('/', "")
+            openProject != null -> closeProject()
+            else -> showProjects = false
+        }
+    }
+
+    /** Start a chat in [project] from its page. */
+    fun newChatIn(project: ProjectView) {
+        newChatProject = project
+        showNewChat = true
+    }
+
+    fun takeNewChatProject(): ProjectView? = newChatProject.also { newChatProject = null }
+
+    /** Every indexed project, best matches first. */
+    suspend fun findProjects(query: String): Result<List<ProjectView>> = load { findProjects(query, 2000u) }
+
+    suspend fun listDir(project: ProjectView, dir: String): Result<DirView> = load { listDir(project.path, dir) }
+
+    suspend fun readFile(project: ProjectView, path: String): Result<FileView> = load { readFile(project.path, path) }
+
+    suspend fun findFiles(project: ProjectView, query: String): List<FileHitView> =
+        load { findFiles(project.path, query) }.getOrDefault(emptyList())
+
+    /** A blocking client call off the main thread; the error reads well on screen. */
+    private suspend fun <T> load(block: MothrClient.() -> T): Result<T> {
+        val c = client ?: return Result.failure(IllegalStateException("Not connected"))
+        return try {
+            Result.success(withContext(Dispatchers.IO) { c.block() })
+        } catch (e: Throwable) {
+            Result.failure(IllegalStateException(e.friendly()))
         }
     }
 

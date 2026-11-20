@@ -40,6 +40,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/snapshot", get(snapshot))
         .route("/api/sessions/{id}", get(session))
         .route("/api/projects", get(projects))
+        .route("/api/projects/files", get(project_files))
+        .route("/api/projects/file", get(project_file))
+        .route("/api/projects/find", get(project_find))
         .route("/api/images/{name}", get(image))
         .route("/api/command", post(command))
         .route("/api/ws", get(ws_upgrade))
@@ -247,7 +250,7 @@ struct ProjectsQuery {
 }
 
 async fn projects(State(st): State<AppState>, Query(q): Query<ProjectsQuery>) -> Response {
-    let limit = q.limit.unwrap_or(20).clamp(1, 200);
+    let limit = q.limit.unwrap_or(20).clamp(1, 2000);
     let hub = st.hub.clone();
     match tokio::task::spawn_blocking(move || hub.search_projects(&q.q, limit)).await {
         Ok(hits) => Json(hits).into_response(),
@@ -257,6 +260,48 @@ async fn projects(State(st): State<AppState>, Query(q): Query<ProjectsQuery>) ->
         )
             .into_response(),
     }
+}
+
+#[derive(Deserialize)]
+struct BrowseQuery {
+    /// The project's absolute path.
+    project: std::path::PathBuf,
+    /// Relative to the project root, `/`-separated.
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    q: String,
+    limit: Option<usize>,
+}
+
+/// Run a blocking project-browsing call and turn its result into a response.
+async fn browse<T: Serialize + Send + 'static>(
+    f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+) -> Response {
+    match tokio::task::spawn_blocking(f).await {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": format!("{e:#}") }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "ok": false, "error": e.to_string() }))).into_response(),
+    }
+}
+
+/// One folder of a project.
+async fn project_files(State(st): State<AppState>, Query(q): Query<BrowseQuery>) -> Response {
+    let hub = st.hub.clone();
+    browse(move || hub.list_dir(&q.project, &q.path)).await
+}
+
+/// One file of a project.
+async fn project_file(State(st): State<AppState>, Query(q): Query<BrowseQuery>) -> Response {
+    let hub = st.hub.clone();
+    browse(move || hub.read_file(&q.project, &q.path)).await
+}
+
+/// Fuzzy-find files of a project.
+async fn project_find(State(st): State<AppState>, Query(q): Query<BrowseQuery>) -> Response {
+    let hub = st.hub.clone();
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    browse(move || hub.find_files(&q.project, &q.q, limit)).await
 }
 
 #[derive(Debug, Serialize, Default)]

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 actions!(
     mothr,
-    [NewChat, NewDesign, NewGeneralChat, OpenProjectPalette, ToggleSidebar, OpenSettings, FocusComposer, Quit]
+    [NewChat, NewDesign, NewGeneralChat, OpenProjectPalette, OpenProjects, ToggleSidebar, OpenSettings, FocusComposer, Quit]
 );
 
 #[cfg(target_os = "macos")]
@@ -78,6 +78,7 @@ fn main() {
                 KeyBinding::new(k!("shift-g"), NewGeneralChat, None),
                 KeyBinding::new(k!("p"), OpenProjectPalette, None),
                 KeyBinding::new(k!("k"), OpenProjectPalette, None),
+                KeyBinding::new(k!("shift-p"), OpenProjects, None),
                 KeyBinding::new(k!("b"), ToggleSidebar, None),
                 KeyBinding::new(k!(","), OpenSettings, None),
                 KeyBinding::new(k!("l"), FocusComposer, None),

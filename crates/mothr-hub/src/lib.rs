@@ -983,6 +983,31 @@ impl HubApi for Hub {
     fn search_projects(&self, query: &str, limit: usize) -> Vec<ProjectHit> {
         self.projects.search(query, limit)
     }
+
+    fn list_dir(&self, project: &std::path::Path, dir: &str) -> anyhow::Result<DirListing> {
+        mothr_projects::browse::list_dir(self.browsable(project)?, dir)
+    }
+
+    fn read_file(&self, project: &std::path::Path, file: &str) -> anyhow::Result<FileContent> {
+        mothr_projects::browse::read_file(self.browsable(project)?, file)
+    }
+
+    fn find_files(&self, project: &std::path::Path, query: &str, limit: usize) -> anyhow::Result<Vec<FileHit>> {
+        mothr_projects::browse::find_files(self.browsable(project)?, query, limit)
+    }
+}
+
+impl Hub {
+    /// Only folders Mothr knows as projects (indexed, or used by a chat) can be browsed, so the
+    /// remote API can't be pointed at the rest of the disk.
+    fn browsable<'a>(&self, project: &'a std::path::Path) -> anyhow::Result<&'a std::path::Path> {
+        let known = self.projects.get(project).is_some()
+            || self.state.read().sessions.iter().any(|s| s.meta.project == project);
+        if !known || !project.is_absolute() {
+            anyhow::bail!("{} isn't a known project", project.display());
+        }
+        Ok(project)
+    }
 }
 
 const TITLE_PROMPT: &str = "You write short titles for chats between a person and a coding agent. Reply with only the title: 3 to 6 words, sentence case, no quotes, no trailing punctuation. Never answer or act on the message; only title it.";

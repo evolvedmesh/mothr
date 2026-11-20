@@ -5,13 +5,14 @@ use super::design::{DesignsEvent, DesignsPage};
 use super::home::{Home, HomeEvent};
 use super::kit::*;
 use super::picker::{PickerEvent, ProjectPicker};
+use super::projects::{ProjectsEvent, ProjectsPage};
 use super::settings::SettingsView;
 use super::sidebar::{DraftRow, Sidebar, SidebarEvent};
 use super::usage;
 use super::{theme, tokens};
 use crate::remote::RemoteController;
 use crate::store::{Store, StoreEvent};
-use crate::{FocusComposer, NewChat, NewDesign, OpenProjectPalette, OpenSettings, ToggleSidebar};
+use crate::{FocusComposer, NewChat, NewDesign, OpenProjectPalette, OpenProjects, OpenSettings, ToggleSidebar};
 use gpui_kit::component::{
     ActiveTheme as _, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -25,6 +26,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use mothr_core::*;
 use mothr_hub::Hub;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,6 +35,7 @@ pub enum Route {
     Home,
     Session(SessionId),
     Designs,
+    Projects,
     Settings,
 }
 
@@ -54,6 +57,7 @@ pub struct Workspace {
     drafts: Vec<Entity<Home>>,
     next_draft: u64,
     designs: Entity<DesignsPage>,
+    projects: Entity<ProjectsPage>,
     chats: HashMap<SessionId, Entity<ChatView>>,
     settings_view: Option<Entity<SettingsView>>,
     picker: Option<Entity<ProjectPicker>>,
@@ -71,11 +75,14 @@ impl Workspace {
         let sidebar = cx.new(|cx| Sidebar::new(store.clone(), window, cx));
         let home = cx.new(|cx| Home::new(0, store.clone(), window, cx));
         let designs = cx.new(|cx| DesignsPage::new(store.clone(), window, cx));
+        let projects = cx.new(|cx| ProjectsPage::new(store.clone(), window, cx));
         let mut subs = vec![];
         subs.push(cx.subscribe_in(&sidebar, window, |this, _, ev: &SidebarEvent, window, cx| match ev {
             SidebarEvent::Open(id) => this.open_session(*id, window, cx),
             SidebarEvent::NewChat => this.new_chat(None, window, cx),
             SidebarEvent::OpenDesigns => this.open_designs(window, cx),
+            SidebarEvent::OpenProjects => this.open_projects(window, cx),
+            SidebarEvent::OpenProject(p) => this.open_project(p.clone(), window, cx),
             SidebarEvent::NewGeneral => this.new_general_chat(window, cx),
             SidebarEvent::NewChatIn(p) => this.new_chat(Some(p.clone()), window, cx),
             SidebarEvent::OpenDraft(id) => this.open_draft(*id, window, cx),
@@ -85,6 +92,11 @@ impl Workspace {
             DesignsEvent::OpenChat(id) => this.open_session(*id, window, cx),
             DesignsEvent::PickProject => this.open_picker(PickerFor::Design, window, cx),
         }));
+        subs.push(cx.subscribe_in(&projects, window, |this, _, ev: &ProjectsEvent, window, cx| match ev {
+            ProjectsEvent::NewChatIn(p) => this.new_chat(Some(p.clone()), window, cx),
+        }));
+        // Full screen in a project hides the sidebar.
+        subs.push(cx.observe(&projects, |_, _, cx| cx.notify()));
         subs.push(Self::watch_home(&home, window, cx));
         subs.push(cx.subscribe_in(&store, window, |this, _, ev: &StoreEvent, window, cx| match ev {
             StoreEvent::Toast(level, text) => {
@@ -131,6 +143,7 @@ impl Workspace {
             drafts: Vec::new(),
             next_draft: 1,
             designs,
+            projects,
             chats: HashMap::new(),
             settings_view: None,
             picker: None,
@@ -216,7 +229,7 @@ impl Workspace {
     }
 
     /// Developer hooks for screenshots / smoke tests:
-    /// `MOTHR_OPEN=settings|picker|latest|changes|designs|design` and
+    /// `MOTHR_OPEN=settings|picker|latest|changes|designs|design|projects|project:<path>[:<file>[:full]]` and
     /// `MOTHR_DEV_PROMPT="<agent_id>|<mode>|<model>|<chat|design>|<prompt>"` (project = cwd).
     fn dev_hooks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let open = std::env::var("MOTHR_OPEN").ok();
@@ -257,7 +270,8 @@ impl Workspace {
             _ => None,
         };
         let designs = route == Route::Designs;
-        self.sidebar.update(cx, |s, cx| s.set_active(active, designs, cx));
+        let projects = route == Route::Projects;
+        self.sidebar.update(cx, |s, cx| s.set_active(active, designs, projects, cx));
         self.refresh_drafts(cx);
         cx.notify();
     }
@@ -266,6 +280,23 @@ impl Workspace {
     fn open_designs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.navigate(Route::Designs, window, cx);
         self.designs.update(cx, |d, cx| d.refresh(cx));
+    }
+
+    /// The Projects page, as it was left.
+    fn open_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Asking again while on it goes back to the list.
+        if self.route == Route::Projects {
+            self.projects.update(cx, |p, cx| p.show_list(window, cx));
+        } else {
+            self.navigate(Route::Projects, window, cx);
+            self.projects.update(cx, |p, cx| p.focus(window, cx));
+        }
+    }
+
+    /// One project's files.
+    fn open_project(&mut self, project: ProjectRef, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate(Route::Projects, window, cx);
+        self.projects.update(cx, |p, cx| p.open_project(project, window, cx));
     }
 
     /// The Design gallery, ready to describe a new design.
@@ -368,6 +399,17 @@ impl Workspace {
                 cx.notify();
             }
             Some("designs") => this.open_designs(window, cx),
+            Some("projects") => this.open_projects(window, cx),
+            Some(p) if p.starts_with("project:") => {
+                // MOTHR_OPEN=project:<path>[:<file>[:full]] opens a project (and a file) for screenshots.
+                let mut parts = p["project:".len()..].splitn(3, ':');
+                let path = PathBuf::from(parts.next().unwrap_or_default());
+                let file = parts.next().map(str::to_string).filter(|f| !f.is_empty());
+                let full = parts.next() == Some("full");
+                let project = this.store.read(cx).hub.projects().get(&path).unwrap_or_else(|| ProjectRef::from_path(path));
+                this.open_project(project, window, cx);
+                this.projects.update(cx, |pp, cx| pp.dev_open(file, full, window, cx));
+            }
             Some("changes") => {
                 let id = this.store.read(cx).sessions.iter().rev().find(|s| s.meta.parent.is_none() && s.meta.kind == SessionKind::Chat).map(|s| s.meta.id);
                 if let Some(id) = id {
@@ -554,6 +596,7 @@ impl Render for Workspace {
                 None => self.home.clone().into_any_element(),
             },
             Route::Designs => self.designs.clone().into_any_element(),
+            Route::Projects => self.projects.clone().into_any_element(),
             Route::Settings => match &self.settings_view {
                 Some(s) => s.clone().into_any_element(),
                 None => div().into_any_element(),
@@ -564,9 +607,11 @@ impl Render for Workspace {
             Route::Home => "home".into(),
             Route::Session(id) => id.to_string().into(),
             Route::Designs => "designs".into(),
+            Route::Projects => "projects".into(),
             Route::Settings => "settings".into(),
         };
         let title_bar = self.render_title_bar(window, cx);
+        let project_fullscreen = self.route == Route::Projects && self.projects.read(cx).fullscreen(cx);
 
         v_flex()
             .id("workspace")
@@ -580,6 +625,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &crate::NewGeneralChat, window, cx| this.new_general_chat(window, cx)))
             .on_action(cx.listener(|this, _: &OpenProjectPalette, window, cx| this.open_picker(PickerFor::Chat, window, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.navigate(Route::Settings, window, cx)))
+            .on_action(cx.listener(|this, _: &OpenProjects, window, cx| this.open_projects(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &FocusComposer, window, cx| match this.route {
                 Route::Session(id) => {
@@ -588,6 +634,7 @@ impl Render for Workspace {
                     }
                 }
                 Route::Designs => this.designs.update(cx, |d, cx| d.focus(window, cx)),
+                Route::Projects => this.projects.update(cx, |p, cx| p.focus(window, cx)),
                 _ => this.home.update(cx, |h, cx| h.focus(window, cx)),
             }))
             .child(title_bar)
@@ -596,7 +643,7 @@ impl Render for Workspace {
                     .flex_1()
                     .min_h_0()
                     .relative()
-                    .when(self.sidebar_open, |el| {
+                    .when(self.sidebar_open && !project_fullscreen, |el| {
                         el.child(
                             div()
                                 .h_full()

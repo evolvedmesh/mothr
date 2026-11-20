@@ -40,6 +40,9 @@ pub enum SidebarEvent {
     Open(SessionId),
     NewChat,
     OpenDesigns,
+    OpenProjects,
+    /// A pinned project's files.
+    OpenProject(ProjectRef),
     NewGeneral,
     NewChatIn(ProjectRef),
     OpenDraft(u64),
@@ -66,6 +69,8 @@ pub struct Sidebar {
     active: Option<SessionId>,
     /// The Design page is showing.
     designs_active: bool,
+    /// The Projects page is showing.
+    projects_active: bool,
     drafts: Vec<DraftRow>,
     collapsed: std::collections::HashSet<String>,
     /// Orchestrator chats whose subagent list is folded.
@@ -85,12 +90,13 @@ impl Sidebar {
                 }
             }),
         ];
-        Self { store, search, query: String::new(), mode: GroupMode::Smart, active: None, designs_active: false, drafts: vec![], collapsed: Default::default(), folded: Default::default(), _subs: subs }
+        Self { store, search, query: String::new(), mode: GroupMode::Smart, active: None, designs_active: false, projects_active: false, drafts: vec![], collapsed: Default::default(), folded: Default::default(), _subs: subs }
     }
 
-    pub fn set_active(&mut self, id: Option<SessionId>, designs: bool, cx: &mut Context<Self>) {
+    pub fn set_active(&mut self, id: Option<SessionId>, designs: bool, projects: bool, cx: &mut Context<Self>) {
         self.active = id;
         self.designs_active = designs;
+        self.projects_active = projects;
         cx.notify();
     }
 
@@ -185,6 +191,36 @@ impl Sidebar {
             )
             .when(needs, |d| d.child(div().text_size(sz(tokens::text::XS)).text_color(pal.warning).child("Needs you")))
             .when_some(status, |d, s| d.child(status_dot("sb-design-dot", &s, cx)))
+    }
+
+    /// The way into the Projects page.
+    fn render_projects_nav(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pal = tokens::p(cx);
+        let active = self.projects_active;
+        let count = self.store.read(cx).project_count;
+        h_flex()
+            .id("sb-projects")
+            .relative()
+            .h(sz(34.))
+            .px(sz(10.))
+            .gap(sz(10.))
+            .items_center()
+            .rounded(sz(tokens::radius::MD))
+            .cursor_pointer()
+            .when(active, |d| d.bg(pal.surface_hover))
+            .when(!active, |d| d.hover(|d| d.bg(pal.surface_hover.opacity(0.6))))
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::OpenProjects)))
+            .when(active, |d| d.child(div().absolute().left(sz(0.)).top(sz(9.)).bottom(sz(9.)).w(sz(2.5)).rounded_full().bg(pal.brand)))
+            .child(icon("folder-git-2").size(sz(15.)).text_color(if active { pal.text } else { pal.text_muted }))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(sz(tokens::text::BASE))
+                    .text_color(if active { pal.text } else { pal.text.opacity(0.88) })
+                    .when(active, |d| d.font_weight(FontWeight::MEDIUM))
+                    .child("Projects"),
+            )
+            .when_some(count, |d, n| d.child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(n.to_string())))
     }
 
     fn groups(&self, sessions: &[SessionState]) -> Vec<(String, Vec<SessionMeta>)> {
@@ -552,6 +588,7 @@ impl Render for Sidebar {
         }
 
         let design_nav = self.render_design_nav(&sessions, cx);
+        let projects_nav = self.render_projects_nav(cx);
         v_flex()
             .size_full()
             .child(
@@ -601,7 +638,7 @@ impl Render for Sidebar {
                                     .child(icon("globe").size(sz(15.)).text_color(pal.text_muted)),
                             )
                     )
-                    .child(design_nav)
+                    .child(v_flex().gap(sz(2.)).child(design_nav).child(projects_nav))
                     .child(
                         h_flex()
                             .gap(sz(4.))
@@ -642,6 +679,7 @@ impl Render for Sidebar {
                 let mut projects = v_flex().gap(sz(1.)).px_2().pb_1();
                 for p in pinned_projects.iter().take(6) {
                     let p2 = p.clone();
+                    let p3 = p.clone();
                     projects = projects.child(
                         h_flex()
                             .id(ElementId::Name(format!("pp-{}", p.path.display()).into()))
@@ -653,10 +691,24 @@ impl Render for Sidebar {
                             .items_center()
                             .cursor_pointer()
                             .hover(|d| d.bg(pal.surface_hover.opacity(0.6)))
-                            .on_click(cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::NewChatIn(p2.clone()))))
+                            .on_click(cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::OpenProject(p2.clone()))))
                             .child(icon("folder-git-2").size(sz(14.)).text_color(pal.text_faint))
                             .child(div().flex_1().text_size(sz(tokens::text::SM)).text_color(pal.text_muted).truncate().child(p.name.clone()))
-                            .child(div().invisible().group_hover("pp", |d| d.visible()).child(icon("plus").size(sz(12.)).text_color(pal.text_faint))),
+                            .child(
+                                div()
+                                    .id(ElementId::Name(format!("pp-chat-{}", p.path.display()).into()))
+                                    .invisible()
+                                    .group_hover("pp", |d| d.visible())
+                                    .p(sz(2.))
+                                    .rounded(sz(tokens::radius::XS))
+                                    .hover(|d| d.bg(pal.surface_hover))
+                                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("New chat here").build(window, cx))
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.stop_propagation();
+                                        cx.emit(SidebarEvent::NewChatIn(p3.clone()));
+                                    }))
+                                    .child(icon("plus").size(sz(12.)).text_color(pal.text_faint)),
+                            ),
                     );
                 }
                 d.child(

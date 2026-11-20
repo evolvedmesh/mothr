@@ -6,6 +6,7 @@
 //! pins and recents persist to `data_dir()/projects.json` so a fresh start can search
 //! immediately, before the first rescan finishes.
 
+pub mod browse;
 mod detect;
 mod discover;
 

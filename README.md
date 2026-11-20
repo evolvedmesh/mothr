@@ -110,6 +110,19 @@ with the app.
       static site you can host anywhere.
 
     Both use the same renderer, ported from the canvas, so exports match what you see in the app.
+- **Projects.** A page in the sidebar (Ctrl+Shift+P) listing every indexed project, pinned and
+  recent first, with fuzzy search over names and paths. Open one to read it without leaving
+  Mothr:
+  - folders with their README rendered underneath; `.gitignore`d files and `.git` stay hidden
+  - Markdown rendered for reading, with Preview / Source, links that open other files of the
+    project, and relative images
+  - code with highlighting and line numbers, images shown as pictures
+  - **Full screen** (F11): the app sidebar steps aside for a tree of the whole project, a fuzzy
+    **Go to file** (Ctrl+P), and an "On this page" outline for Markdown
+  - pin the project or start a chat in it from its header
+
+  The phone app has the same page: the folder button on the chat list. Only folders Mothr knows
+  as projects can be browsed remotely, and paths can't leave the project.
 
 ## Repository layout
 
@@ -178,9 +191,10 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 ### Developer hooks
 
 - `MOTHR_HOME=<dir>`: isolated config and data.
-- `MOTHR_OPEN=settings|remote|picker|usage|latest|changes|designs|design|subagent`: open a view
-  at startup (`MOTHR_OPEN_DELAY_MS` delays it). `changes` opens the newest chat's Changes panel;
-  `design` opens the newest design.
+- `MOTHR_OPEN=settings|remote|picker|usage|latest|changes|designs|design|subagent|projects`: open
+  a view at startup (`MOTHR_OPEN_DELAY_MS` delays it). `changes` opens the newest chat's Changes
+  panel; `design` opens the newest design. `project:<path>[:<file>[:full]]` opens a project, a
+  file in it, and full screen.
 - `MOTHR_DESIGN_PAGE=overview|color|type|space|elevation|component:<n>|screen:<n>`: the page a
   design opens on. `MOTHR_DESIGN_EXPORT=menu|html|storybook` opens the export menu or exports.
 - `MOTHR_DEV_REVIEW=accept|reject`: answer the first waiting edits from the Changes panel.

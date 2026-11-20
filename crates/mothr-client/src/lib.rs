@@ -254,6 +254,35 @@ impl MothrClient {
         Ok(hits.iter().map(model::hit_view).collect())
     }
 
+    /// Every indexed project matching `query` (all of them, best first, when it's empty), up to
+    /// `limit`. Name matches carry highlight indices.
+    pub fn find_projects(&self, query: String, limit: u32) -> Result<Vec<ProjectView>, ClientError> {
+        let limit = limit.clamp(1, 2000).to_string();
+        let hits: Vec<mothr_core::ProjectHit> = self.get("/api/projects", &[("q", &query), ("limit", &limit)])?;
+        Ok(hits.iter().map(model::hit_view).collect())
+    }
+
+    /// One folder of a project (`dir` relative to the project, `""` for its root).
+    pub fn list_dir(&self, project_path: String, dir: String) -> Result<DirView, ClientError> {
+        let listing: mothr_core::DirListing = self.get("/api/projects/files", &[("project", &project_path), ("path", &dir)])?;
+        Ok(model::dir_view(listing))
+    }
+
+    /// One file of a project (`path` relative to the project).
+    pub fn read_file(&self, project_path: String, path: String) -> Result<FileView, ClientError> {
+        let file: mothr_core::FileContent = self.get("/api/projects/file", &[("project", &project_path), ("path", &path)])?;
+        Ok(model::file_view(file))
+    }
+
+    /// Fuzzy-find files of a project by name or path.
+    pub fn find_files(&self, project_path: String, query: String) -> Result<Vec<FileHitView>, ClientError> {
+        if query.trim().is_empty() {
+            return Ok(vec![]);
+        }
+        let hits: Vec<mothr_core::FileHit> = self.get("/api/projects/find", &[("project", &project_path), ("q", &query), ("limit", "40")])?;
+        Ok(hits.into_iter().map(model::file_hit_view).collect())
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// Start a chat. An empty `project_path` starts a general chat. Returns the new chat id.
     pub fn new_chat(
@@ -357,6 +386,28 @@ impl MothrClient {
 }
 
 impl MothrClient {
+    /// GET a JSON API route. A refusal (`{"ok": false, "error": …}`) becomes `Rejected`.
+    fn get<T: serde::de::DeserializeOwned>(&self, route: &str, query: &[(&str, &str)]) -> Result<T, ClientError> {
+        let url = format!("{}{route}", self.pairing.base);
+        self.rt.block_on(async {
+            let res = self.http.get(url).bearer_auth(&self.pairing.token).query(query).send().await.map_err(net)?;
+            let status = res.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(ClientError::Unauthorized);
+            }
+            if status.is_client_error() {
+                let reason = res
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()
+                    .and_then(|v| v.get("error")?.as_str().map(str::to_string))
+                    .unwrap_or_else(|| format!("Mothr refused that ({status})"));
+                return Err(ClientError::Rejected { reason });
+            }
+            res.error_for_status().map_err(net)?.json().await.map_err(net)
+        })
+    }
+
     fn session(&self, chat_id: &str, command: SessionCommand) -> Result<(), ClientError> {
         let id = parse_id(chat_id)?;
         self.command(&AppCommand::Session { id, command }).map(|_| ())

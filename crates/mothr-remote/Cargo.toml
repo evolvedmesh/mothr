@@ -21,6 +21,7 @@ base64.workspace = true
 qrcode.workspace = true
 
 [dev-dependencies]
+mothr-projects.workspace = true
 tokio-tungstenite = "0.28"
 reqwest.workspace = true
 chrono.workspace = true

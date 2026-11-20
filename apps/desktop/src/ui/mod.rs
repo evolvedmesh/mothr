@@ -9,6 +9,7 @@ pub mod home;
 pub mod kit;
 pub mod options;
 pub mod picker;
+pub mod projects;
 pub mod settings;
 pub mod sidebar;
 pub mod theme;
@@ -18,4 +19,5 @@ pub mod workspace;
 
 pub fn init(cx: &mut gpui_kit::App) {
     picker::init(cx);
+    projects::init(cx);
 }

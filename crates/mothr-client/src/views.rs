@@ -215,6 +215,62 @@ pub struct ProjectView {
     pub display_path: String,
     pub pinned: bool,
     pub branch: Option<String>,
+    /// Detected stacks ("rust", "node" …), without "git".
+    pub tags: Vec<String>,
+    /// Char indices of `name` matched by the search, for highlighting.
+    pub name_indices: Vec<u32>,
+}
+
+/// One row of a project folder.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct FileEntryView {
+    pub name: String,
+    /// Relative to the project, `/`-separated; pass it back to open the entry.
+    pub path: String,
+    pub dir: bool,
+    /// "14.2 KB"; empty for folders.
+    pub size_label: String,
+    /// Shown as a document rather than code.
+    pub markdown: bool,
+}
+
+/// A project folder, folders first.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DirView {
+    /// Relative to the project (`""` for the root).
+    pub path: String,
+    pub entries: Vec<FileEntryView>,
+    /// Too many entries; only the first ones are listed.
+    pub truncated: bool,
+    /// The folder's README (relative path), shown under the listing.
+    pub readme: Option<String>,
+}
+
+/// One file of a project.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct FileView {
+    pub path: String,
+    pub name: String,
+    pub size_label: String,
+    /// Syntax name ("rust", "markdown", "text" …).
+    pub language: String,
+    pub markdown: bool,
+    /// `None` for binary files.
+    pub text: Option<String>,
+    /// Only the first megabyte is included.
+    pub truncated: bool,
+    pub line_count: u32,
+}
+
+/// A file-finder match.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct FileHitView {
+    pub path: String,
+    pub name: String,
+    /// The folder it's in (`""` for the project root).
+    pub folder: String,
+    /// Char indices of `name` matched by the query.
+    pub name_indices: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]

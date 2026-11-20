@@ -107,7 +107,7 @@ fun NewChatScreen(model: AppModel) {
     val effort = modelOption?.efforts?.firstOrNull { it.id == (effortChoice ?: Choice(agentKey?.let(model::lastEffort))).id }
     val context = modelOption?.contexts?.firstOrNull { it.id == (contextChoice ?: Choice(agentKey?.let(model::lastContext))).id }
 
-    var picked by remember { mutableStateOf<ProjectPick?>(null) }
+    var picked by remember { mutableStateOf(model.takeNewChatProject()?.let { ProjectPick(it) }) }
     val last = model.lastProject
     val project = when {
         picked != null -> picked?.project

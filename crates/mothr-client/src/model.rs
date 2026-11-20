@@ -429,6 +429,8 @@ fn project_view(p: &ProjectRef) -> ProjectView {
         display_path: desktop_path(&p.path.display().to_string()),
         pinned: p.pinned,
         branch: p.git_branch.clone(),
+        tags: p.tags.iter().filter(|t| *t != "git").cloned().collect(),
+        name_indices: vec![],
     }
 }
 
@@ -437,7 +439,53 @@ pub fn hit_view(h: &mothr_core::ProjectHit) -> ProjectView {
     if !h.display_path.is_empty() {
         v.display_path = h.display_path.clone();
     }
+    v.name_indices = h.name_indices.clone();
     v
+}
+
+pub fn dir_view(l: mothr_core::DirListing) -> DirView {
+    DirView {
+        path: l.path,
+        entries: l
+            .entries
+            .into_iter()
+            .map(|e| FileEntryView {
+                size_label: if e.dir { String::new() } else { mothr_core::format_size(e.size) },
+                markdown: !e.dir && mothr_core::is_markdown_name(&e.name),
+                name: e.name,
+                path: e.path,
+                dir: e.dir,
+            })
+            .collect(),
+        truncated: l.truncated,
+        readme: l.readme,
+    }
+}
+
+pub fn file_view(f: mothr_core::FileContent) -> FileView {
+    FileView {
+        name: f.name().to_string(),
+        size_label: mothr_core::format_size(f.size),
+        markdown: f.is_markdown(),
+        line_count: f.text.as_deref().map_or(0, |t| t.lines().count() as u32),
+        path: f.path,
+        language: f.language,
+        text: f.text,
+        truncated: f.truncated,
+    }
+}
+
+/// A finder hit, with the match indices moved from the whole path onto the file name.
+pub fn file_hit_view(h: mothr_core::FileHit) -> FileHitView {
+    let folder = mothr_core::parent_path(&h.path).to_string();
+    let name = mothr_core::file_name(&h.path).to_string();
+    let offset = if folder.is_empty() { 0 } else { folder.chars().count() as u32 + 1 };
+    FileHitView {
+        name_indices: h.indices.iter().filter(|&&i| i >= offset).map(|i| i - offset).collect(),
+        path: h.path,
+        name,
+        folder,
+    }
 }
 
 fn chat_status(s: &SessionStatus) -> ChatStatus {

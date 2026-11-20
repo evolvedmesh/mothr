@@ -4070,6 +4070,7 @@ dependencies = [
  "futures",
  "gethostname",
  "mothr-core",
+ "mothr-projects",
  "qrcode",
  "rand 0.9.5",
  "reqwest",
