@@ -42,8 +42,8 @@ with the app.
     truncating resume, and sends the new text.
   - **Queue:** messages sent while the agent is busy wait in a visible queue and send
     themselves when the turn ends. Each queued item has "Send now" and remove.
-  - **Keys:** Enter steers a running turn (Claude Code; other agents queue), Shift+Enter stops the
-    turn and sends now, Ctrl+Shift+Enter queues, Alt+Enter inserts a newline.
+  - **Keys:** Enter steers a running turn (Claude Code; other agents queue), Alt+Enter stops the
+    turn and sends now, Ctrl+Shift+Enter queues, Shift+Enter inserts a newline.
   - **Drafts:** text typed in a new-chat box shows up under *Drafts* in the sidebar, so you can
     start another chat without losing it.
   - **Steer** (Claude Code): inject a message into the running turn; the agent reads it at its

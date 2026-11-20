@@ -73,8 +73,8 @@ impl ChatView {
         let weak = cx.entity().downgrade();
         let subs = vec![
             cx.subscribe_in(&input, window, |this, _, ev: &InputEvent, window, cx| match ev {
-                // Enter steers a running turn (or sends when idle); Shift+Enter is handled in
-                // `on_keystroke`, which also keeps it from inserting a newline.
+                // Enter steers a running turn (or sends when idle); Shift+Enter inserts a newline and
+                // Alt+Enter / Ctrl+Shift+Enter are handled in `on_keystroke`.
                 InputEvent::PressEnter { shift: false, .. } => {
                     let delivery = this.enter_delivery(cx);
                     this.send(delivery, window, cx)
@@ -302,23 +302,20 @@ impl ChatView {
             let has_text = !self.input.read(cx).value().trim().is_empty() || !self.attachments.is_empty();
             let m = &k.modifiers;
             if m.alt && !m.shift && !m.secondary(cx) {
-                // A newline whenever Enter itself sends.
-                self.input.update(cx, |i, cx| i.insert("\n", window, cx));
+                // Alt+Enter stops a running turn and sends right away; when idle it just sends.
+                if has_text {
+                    let delivery = if busy { Delivery::Interrupt } else { self.enter_delivery(cx) };
+                    self.send(delivery, window, cx);
+                }
                 cx.stop_propagation();
                 return;
             }
-            if busy && has_text {
-                // Ctrl+Shift+Enter queues; Shift+Enter stops the turn and sends right away.
-                let delivery = match (m.shift, m.secondary(cx)) {
-                    (true, true) => Some(Delivery::Normal),
-                    (true, false) => Some(Delivery::Interrupt),
-                    _ => None,
-                };
-                if let Some(delivery) = delivery {
-                    self.send(delivery, window, cx);
-                    cx.stop_propagation();
-                    return;
-                }
+            if busy && has_text && m.shift && m.secondary(cx) {
+                // Ctrl+Shift+Enter queues. Plain Shift+Enter falls through to the textarea,
+                // which inserts a newline.
+                self.send(Delivery::Normal, window, cx);
+                cx.stop_propagation();
+                return;
             }
         }
         if k.modifiers.modified() {
@@ -1400,8 +1397,8 @@ impl ChatView {
         if self.placeholder_busy != Some(working) {
             self.placeholder_busy = Some(working);
             let text = match (working, steer) {
-                (true, true) => "Steer… (↵ steer · ⇧↵ send now · Ctrl⇧↵ queue · Alt↵ newline)",
-                (true, false) => "Queue… (↵ queue · ⇧↵ send now · Alt↵ newline)",
+                (true, true) => "Steer… (↵ steer · Alt↵ send now · Ctrl⇧↵ queue · ⇧↵ newline)",
+                (true, false) => "Queue… (↵ queue · Alt↵ send now · ⇧↵ newline)",
                 _ => "Reply… (↵ to send, ⇧↵ for a newline)",
             };
             self.input.update(cx, |i, cx| i.set_placeholder(text, window, cx));
@@ -1604,7 +1601,7 @@ impl ChatView {
                                 .ghost()
                                 .icon(icon("zap"))
                                 .label("Send now")
-                                .tooltip("Stop the current turn and send this immediately  (Shift+Enter)")
+                                .tooltip("Stop the current turn and send this immediately  (Alt+Enter)")
                                 .on_click(cx.listener(|this, _, window, cx| this.send(Delivery::Interrupt, window, cx))),
                         )
                     })
