@@ -4,7 +4,7 @@ use super::changes::{ChangesEvent, ChangesPanel};
 use super::diff::{InlineDiffs, stat_label};
 use super::home::mode_menu;
 use super::kit::*;
-use super::options::{Style, context_menu, effort_menu, settings_for};
+use super::options::{Pick, RunSettings, run_settings, settings_for};
 use super::tokens;
 use super::{clip, theme::card};
 use crate::store::{Store, StoreEvent};
@@ -191,6 +191,27 @@ impl ChatView {
             self.change_summary = (fingerprint, ChangeSummary::of(&changes));
         }
         self.change_summary.1
+    }
+
+    /// A change from the header's run-settings chip; it is also remembered for new chats.
+    fn apply_pick(&mut self, pick: Pick, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(meta) = self.store.read(cx).session(self.id).map(|s| s.meta.clone()) else { return };
+        match pick {
+            Pick::Model(Some(model)) => {
+                self.dispatch(SessionCommand::SetModel { model: model.clone() }, window, cx);
+                self.store.read(cx).record_model(meta.agent, Some(&model));
+            }
+            Pick::Effort(Some(effort)) => {
+                self.dispatch(SessionCommand::SetEffort { effort: effort.clone() }, window, cx);
+                self.store.read(cx).record_options(meta.agent, Some(&effort), meta.context_limit.as_deref());
+            }
+            Pick::Context(Some(context)) => {
+                self.dispatch(SessionCommand::SetContext { context: context.clone() }, window, cx);
+                self.store.read(cx).record_options(meta.agent, meta.effort.as_deref(), Some(&context));
+            }
+            // A running chat can't go back to the agent's default or change agent.
+            _ => {}
+        }
     }
 
     fn dispatch(&self, command: SessionCommand, window: &mut Window, cx: &mut Context<Self>) {
@@ -400,13 +421,10 @@ impl ChatView {
         let id = self.id;
         let models = s.models.clone();
         let current_model = m.model.clone();
-        let model_label = current_model
-            .as_ref()
-            .map(|cm| models.iter().find(|x| &x.id == cm).map(|x| x.name.clone()).unwrap_or_else(|| cm.clone()))
-            .unwrap_or_else(|| "Default model".into());
         let (efforts, contexts) = settings_for(&models, current_model.as_deref());
         let (effort, context_limit) = (m.effort.clone(), m.context_limit.clone());
         let rc = m.remote_control.clone();
+        let agent = m.agent;
         let ctx = m.context;
         let store = self.store.clone();
         let project = m.project.clone();
@@ -537,62 +555,19 @@ impl ChatView {
                 )
             })
             .when(!models.is_empty(), |el| {
-                let weak = weak.clone();
-                let models = models.clone();
-                el.child(
-                    Button::new("model-pick")
-                        .ghost()
-                        .icon(icon("brain"))
-                        .when(compact, |b| b.tooltip(model_label.clone()))
-                        .when(!compact, |b| b.label(model_label.clone()).dropdown_caret(true))
-                        .dropdown_menu(move |mut menu, _, _| {
-                            menu = menu.label("Model").max_h(sz(420.)).scrollable(true);
-                            for mi in &models {
-                                let weak = weak.clone();
-                                let mid = mi.id.clone();
-                                let label = match &mi.description {
-                                    Some(d) => format!("{} — {}", mi.name, d),
-                                    None => mi.name.clone(),
-                                };
-                                menu = menu.item(PopupMenuItem::new(label).checked(current_model.as_deref() == Some(mi.id.as_str())).on_click(
-                                    move |_, window, cx| {
-                                        if let Some(v) = weak.upgrade() {
-                                            v.update(cx, |v, cx| {
-                                                v.dispatch(SessionCommand::SetModel { model: mid.clone() }, window, cx);
-                                                let agent = v.store.read(cx).session(v.id).map(|s| s.meta.agent);
-                                                if let Some(agent) = agent {
-                                                    v.store.read(cx).record_model(agent, Some(&mid));
-                                                }
-                                            });
-                                        }
-                                    },
-                                ));
-                            }
-                            menu
-                        }),
-                )
-            })
-            .when(!efforts.is_empty(), |el| {
-                el.child(effort_menu("chat-effort", efforts.clone(), effort.clone(), Style { allow_default: false, compact }, weak.clone(), |v: &mut ChatView, e, window, cx| {
-                    if let Some(effort) = e {
-                        v.dispatch(SessionCommand::SetEffort { effort: effort.clone() }, window, cx);
-                        if let Some(agent) = v.store.read(cx).session(v.id).map(|s| s.meta.agent) {
-                            let context = v.store.read(cx).session(v.id).and_then(|s| s.meta.context_limit.clone());
-                            v.store.read(cx).record_options(agent, Some(&effort), context.as_deref());
-                        }
-                    }
-                }))
-            })
-            .when(!contexts.is_empty(), |el| {
-                el.child(context_menu("chat-context", contexts.clone(), context_limit.clone(), Style { allow_default: false, compact }, weak.clone(), |v: &mut ChatView, c, window, cx| {
-                    if let Some(context) = c {
-                        v.dispatch(SessionCommand::SetContext { context: context.clone() }, window, cx);
-                        if let Some(agent) = v.store.read(cx).session(v.id).map(|s| s.meta.agent) {
-                            let effort = v.store.read(cx).session(v.id).and_then(|s| s.meta.effort.clone());
-                            v.store.read(cx).record_options(agent, effort.as_deref(), Some(&context));
-                        }
-                    }
-                }))
+                let settings = RunSettings {
+                    agents: vec![],
+                    agent: Some(agent),
+                    models: models.clone(),
+                    model: current_model.clone(),
+                    efforts: efforts.clone(),
+                    effort: effort.clone(),
+                    contexts: contexts.clone(),
+                    context: context_limit.clone(),
+                    allow_default: false,
+                    compact,
+                };
+                el.child(run_settings("chat-run", settings, weak.clone(), |v: &mut ChatView, pick, window, cx| v.apply_pick(pick, window, cx)))
             })
             .when(m.agent.supports_remote_control(), |el| {
                 el.child(
@@ -1576,7 +1551,7 @@ impl ChatView {
                             .tooltip("Attach files or images (drop or paste them too)")
                             .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
                     )
-                    .child(mode_menu("chat-mode", Some(agent), mode, weak, |this: &mut ChatView, m, window, cx| {
+                    .child(mode_menu("chat-mode", Some(agent), mode, Some(format!("{} — {}", mode.label(), mode.description())), weak, |this: &mut ChatView, m, window, cx| {
                         this.dispatch(SessionCommand::SetMode { mode: m }, window, cx);
                     }))
                     .child(div().flex_1())

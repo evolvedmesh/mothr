@@ -511,7 +511,7 @@ impl Render for SettingsView {
                                         .child(div().text_sm().child("Permission mode"))
                                         .child(div().text_xs().text_color(theme.muted_foreground).child("For every agent; unsupported modes fall back")),
                                 )
-                                .child(mode_menu("default-mode", None, s.default_mode, weak.clone(), |this: &mut SettingsView, m, _, cx| {
+                                .child(mode_menu("default-mode", None, s.default_mode, None, weak.clone(), |this: &mut SettingsView, m, _, cx| {
                                     this.update(cx, |s| s.default_mode = m)
                                 })),
                         )

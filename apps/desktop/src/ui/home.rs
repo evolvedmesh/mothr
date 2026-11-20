@@ -2,7 +2,7 @@
 
 use super::chat::{file_chip, image_view, is_image, mime_for};
 use super::kit::*;
-use super::options::{Style, context_menu, effort_menu, settings_for};
+use super::options::{Pick, RunSettings, run_settings, settings_for};
 use super::{clip, tokens};
 use crate::store::Store;
 use std::path::PathBuf;
@@ -210,61 +210,30 @@ impl Home {
         }
     }
 
-    /// Reasoning and context dropdowns, when the chosen model has those settings.
-    fn option_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let Some(agent) = self.agent else { return vec![] };
-        let models = self.store.read(cx).known_models(agent);
+    /// Agent, model, reasoning and context behind one chip.
+    fn run_settings_chip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let store = self.store.read(cx);
+        let agents = store.agents.clone();
+        let models = self.agent.map(|a| store.known_models(a)).unwrap_or_default();
         let (efforts, contexts) = settings_for(&models, self.model.as_deref());
-        let weak = cx.entity().downgrade();
-        let mut out = vec![];
-        if !efforts.is_empty() {
-            out.push(effort_menu("home-effort", efforts, self.effort.clone(), Style { allow_default: true, compact: false }, weak.clone(), |h: &mut Home, e, _, cx| h.select_effort(e, cx)).into_any_element());
-        }
-        if !contexts.is_empty() {
-            out.push(context_menu("home-context", contexts, self.context.clone(), Style { allow_default: true, compact: false }, weak, |h: &mut Home, c, _, cx| h.select_context(c, cx)).into_any_element());
-        }
-        out
-    }
-
-    fn model_menu_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(agent) = self.agent else { return div().into_any_element() };
-        let models = self.store.read(cx).known_models(agent);
-        let current = self.model.clone();
-        let label = match &current {
-            Some(m) => models.iter().find(|x| &x.id == m).map(|x| x.name.clone()).unwrap_or_else(|| m.clone()),
-            None => "Default model".into(),
+        let s = RunSettings {
+            agents,
+            agent: self.agent,
+            models,
+            model: self.model.clone(),
+            efforts,
+            effort: self.effort.clone(),
+            contexts,
+            context: self.context.clone(),
+            allow_default: true,
+            compact: false,
         };
-        let weak = cx.entity().downgrade();
-        Button::new("home-model")
-            .ghost()
-            .icon(icon("brain"))
-            .label(label)
-            .dropdown_caret(true)
-            .tooltip(if models.is_empty() { "Model list is still loading" } else { "Model for new chats" })
-            .dropdown_menu(move |mut menu, _, _| {
-                menu = menu.label("Model").max_h(sz(420.)).scrollable(true);
-                let w = weak.clone();
-                menu = menu.item(PopupMenuItem::new("Agent default").checked(current.is_none()).on_click(move |_, _, cx| {
-                    if let Some(h) = w.upgrade() {
-                        h.update(cx, |h, cx| h.select_model(None, cx));
-                    }
-                }));
-                for mi in &models {
-                    let w = weak.clone();
-                    let id = mi.id.clone();
-                    let label = match &mi.description {
-                        Some(d) => format!("{} — {}", mi.name, d),
-                        None => mi.name.clone(),
-                    };
-                    menu = menu.item(PopupMenuItem::new(label).checked(current.as_deref() == Some(mi.id.as_str())).on_click(move |_, _, cx| {
-                        if let Some(h) = w.upgrade() {
-                            h.update(cx, |h, cx| h.select_model(Some(id.clone()), cx));
-                        }
-                    }));
-                }
-                menu
-            })
-            .into_any_element()
+        run_settings("home-run", s, cx.entity().downgrade(), |h: &mut Home, pick, _, cx| match pick {
+            Pick::Agent(k) => h.select_agent(k, cx),
+            Pick::Model(m) => h.select_model(m, cx),
+            Pick::Effort(e) => h.select_effort(e, cx),
+            Pick::Context(c) => h.select_context(c, cx),
+        })
     }
 
     fn slash_matches(&self, cx: &App) -> Vec<CommandInfo> {
@@ -390,11 +359,6 @@ impl Home {
             cx.emit(HomeEvent::Started(id));
         }
     }
-
-    fn agent_menu_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let agents = self.store.read(cx).agents.clone();
-        agent_menu("agent-pick", agents, self.agent, cx.entity().downgrade(), |h: &mut Home, kind, cx| h.select_agent(kind, cx))
-    }
 }
 
 /// Button that picks one of the detected agents.
@@ -433,10 +397,13 @@ pub fn agent_menu<T: 'static>(
         })
 }
 
+/// Permission-mode picker. In a composer it is a quiet chip (`chip`: no caret, and the mode's
+/// description as its tooltip); in Settings it reads as a form control.
 pub fn mode_menu<T: 'static>(
     id: &'static str,
     agent: Option<AgentKind>,
     mode: PermissionMode,
+    chip: Option<String>,
     weak: WeakEntity<T>,
     set: impl Fn(&mut T, PermissionMode, &mut Window, &mut Context<T>) + Clone + 'static,
 ) -> impl IntoElement {
@@ -446,7 +413,10 @@ pub fn mode_menu<T: 'static>(
         .ghost()
         .icon(icon(mode_icon(mode)))
         .label(mode.label())
-        .dropdown_caret(true)
+        .map(|b| match &chip {
+            Some(tip) => b.tooltip(tip.clone()),
+            None => b.dropdown_caret(true),
+        })
         .when(danger, |b| b.text_color(hex(0xEF4444)))
         .dropdown_menu(move |mut menu, _, _| {
             menu = menu.label("Permissions");
@@ -482,9 +452,7 @@ pub fn mode_icon(m: PermissionMode) -> &'static str {
 impl Render for Home {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pal = tokens::p(cx);
-        let agent_button = self.agent_menu_button(cx).into_any_element();
-        let model_button = self.model_menu_button(cx);
-        let option_buttons = self.option_buttons(cx);
+        let run_chip = self.run_settings_chip(cx);
         let attachments = self.attachments.clone();
         let store = self.store.read(cx);
         let no_agents = store.agents_scanned && store.available_agents().is_empty();
@@ -493,6 +461,12 @@ impl Render for Home {
         let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         let default_mode = self.default_mode(cx);
         let effective_mode = self.agent.map(|a| default_mode.for_agent(a)).unwrap_or(default_mode);
+        // An agent without the default mode runs in its nearest one; say so on hover.
+        let mode_tip = if effective_mode != default_mode {
+            format!("{} — {}. This agent runs it as {}.", default_mode.label(), default_mode.description(), effective_mode.label())
+        } else {
+            format!("{} — {}", default_mode.label(), default_mode.description())
+        };
         let project_label = match &self.project {
             _ if general => "General".to_string(),
             Some(p) => p.name.clone(),
@@ -596,23 +570,9 @@ impl Render for Home {
                                     .tooltip("Attach files or images (drop or paste them too)")
                                     .on_click(cx.listener(|this, _, _, cx| this.attach(cx))),
                             )
-                            .child(agent_button)
-                            .child(model_button)
-                            .children(option_buttons)
-                            .child(
-                                Button::new("project-pick")
-                                    .ghost()
-                                    // Long project names truncate instead of crowding the row.
-                                    .max_w(sz(180.))
-                                    .icon(icon(if general { "globe" } else { "folder" }))
-                                    .label(project_label)
-                                    .tooltip("Choose project  (Ctrl+P)")
-                                    .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::PickProject))),
-                            )
-                            .child(mode_menu("home-mode", None, default_mode, weak.clone(), |h: &mut Home, m, _, cx| h.set_default_mode(m, cx)))
-                            .when(effective_mode != default_mode, |d| {
-                                d.child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(format!("{} here", effective_mode.label())))
-                            }),
+                            .child(mode_menu("home-mode", None, default_mode, Some(mode_tip), weak.clone(), |h: &mut Home, m, _, cx| h.set_default_mode(m, cx)))
+                            .child(div().flex_1())
+                            .child(run_chip),
                     )
                     .child(
                         div()
@@ -649,7 +609,23 @@ impl Render for Home {
                         .text_color(pal.text)
                         .child("What are we working on?"),
                 )
-                .child(div().w_full().mt_2().child(composer))
+                .child(
+                    v_flex().w_full().mt_2().gap(sz(6.)).child(composer).child(
+                        // Where the chat runs sits under the box, not among the per-message controls.
+                        h_flex().px(sz(6.)).child(
+                            Button::new("project-pick")
+                                .ghost()
+                                .small()
+                                .max_w(sz(260.))
+                                .text_color(pal.text_muted)
+                                .icon(icon(if general { "globe" } else { "folder" }))
+                                .label(project_label)
+                                .dropdown_caret(true)
+                                .tooltip("Choose project  (Ctrl+P)")
+                                .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::PickProject))),
+                        ),
+                    ),
+                )
                 .when(no_agents, |d| {
                     d.child(
                         div()
