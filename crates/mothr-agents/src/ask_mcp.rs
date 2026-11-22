@@ -155,6 +155,9 @@ fn text(t: &str, is_error: bool) -> Value {
 }
 
 fn format_answers(questions: &[Question], answers: &[Vec<String>]) -> String {
+    if answers.iter().all(|a| a.is_empty()) {
+        return "The user skipped the question without answering.".into();
+    }
     let mut out = String::from("The user answered:\n");
     for (i, q) in questions.iter().enumerate() {
         let a = answers.get(i).filter(|a| !a.is_empty()).map(|a| a.join(", ")).unwrap_or_else(|| "(no answer)".into());

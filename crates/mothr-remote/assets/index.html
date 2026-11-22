@@ -170,14 +170,23 @@ details[open]>summary .chev{transform:rotate(90deg)}
 .btn.reject_once,.btn.reject_always{color:var(--crit)}
 .btn.chosen{outline:2px solid var(--fg);outline-offset:2px;opacity:1}
 .resolved{padding:0 14px 12px;font-size:13px;color:var(--mut)}
-.q{padding:10px 14px 0}
-.q .qh{display:inline-block;font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;background:var(--card2);color:var(--mut);margin-bottom:4px}
-.q .qt{font-weight:600;margin-bottom:8px}
-.chips{display:flex;flex-wrap:wrap;gap:7px}
-.chip{display:flex;flex-direction:column;align-items:flex-start;text-align:left;padding:7px 12px;border-radius:12px;border:1px solid var(--line);background:var(--card2);font-size:14px;max-width:100%;transition:all .15s}
-.chip small{color:var(--dim);font-size:12px}
-.chip.on{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 16%,var(--card2))}
-.qother{width:100%;margin-top:8px;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg)}
+.qdock{display:none;max-width:860px;margin:0 auto;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid color-mix(in srgb,var(--acc) 50%,var(--line));border-radius:14px;background:var(--card);animation:fadein .2s}
+.composer.asking .qdock{display:flex}
+.composer.asking .comp-in{display:none}
+.qd-h{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--acc)}
+.qd-h .sp{flex:1}.qd-h small{color:var(--dim);font-weight:400;font-size:12px}
+.qd-t{font-weight:600;overflow-wrap:anywhere;min-width:0}
+.qopts{display:flex;flex-direction:column;gap:6px;min-width:0}
+.qopt{display:flex;align-items:flex-start;gap:10px;width:100%;min-width:0;text-align:left;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card2)}
+.qopt .mk{flex:none;width:14px;height:14px;margin-top:3px;border-radius:50%;border:1.5px solid var(--dim)}
+.qopt.multi .mk{border-radius:4px}
+.qopt .qo{display:flex;flex-direction:column;min-width:0;overflow-wrap:anywhere}
+.qopt small{color:var(--dim);font-size:12px}
+.qopt.on{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 14%,var(--card2))}
+.qopt.on .mk{border-color:var(--acc);background:var(--acc)}
+.qd-f{display:flex;justify-content:flex-end;gap:8px}
+.qd-f .btn:disabled{opacity:.45}
+.qother{width:100%;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg)}
 .answers{padding:4px 14px 12px;font-size:14px;color:var(--mut)}
 .answers b{color:var(--fg);font-weight:500}
 .notice{display:flex;gap:8px;align-items:flex-start;font-size:13.5px;padding:8px 12px;border-radius:11px;background:var(--card);border:1px solid var(--line);color:var(--mut)}
@@ -268,7 +277,8 @@ textarea.field{resize:vertical;min-height:84px}
     <div id="no-session"><div><p>Select a session, or start a new chat.</p></div></div>
     <header class="shead" id="shead"></header>
     <div id="scroller"><div id="transcript"></div><button id="jump" data-act="jump"></button></div>
-    <footer class="composer">
+    <footer class="composer" id="composer">
+      <div class="qdock" id="qdock"></div>
       <div class="comp-in">
         <div id="banner"></div>
         <div class="comp-meta"><select class="sel" id="mode" aria-label="Permission mode"></select><div class="ctx" id="ctx"></div></div>
@@ -566,6 +576,7 @@ function flush() {
     if (D.all) renderTranscript();
     else for (const id of D.entries) renderEntry(id);
     if ((D.all || D.entries.size) && stick) sc.scrollTop = sc.scrollHeight;
+    renderDock();
     updateJump();
     maybeMarkRead();
   }
@@ -847,21 +858,43 @@ function permissionHTML(p) {
     ${done ? `<div class="resolved">${ic('check', 'sm')} ${esc(chosen)}</div>` : ''}</div>`;
 }
 function qState(q) {
-  if (!S.qs.has(q.id)) S.qs.set(q.id, { sel: q.questions.map(() => new Set()), other: q.questions.map(() => ''), otherOn: q.questions.map(() => false) });
+  if (!S.qs.has(q.id)) S.qs.set(q.id, { step: 0, sel: q.questions.map(() => new Set()), other: q.questions.map(() => '') });
   return S.qs.get(q.id);
 }
+/* A pending question lives in the composer slot (see renderDock); the transcript keeps a summary. */
 function questionHTML(q) {
   if (q.answers != null) {
     const rows = q.questions.map((x, i) => `<div><span>${esc(x.header || x.question)}</span> → <b>${esc(((q.answers[i] || []).join(', ')) || '—')}</b></div>`).join('');
     return `<div class="card ask done"><div class="ask-h">${ic('check', 'sm')} Answered</div><div class="answers">${rows || 'Dismissed'}</div></div>`;
   }
+  return `<div class="card ask done"><div class="ask-h">${ic('info', 'sm')} Waiting for your answer below</div></div>`;
+}
+function pendingQuestion() {
+  const s = cur();
+  return s ? s.entries.find((e) => e.type === 'question' && e.answers == null) : null;
+}
+function dockReady(q) {
+  const st = qState(q), qi = Math.min(st.step, q.questions.length - 1);
+  return st.sel[qi].size > 0 || st.other[qi].trim() !== '';
+}
+function dockAnswers(q) {
   const st = qState(q);
-  const body = q.questions.map((x, qi) => `<div class="q">${x.header ? `<span class="qh">${esc(x.header)}</span>` : ''}<div class="qt">${esc(x.question)}${x.multi_select ? ' <small style="color:var(--dim);font-weight:400">(choose any)</small>' : ''}</div>
-    <div class="chips">${x.options.map((o, oi) => `<button class="chip${st.sel[qi].has(oi) ? ' on' : ''}" data-act="qopt" data-eid="${esc(q.id)}" data-q="${qi}" data-o="${oi}">${esc(o.label)}${o.description ? `<small>${esc(o.description)}</small>` : ''}</button>`).join('')}
-    <button class="chip${st.otherOn[qi] ? ' on' : ''}" data-act="qother" data-eid="${esc(q.id)}" data-q="${qi}">None of these…</button></div>
-    ${st.otherOn[qi] ? `<input class="qother" data-eid="${esc(q.id)}" data-q="${qi}" value="${esc(st.other[qi])}" placeholder="Type your own answer">` : ''}</div>`).join('');
-  return `<div class="card ask"><div class="ask-h">${ic('info', 'sm')} ${q.questions.length > 1 ? 'Questions' : 'Question'}</div>${body}
-    <div class="opts"><button class="btn primary" data-act="qsubmit" data-eid="${esc(q.id)}">Send answer</button></div></div>`;
+  return q.questions.map((x, i) => [...st.sel[i]].sort((a, b) => a - b).map((o) => x.options[o].label).concat(st.other[i].trim() ? [st.other[i].trim()] : []));
+}
+function renderDock(force) {
+  const foot = $('#composer'), dock = $('#qdock'), q = pendingQuestion();
+  foot.classList.toggle('asking', !!q);
+  if (!q) { dock.innerHTML = ''; S.dockKey = ''; return; }
+  const st = qState(q), n = q.questions.length, qi = Math.min(st.step, n - 1);
+  const key = `${q.id}|${qi}|${[...st.sel[qi]].join(',')}`;
+  if (!force && key === S.dockKey) return;
+  S.dockKey = key;
+  const x = q.questions[qi], last = qi === n - 1;
+  dock.innerHTML = `<div class="qd-h">${ic('info', 'sm')}<span>${esc(x.header || 'Question')}</span><span class="sp"></span>${x.multi_select ? '<small>choose any</small>' : ''}${n > 1 ? `<small>${qi + 1} of ${n}</small>` : ''}</div>
+    <div class="qd-t">${esc(x.question)}</div>
+    <div class="qopts">${x.options.map((o, oi) => `<button class="qopt${x.multi_select ? ' multi' : ''}${st.sel[qi].has(oi) ? ' on' : ''}" data-act="qopt" data-o="${oi}"><span class="mk"></span><span class="qo"><b>${esc(o.label)}</b>${o.description ? `<small>${esc(o.description)}</small>` : ''}</span></button>`).join('')}</div>
+    <input class="qother" data-eid="${esc(q.id)}" data-q="${qi}" value="${esc(st.other[qi])}" placeholder="None of these? Type your own answer">
+    <div class="qd-f"><button class="btn" data-act="qskip">Skip</button>${qi > 0 ? '<button class="btn" data-act="qback">Back</button>' : ''}<button class="btn primary" id="qnext" data-act="qnext"${dockReady(q) ? '' : ' disabled'}>${last ? 'Answer' : 'Next'}</button></div>`;
 }
 
 /* ======================= markdown (escape first, then format) ======================= */
@@ -1085,31 +1118,31 @@ const ACTIONS = {
     sessionCmd(S.current, { command: 'respond_permission', entry_id: d.eid, option_id: d.opt }).then((r) => { if (!r.ok) mark({ all: true }); });
   },
   qopt: (d) => {
-    const q = findEntry(d.eid);
+    const q = pendingQuestion();
     if (!q) return;
-    const st = qState(q), qi = +d.q, oi = +d.o;
+    const st = qState(q), qi = Math.min(st.step, q.questions.length - 1), oi = +d.o;
     if (q.questions[qi].multi_select) { if (st.sel[qi].has(oi)) st.sel[qi].delete(oi); else st.sel[qi].add(oi); }
-    else { st.sel[qi] = new Set([oi]); st.otherOn[qi] = false; }
-    renderEntry(d.eid);
+    else st.sel[qi] = new Set([oi]);
+    renderDock(true);
   },
-  qother: (d) => {
-    const q = findEntry(d.eid);
-    if (!q) return;
-    const st = qState(q), qi = +d.q;
-    st.otherOn[qi] = q.questions[qi].multi_select ? !st.otherOn[qi] : true;
-    if (!q.questions[qi].multi_select) st.sel[qi] = new Set();
-    renderEntry(d.eid);
-    const input = S.els.get(d.eid) && S.els.get(d.eid).querySelector(`input.qother[data-q="${qi}"]`);
-    if (input) input.focus();
+  qskip: () => {
+    const q = pendingQuestion();
+    if (q) sessionCmd(S.current, { command: 'answer_question', entry_id: q.id, answers: [] });
   },
-  qsubmit: (d, el) => {
-    const q = findEntry(d.eid);
+  qback: () => {
+    const q = pendingQuestion();
     if (!q) return;
     const st = qState(q);
-    const answers = q.questions.map((x, i) => [...st.sel[i]].sort((a, b) => a - b).map((o) => x.options[o].label).concat(st.otherOn[i] && st.other[i].trim() ? [st.other[i].trim()] : []));
-    if (answers.some((a) => !a.length)) return toast('Answer every question first', 'warning');
+    st.step = Math.max(0, st.step - 1);
+    renderDock(true);
+  },
+  qnext: (d, el) => {
+    const q = pendingQuestion();
+    if (!q || !dockReady(q)) return;
+    const st = qState(q);
+    if (st.step < q.questions.length - 1) { st.step++; renderDock(true); return; }
     el.disabled = true;
-    sessionCmd(S.current, { command: 'answer_question', entry_id: q.id, answers }).then((r) => { if (!r.ok) el.disabled = false; });
+    sessionCmd(S.current, { command: 'answer_question', entry_id: q.id, answers: dockAnswers(q) }).then((r) => { if (!r.ok) el.disabled = false; });
   },
   'm-pin': (d) => { const s = S.sessions.get(d.sid); if (s) send({ type: 'pin_session', id: d.sid, pinned: !s.meta.pinned }); closeSheet(); },
   'm-rename': (d) => {
@@ -1145,7 +1178,10 @@ document.addEventListener('click', (e) => {
 document.addEventListener('input', (e) => {
   const t = e.target;
   if (t.id === 'nc-q') { NC.q = t.value; searchProjects(); }
-  else if (t.classList.contains('qother')) { const q = findEntry(t.dataset.eid); if (q) qState(q).other[+t.dataset.q] = t.value; }
+  else if (t.classList.contains('qother')) {
+    const q = findEntry(t.dataset.eid);
+    if (q) { qState(q).other[+t.dataset.q] = t.value; const b = $('#qnext'); if (b) b.disabled = !dockReady(q); }
+  }
 });
 document.addEventListener('change', (e) => { if (e.target.id === 'nc-mode') NC.mode = e.target.value; });
 document.addEventListener('keydown', (e) => {

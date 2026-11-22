@@ -50,6 +50,8 @@ pub struct ChatView {
     /// Selected answers per question entry: one list per question.
     answers: HashMap<EntryId, Vec<Vec<String>>>,
     other_inputs: HashMap<(EntryId, usize), Entity<InputState>>,
+    /// Which question of a multi-question card is showing.
+    question_step: HashMap<EntryId, usize>,
     scroll: ScrollHandle,
     follow: bool,
     /// How many of the newest entries are built; "Show earlier" raises it.
@@ -136,6 +138,7 @@ impl ChatView {
             expanded: HashSet::new(),
             answers: HashMap::new(),
             other_inputs: HashMap::new(),
+            question_step: HashMap::new(),
             scroll: ScrollHandle::new(),
             follow: true,
             shown: INITIAL_SHOWN,
@@ -1243,122 +1246,185 @@ impl ChatView {
         .into_any_element()
     }
 
+    /// A question that has been answered, as a quiet summary in the transcript. A pending one
+    /// lives in the composer slot instead (see [`Self::render_question_dock`]).
     fn render_question(&mut self, q: &QuestionRequest, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        if let Some(ans) = &q.answers {
-            return v_flex()
-                .gap_1()
-                .children(q.questions.iter().zip(ans.iter().chain(std::iter::repeat(&vec![]))).map(|(qq, a)| {
-                    h_flex()
-                        .gap_2()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(icon("circle-question-mark").size(sz(13.)))
-                        .child(qq.question.clone())
-                        .child(div().text_color(theme.foreground).font_weight(FontWeight::MEDIUM).child(if a.is_empty() { "—".to_string() } else { a.join(", ") }))
-                }))
-                .into_any_element();
-        }
-        let eid = q.id.clone();
-        let selections = self.answers.entry(eid.clone()).or_insert_with(|| vec![vec![]; q.questions.len()]).clone();
-        let mut col = v_flex().gap_4();
-        for (qi, qq) in q.questions.iter().enumerate() {
-            let mut opts = h_flex().gap_2().flex_wrap();
-            for o in &qq.options {
-                let selected = selections.get(qi).is_some_and(|s| s.contains(&o.label));
-                let label = o.label.clone();
-                let eid2 = eid.clone();
-                let multi = qq.multi_select;
-                opts = opts.child(
-                    v_flex()
-                        .id(ElementId::Name(format!("q-{}-{}-{}", q.id, qi, o.label).into()))
-                        .px_3()
-                        .py_2()
-                        .max_w(sz(320.))
-                        .rounded(sz(10.))
-                        .border_1()
-                        .cursor_pointer()
-                        .border_color(if selected { theme.primary } else { theme.border })
-                        .when(selected, |d| d.bg(theme.primary.opacity(0.1)))
-                        .hover(|d| d.bg(theme.list_hover))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let sel = this.answers.entry(eid2.clone()).or_default();
-                            while sel.len() <= qi {
-                                sel.push(vec![]);
-                            }
-                            let s = &mut sel[qi];
-                            if s.contains(&label) {
-                                s.retain(|x| x != &label);
-                            } else {
-                                if !multi {
-                                    s.clear();
-                                }
-                                s.push(label.clone());
-                            }
-                            cx.notify();
-                        }))
-                        .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(o.label.clone()))
-                        .when_some(o.description.clone(), |d, desc| d.child(div().text_xs().text_color(theme.muted_foreground).child(desc))),
-                );
-            }
-            let other = self.other_inputs.get(&(eid.clone(), qi)).cloned();
-            col = col.child(
-                v_flex()
+        let Some(ans) = &q.answers else { return div().into_any_element() };
+        v_flex()
+            .gap_1()
+            .children(q.questions.iter().zip(ans.iter().chain(std::iter::repeat(&vec![]))).map(|(qq, a)| {
+                h_flex()
                     .gap_2()
+                    .items_start()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(div().pt(sz(1.)).child(icon("circle-question-mark").size(sz(13.))))
+                    .child(div().min_w_0().child(qq.question.clone()))
+                    .child(div().flex_none().text_color(theme.foreground).font_weight(FontWeight::MEDIUM).child(if a.is_empty() { "—".to_string() } else { a.join(", ") }))
+            }))
+            .into_any_element()
+    }
+
+    /// The pending question, one at a time, in place of the composer.
+    fn render_question_dock(&mut self, q: &QuestionRequest, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let pal = tokens::p(cx);
+        let eid = q.id.clone();
+        let n = q.questions.len().max(1);
+        let step = (*self.question_step.get(&eid).unwrap_or(&0)).min(n - 1);
+        let Some(qq) = q.questions.get(step) else { return div().into_any_element() };
+        let qi = step;
+        let last = step + 1 == n;
+        let selections = self.answers.entry(eid.clone()).or_insert_with(|| vec![vec![]; n]).clone();
+        let picked = selections.get(qi).cloned().unwrap_or_default();
+        let other = self.other_inputs.get(&(eid.clone(), qi)).cloned();
+        let typed = other.as_ref().is_some_and(|i| !i.read(cx).value().trim().is_empty());
+        let can_go = !picked.is_empty() || typed;
+
+        let mut opts = v_flex().gap(sz(6.)).w_full().min_w_0();
+        for o in &qq.options {
+            let selected = picked.contains(&o.label);
+            let label = o.label.clone();
+            let eid2 = eid.clone();
+            let multi = qq.multi_select;
+            opts = opts.child(
+                h_flex()
+                    .id(ElementId::Name(format!("q-{}-{}-{}", q.id, qi, o.label).into()))
+                    .w_full()
+                    .min_w_0()
+                    .gap_3()
+                    .items_start()
+                    .px_3()
+                    .py(sz(8.))
+                    .rounded(sz(tokens::radius::MD))
+                    .border_1()
+                    .cursor_pointer()
+                    .border_color(if selected { theme.primary } else { theme.border })
+                    .when(selected, |d| d.bg(theme.primary.opacity(0.1)))
+                    .hover(|d| d.bg(theme.list_hover))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let sel = this.answers.entry(eid2.clone()).or_default();
+                        while sel.len() <= qi {
+                            sel.push(vec![]);
+                        }
+                        let s = &mut sel[qi];
+                        if s.contains(&label) {
+                            s.retain(|x| x != &label);
+                        } else {
+                            if !multi {
+                                s.clear();
+                            }
+                            s.push(label.clone());
+                        }
+                        cx.notify();
+                    }))
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .when_some(qq.header.clone(), |d, h| {
-                                d.child(div().text_xs().px(sz(6.)).py(sz(1.)).rounded(sz(4.)).bg(theme.primary.opacity(0.15)).text_color(theme.primary).child(h))
-                            })
-                            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(qq.question.clone()))
-                            .when(qq.multi_select, |d| d.child(div().text_xs().text_color(theme.muted_foreground).child("choose any"))),
+                        div()
+                            .flex_none()
+                            .mt(sz(2.))
+                            .size(sz(14.))
+                            .rounded(sz(if multi { 4. } else { 7. }))
+                            .border_1()
+                            .border_color(if selected { theme.primary } else { pal.text_faint })
+                            .when(selected, |d| d.bg(theme.primary)),
                     )
-                    .child(opts)
-                    .when_some(other, |d, input| d.child(div().max_w(sz(420.)).child(Input::new(&input).small()))),
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .flex_1()
+                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(o.label.clone()))
+                            .when_some(o.description.clone(), |d, desc| d.child(div().text_xs().text_color(theme.muted_foreground).child(desc))),
+                    ),
             );
         }
-        let eid3 = eid.clone();
-        let n = q.questions.len();
+
+        let eid_next = eid.clone();
+        let eid_back = eid.clone();
+        let eid_skip = eid.clone();
+        let step_label = if n > 1 { Some(format!("{} of {}", step + 1, n)) } else { None };
         appear(
-            ElementId::Name(format!("q-in-{}", q.id).into()),
+            ElementId::Name(format!("q-in-{}-{}", q.id, step).into()),
             v_flex()
                 .gap_3()
+                .w_full()
+                .min_w_0()
                 .p_4()
-                .rounded(sz(12.))
+                .rounded(sz(tokens::radius::LG))
                 .border_1()
                 .border_color(theme.primary.opacity(0.45))
-                .bg(theme.primary.opacity(0.05))
+                .bg(pal.surface)
                 .child(
                     h_flex()
                         .gap_2()
                         .items_center()
-                        .child(icon("circle-question-mark").size(sz(16.)).text_color(theme.primary))
-                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("The agent has a question")),
+                        .child(icon("circle-question-mark").size(sz(15.)).text_color(theme.primary))
+                        .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme.primary).child(qq.header.clone().unwrap_or_else(|| "Question".into())))
+                        .child(div().flex_1())
+                        .when(qq.multi_select, |d| d.child(div().text_xs().text_color(theme.muted_foreground).child("choose any")))
+                        .when_some(step_label, |d, l| d.child(div().text_xs().text_color(theme.muted_foreground).child(l))),
                 )
-                .child(col)
+                .child(div().w_full().min_w_0().text_sm().font_weight(FontWeight::SEMIBOLD).child(qq.question.clone()))
+                .child(opts)
+                .when_some(other, |d, input| d.child(div().w_full().min_w_0().child(Input::new(&input).small())))
                 .child(
-                    h_flex().gap_2().child(
-                        Button::new(ElementId::Name(format!("q-submit-{}", q.id).into()))
-                            .primary()
-                            .small()
-                            .icon(icon("send"))
-                            .label("Answer")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                let mut answers = this.answers.get(&eid3).cloned().unwrap_or_default();
-                                answers.resize(n, vec![]);
-                                for (i, a) in answers.iter_mut().enumerate() {
-                                    if let Some(inp) = this.other_inputs.get(&(eid3.clone(), i)) {
+                    h_flex()
+                        .gap_2()
+                        .justify_end()
+                        .child(
+                            Button::new(ElementId::Name(format!("q-dismiss-{}", q.id).into()))
+                                .ghost()
+                                .small()
+                                .label("Skip")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.dispatch(SessionCommand::AnswerQuestion { entry_id: eid_skip.clone(), answers: vec![] }, window, cx);
+                                })),
+                        )
+                        .when(step > 0, |d| {
+                            d.child(
+                                Button::new(ElementId::Name(format!("q-back-{}", q.id).into()))
+                                    .outline()
+                                    .small()
+                                    .label("Back")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        let st = this.question_step.entry(eid_back.clone()).or_insert(0);
+                                        *st = st.saturating_sub(1);
+                                        cx.notify();
+                                    })),
+                            )
+                        })
+                        .child(div().when(!can_go, |d| d.opacity(0.45)).child(
+                            Button::new(ElementId::Name(format!("q-next-{}", q.id).into()))
+                                .primary()
+                                .small()
+                                .icon(icon(if last { "send" } else { "arrow-right" }))
+                                .label(if last { "Answer" } else { "Next" })
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    if !can_go {
+                                        return;
+                                    }
+                                    // Fold the typed answer into this question's selection.
+                                    if let Some(inp) = this.other_inputs.get(&(eid_next.clone(), qi)).cloned() {
                                         let v = inp.read(cx).value().trim().to_string();
                                         if !v.is_empty() {
-                                            a.push(v);
+                                            let sel = this.answers.entry(eid_next.clone()).or_default();
+                                            while sel.len() <= qi {
+                                                sel.push(vec![]);
+                                            }
+                                            sel[qi].push(v);
+                                            inp.update(cx, |i, cx| i.set_value("", window, cx));
                                         }
                                     }
-                                }
-                                this.dispatch(SessionCommand::AnswerQuestion { entry_id: eid3.clone(), answers }, window, cx);
-                            })),
-                    ),
+                                    if last {
+                                        let mut answers = this.answers.get(&eid_next).cloned().unwrap_or_default();
+                                        answers.resize(n, vec![]);
+                                        this.dispatch(SessionCommand::AnswerQuestion { entry_id: eid_next.clone(), answers }, window, cx);
+                                    } else {
+                                        *this.question_step.entry(eid_next.clone()).or_insert(0) = qi + 1;
+                                        cx.notify();
+                                    }
+                                })),
+                        )),
                 ),
         )
         .into_any_element()
@@ -1738,7 +1804,13 @@ impl Render for ChatView {
                 );
             }
         }
-        let composer = if s.meta.is_subagent() {
+        let pending_question = s.entries.iter().find_map(|e| match e {
+            Entry::Question(q) if q.answers.is_none() => Some(q.clone()),
+            _ => None,
+        });
+        let composer = if let Some(q) = pending_question.filter(|_| !s.meta.is_subagent()) {
+            self.render_question_dock(&q, cx)
+        } else if s.meta.is_subagent() {
             self.render_subagent_footer(&s, cx)
         } else {
             self.render_composer(&s, window, cx).into_any_element()

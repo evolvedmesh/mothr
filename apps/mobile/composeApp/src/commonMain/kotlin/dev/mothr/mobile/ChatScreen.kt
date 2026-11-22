@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -118,7 +119,8 @@ fun ChatScreen(model: AppModel) {
         TopBar(model, chat)
         if (chat.subagents.isNotEmpty()) SubagentStrip(model, chat)
         Box(Modifier.weight(1f)) { Transcript(model, chat) }
-        Composer(model, chat)
+        val asking = chat.entries.filterIsInstance<EntryView.Question>().firstOrNull { it.answers == null }
+        if (asking != null) QuestionDock(model, chat, asking) else Composer(model, chat)
     }
 }
 
@@ -291,7 +293,7 @@ private fun EntryItem(model: AppModel, chat: ChatDetail, e: EntryView) {
         is EntryView.Tool -> ToolCard(e)
         is EntryView.Plan -> PlanCard(e)
         is EntryView.Permission -> PermissionCard(model, chat, e)
-        is EntryView.Question -> QuestionCard(model, chat, e)
+        is EntryView.Question -> QuestionCard(e)
         is EntryView.Notice -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
             val color = when (e.level) { "error" -> pal.danger; "warning" -> pal.warning; else -> pal.textMuted }
             Ico(if (e.level == "info") Res.drawable.ic_info else Res.drawable.ic_circle_alert, tint = color, size = 16.dp)
@@ -469,51 +471,82 @@ private fun FlowRowSpaced(content: @Composable () -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
 }
 
+/** The transcript keeps a quiet summary; a pending question is answered in [QuestionDock]. */
 @Composable
-private fun QuestionCard(model: AppModel, chat: ChatDetail, e: EntryView.Question) {
+private fun QuestionCard(e: EntryView.Question) {
     val answers = e.answers
-    if (answers != null) {
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (answers == null) {
+                Text("Waiting for your answer below", style = type.body.copy(color = pal.textMuted))
+            } else {
                 e.questions.forEachIndexed { i, q ->
                     Text(q.question, style = type.body.copy(color = pal.textMuted))
                     Text(answers.getOrNull(i)?.joinToString(", ")?.ifEmpty { "Skipped" } ?: "Skipped", style = type.label)
                 }
             }
         }
-        return
     }
+}
+
+/** A pending question, one at a time, in place of the composer. */
+@Composable
+private fun QuestionDock(model: AppModel, chat: ChatDetail, e: EntryView.Question) {
+    val n = e.questions.size
+    if (n == 0) return
+    var step by remember(e.id) { mutableStateOf(0) }
     val picks = remember(e.id) { e.questions.map { mutableStateListOf<String>() } }
     val other = remember(e.id) { e.questions.map { mutableStateOf("") } }
-    Card(Modifier.fillMaxWidth(), border = pal.brand.copy(alpha = 0.55f), bg = pal.brandSoft) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            e.questions.forEachIndexed { i, q ->
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Ico(Res.drawable.ic_message_circle_question_mark, tint = pal.brand, size = 16.dp)
-                        Text(q.header ?: "Question", style = type.caption.copy(color = pal.brand))
-                    }
-                    Text(q.question, style = type.reading.copy(fontWeight = FontWeight.Medium))
-                    FlowRowSpaced {
-                        q.options.forEach { o ->
-                            val on = o.label in picks[i]
-                            Row(
-                                Modifier.clip(Radius.full).background(if (on) pal.text else pal.surface)
-                                    .border(1.dp, if (on) pal.text else pal.borderStrong, Radius.full)
-                                    .tap(shape = Radius.full) {
-                                        if (q.multiSelect) { if (on) picks[i].remove(o.label) else picks[i].add(o.label) }
-                                        else { picks[i].clear(); picks[i].add(o.label) }
-                                    }
-                                    .padding(horizontal = 13.dp, vertical = 8.dp),
-                            ) { Text(o.label, style = type.label.copy(color = if (on) pal.bg else pal.text)) }
+    val i = step.coerceIn(0, n - 1)
+    val q = e.questions[i]
+    val last = i == n - 1
+    val ready = picks[i].isNotEmpty() || other[i].value.isNotBlank()
+    val insets = WindowInsets.ime.union(WindowInsets.navigationBars)
+    Column(Modifier.fillMaxWidth().background(pal.bg).windowInsetsPadding(insets).padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp)) {
+        Card(Modifier.fillMaxWidth(), border = pal.brand.copy(alpha = 0.55f), bg = pal.surface) {
+            Column(Modifier.padding(14.dp).heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Ico(Res.drawable.ic_message_circle_question_mark, tint = pal.brand, size = 16.dp)
+                    Text(q.header ?: "Question", style = type.caption.copy(color = pal.brand), modifier = Modifier.weight(1f))
+                    if (q.multiSelect) Text("choose any", style = type.caption.copy(color = pal.textFaint))
+                    if (n > 1) Text("${i + 1} of $n", style = type.caption.copy(color = pal.textFaint))
+                }
+                Text(q.question, style = type.reading.copy(fontWeight = FontWeight.Medium))
+                q.options.forEach { o ->
+                    val on = o.label in picks[i]
+                    Row(
+                        Modifier.fillMaxWidth().clip(Radius.md).background(if (on) pal.brandSoft else pal.surface)
+                            .border(1.dp, if (on) pal.brand else pal.borderStrong, Radius.md)
+                            .tap(shape = Radius.md) {
+                                if (q.multiSelect) { if (on) picks[i].remove(o.label) else picks[i].add(o.label) }
+                                else { picks[i].clear(); picks[i].add(o.label) }
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Box(
+                            Modifier.padding(top = 3.dp).size(14.dp)
+                                .clip(if (q.multiSelect) Radius.sm else Radius.full)
+                                .background(if (on) pal.brand else Color.Transparent)
+                                .border(1.5.dp, if (on) pal.brand else pal.textFaint, if (q.multiSelect) Radius.sm else Radius.full),
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(o.label, style = type.label)
+                            o.description?.let { Text(it, style = type.caption.copy(color = pal.textMuted)) }
                         }
                     }
-                    Field(other[i].value, "None of these? Type your own answer", singleLine = true) { other[i].value = it }
                 }
-            }
-            Btn("Answer", tone = Tone.Primary, modifier = Modifier.fillMaxWidth()) {
-                val result = e.questions.indices.map { i -> picks[i].toList() + listOfNotNull(other[i].value.trim().ifEmpty { null }) }
-                model.act { answerQuestion(chat.summary.id, e.id, result) }
+                Field(other[i].value, "None of these? Type your own answer") { other[i].value = it }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                    Btn("Skip", tone = Tone.Ghost) { model.act { answerQuestion(chat.summary.id, e.id, emptyList()) } }
+                    if (i > 0) Btn("Back") { step = i - 1 }
+                    Btn(if (last) "Answer" else "Next", tone = Tone.Primary, enabled = ready) {
+                        if (last) {
+                            val result = e.questions.indices.map { k -> picks[k].toList() + listOfNotNull(other[k].value.trim().ifEmpty { null }) }
+                            model.act { answerQuestion(chat.summary.id, e.id, result) }
+                        } else step = i + 1
+                    }
+                }
             }
         }
     }
