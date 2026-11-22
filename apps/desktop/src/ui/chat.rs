@@ -1252,16 +1252,33 @@ impl ChatView {
         let theme = cx.theme().clone();
         let Some(ans) = &q.answers else { return div().into_any_element() };
         v_flex()
-            .gap_1()
+            .gap_2()
+            .w_full()
+            .min_w_0()
             .children(q.questions.iter().zip(ans.iter().chain(std::iter::repeat(&vec![]))).map(|(qq, a)| {
-                h_flex()
-                    .gap_2()
-                    .items_start()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(div().pt(sz(1.)).child(icon("circle-question-mark").size(sz(13.))))
-                    .child(div().min_w_0().child(qq.question.clone()))
-                    .child(div().flex_none().text_color(theme.foreground).font_weight(FontWeight::MEDIUM).child(if a.is_empty() { "—".to_string() } else { a.join(", ") }))
+                v_flex()
+                    .gap(sz(2.))
+                    .w_full()
+                    .min_w_0()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_start()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(div().flex_none().pt(sz(1.)).child(icon("circle-question-mark").size(sz(13.))))
+                            .child(div().min_w_0().flex_1().child(qq.question.clone())),
+                    )
+                    .child(
+                        div()
+                            .pl(sz(21.))
+                            .w_full()
+                            .min_w_0()
+                            .text_sm()
+                            .text_color(theme.foreground)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(if a.is_empty() { "—".to_string() } else { a.join(", ") }),
+                    )
             }))
             .into_any_element()
     }
