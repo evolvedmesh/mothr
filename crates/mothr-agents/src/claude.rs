@@ -369,8 +369,9 @@ impl Driver {
                 self.em.emit(SessionEvent::RemoteControl {
                     state: RemoteControlState { enabled, url: None, pending: true, error: None },
                 });
-                let name = format!("Mothr · {}", self.spec.title);
-                self.control(json!({"subtype": "remote_control", "enabled": enabled, "name": name}), Pending::RemoteControl(enabled));
+                // No `name`: Claude Code titles the remote session itself and follows the title it
+                // gives the chat. Mothr's own title is only a placeholder ("New chat") until then.
+                self.control(json!({"subtype": "remote_control", "enabled": enabled}), Pending::RemoteControl(enabled));
             }
             SessionCommand::RewindFiles { user_message_id } => {
                 self.control(json!({"subtype": "rewind_files", "user_message_id": user_message_id}), Pending::Rewind);
