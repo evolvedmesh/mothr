@@ -27,6 +27,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Newest entries a chat builds at first, and how many more "Show earlier" adds.
+const INITIAL_SHOWN: usize = 120;
+const EARLIER_STEP: usize = 200;
+
 pub enum ChatEvent {
     Open(SessionId),
 }
@@ -45,6 +49,8 @@ pub struct ChatView {
     other_inputs: HashMap<(EntryId, usize), Entity<InputState>>,
     scroll: ScrollHandle,
     follow: bool,
+    /// How many of the newest entries are built; "Show earlier" raises it.
+    shown: usize,
     working_since: Option<Instant>,
     /// The user message being edited (edit & resend).
     editing: Option<EntryId>,
@@ -129,6 +135,7 @@ impl ChatView {
             other_inputs: HashMap::new(),
             scroll: ScrollHandle::new(),
             follow: true,
+            shown: INITIAL_SHOWN,
             working_since: None,
             editing: None,
             slash_sel: 0,
@@ -1624,8 +1631,26 @@ impl ChatView {
 
 impl Render for ChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(s) = self.store.read(cx).session(self.id).cloned() else {
-            return div().size_full().child(empty_state("message-square", "Chat not found", "It may have been deleted.", cx)).into_any_element();
+        // Only the recent tail is built each frame: a long agent run has thousands of entries and
+        // laying all of them out (and cloning them) on every streamed token made the app crawl.
+        let (s, hidden) = {
+            let Some(full) = self.store.read(cx).session(self.id) else {
+                return div().size_full().child(empty_state("message-square", "Chat not found", "It may have been deleted.", cx)).into_any_element();
+            };
+            let total = full.entries.len();
+            let mut start = total.saturating_sub(self.shown);
+            // A question or permission waiting on you is never tucked away.
+            if let Some(p) = full.entries.iter().position(Entry::is_pending_input) {
+                start = start.min(p);
+            }
+            let s = SessionState {
+                meta: full.meta.clone(),
+                entries: full.entries[start..].to_vec(),
+                models: full.models.clone(),
+                modes: full.modes.clone(),
+                commands: full.commands.clone(),
+            };
+            (s, start)
         };
         let theme = cx.theme().clone();
         let live = s.meta.status.is_live();
@@ -1662,6 +1687,22 @@ impl Render for ChatView {
             })
             .collect();
         let show_thinking = self.store.read(cx).hub.settings().show_thinking;
+        if hidden > 0 {
+            let step = hidden.min(EARLIER_STEP);
+            transcript = transcript.child(
+                h_flex().w_full().justify_center().child(
+                    Button::new("show-earlier")
+                        .small()
+                        .ghost()
+                        .icon(icon("chevrons-up"))
+                        .label(format!("Show {step} earlier of {hidden} hidden steps"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.shown += EARLIER_STEP;
+                            cx.notify();
+                        })),
+                ),
+            );
+        }
         for e in &s.entries {
             if matches!(e, Entry::Tool(t) if under_review.contains(t.id.as_str())) {
                 continue;
