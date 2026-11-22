@@ -31,7 +31,7 @@ struct PendingPermission {
     rpc_id: Value,
     question: bool,
     /// Set when the question came from Mothr's own MCP tool rather than an ACP request.
-    ask: Option<tokio::sync::oneshot::Sender<Option<Vec<Vec<String>>>>>,
+    ask: Option<(Vec<Question>, tokio::sync::oneshot::Sender<crate::ask_mcp::Answers>)>,
 }
 
 struct Driver {
@@ -192,7 +192,7 @@ pub async fn run(
         ask_server: None,
         ask_tools: Default::default(),
     };
-    let (mut ask_config, mut ask_rx) = match crate::ask_mcp::start().await {
+    let (mut ask_config, mut ask_rx) = match crate::ask_mcp::start(ask_wait(d.spec.agent)).await {
         Some(a) => (Some(a.config), a.requests),
         None => (None, mpsc::unbounded_channel().1),
     };
@@ -426,8 +426,15 @@ impl Driver {
             SessionCommand::AnswerQuestion { entry_id, answers } => {
                 // ACP has no question primitive yet; agents ask via elicitation-like requests.
                 if let Some(p) = self.permissions.remove(&entry_id) {
-                    if let Some(tx) = p.ask {
-                        let _ = tx.send(Some(answers.clone()));
+                    if let Some((questions, tx)) = p.ask {
+                        // The agent's tool call may have timed out while the user was answering;
+                        // then the answers go to it as a message instead of being lost.
+                        if tx.send(Some(answers.clone())).is_err() {
+                            let text = crate::ask_mcp::answers_message(&questions, &answers);
+                            self.em.emit(SessionEvent::Resolved { entry_id, choice: None, answers: Some(answers) });
+                            self.on_command(SessionCommand::Prompt { text, attachments: vec![], delivery: Delivery::Normal });
+                            return;
+                        }
                     } else if p.question {
                         self.reply(&p.rpc_id, json!({"action": "accept", "content": {"answers": answers}}));
                     }
@@ -465,7 +472,7 @@ impl Driver {
         for eid in pending {
             if let Some(p) = self.permissions.remove(&eid) {
                 match p.ask {
-                    Some(tx) => {
+                    Some((_, tx)) => {
                         let _ = tx.send(None);
                     }
                     None if p.question => self.reply(&p.rpc_id, json!({"action": "cancel"})),
@@ -1163,7 +1170,7 @@ impl Driver {
     /// The agent called Mothr's question tool: show a question card and hold the call open.
     fn on_ask(&mut self, req: crate::ask_mcp::AskRequest) {
         let entry_id = new_entry_id();
-        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: Value::Null, question: true, ask: Some(req.reply) });
+        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: Value::Null, question: true, ask: Some((req.questions.clone(), req.reply)) });
         self.em.emit(SessionEvent::Upsert { entry: Entry::Question(QuestionRequest { id: entry_id, questions: req.questions, answers: None }) });
     }
 
@@ -1194,6 +1201,16 @@ impl Driver {
         self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: true, ask: None });
         self.em.emit(SessionEvent::Upsert { entry: Entry::Question(QuestionRequest { id: entry_id, questions, answers: None }) });
     }
+}
+
+/// How long a question tool call stays open before the answer falls back to a chat message.
+/// Copilot abandons MCP calls after about three minutes; other agents' limits are unknown and
+/// some are as low as a minute.
+fn ask_wait(agent: AgentKind) -> std::time::Duration {
+    if let Some(n) = std::env::var("MOTHR_ASK_WAIT_SECS").ok().and_then(|v| v.parse().ok()) {
+        return std::time::Duration::from_secs(n);
+    }
+    std::time::Duration::from_secs(if agent == AgentKind::Copilot { 150 } else { 45 })
 }
 
 /// An ACP `diff` content block. ACP sends whole files, so no line offset applies.

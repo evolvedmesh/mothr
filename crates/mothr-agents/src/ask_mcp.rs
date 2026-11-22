@@ -10,14 +10,18 @@ use mothr_core::{Question, QuestionOption};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 pub(crate) const TOOL: &str = "ask_user_question";
 
 /// One question round trip. `reply` gets one answer list per question, or `None` if cancelled.
+/// One answer list per question; `None` if the question was dismissed.
+pub(crate) type Answers = Option<Vec<Vec<String>>>;
+
 pub(crate) struct AskRequest {
     pub questions: Vec<Question>,
-    pub reply: oneshot::Sender<Option<Vec<Vec<String>>>>,
+    pub reply: oneshot::Sender<Answers>,
 }
 
 pub(crate) struct AskServer {
@@ -28,7 +32,9 @@ pub(crate) struct AskServer {
 
 /// Start listening on a random loopback port. The URL carries a secret path so other local
 /// processes can't pose as the agent.
-pub(crate) async fn start() -> Option<AskServer> {
+/// `wait` is how long a tool call may stay open: MCP clients abandon calls after a fixed time
+/// (Copilot ~3 min, others about a minute), so a slower answer goes back as a chat message.
+pub(crate) async fn start(wait: Duration) -> Option<AskServer> {
     let listener = TcpListener::bind("127.0.0.1:0").await.ok()?;
     let port = listener.local_addr().ok()?.port();
     let secret = uuid::Uuid::new_v4().simple().to_string();
@@ -39,7 +45,7 @@ pub(crate) async fn start() -> Option<AskServer> {
             let Ok((stream, _)) = listener.accept().await else { break };
             let (tx, path) = (tx.clone(), path.clone());
             tokio::spawn(async move {
-                let _ = serve(stream, &path, tx).await;
+                let _ = serve(stream, &path, tx, wait).await;
             });
         }
     });
@@ -49,7 +55,7 @@ pub(crate) async fn start() -> Option<AskServer> {
     })
 }
 
-async fn serve(stream: TcpStream, secret_path: &str, tx: mpsc::UnboundedSender<AskRequest>) -> std::io::Result<()> {
+async fn serve(stream: TcpStream, secret_path: &str, tx: mpsc::UnboundedSender<AskRequest>, wait: Duration) -> std::io::Result<()> {
     let mut rd = BufReader::new(stream);
     loop {
         let mut line = String::new();
@@ -87,7 +93,7 @@ async fn serve(stream: TcpStream, secret_path: &str, tx: mpsc::UnboundedSender<A
             http(405, "")
         } else {
             match serde_json::from_slice::<Value>(&body) {
-                Ok(v) => match handle(&v, &tx).await {
+                Ok(v) => match handle(&v, &tx, wait).await {
                     Some(r) => http(200, &r.to_string()),
                     None => http(202, ""),
                 },
@@ -116,7 +122,7 @@ fn http(code: u16, body: &str) -> String {
 }
 
 /// Handle one JSON-RPC message. `None` means a notification (no reply body).
-async fn handle(v: &Value, tx: &mpsc::UnboundedSender<AskRequest>) -> Option<Value> {
+async fn handle(v: &Value, tx: &mpsc::UnboundedSender<AskRequest>, wait: Duration) -> Option<Value> {
     let id = v.get("id").filter(|i| !i.is_null())?.clone();
     let ok = |result: Value| Some(json!({"jsonrpc": "2.0", "id": id, "result": result}));
     let err = |code: i64, msg: &str| Some(json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": msg}}));
@@ -140,9 +146,14 @@ async fn handle(v: &Value, tx: &mpsc::UnboundedSender<AskRequest>) -> Option<Val
             if tx.send(AskRequest { questions: questions.clone(), reply }).is_err() {
                 return ok(text("The chat is no longer open.", true));
             }
-            match rx.await {
-                Ok(Some(answers)) => ok(text(&format_answers(&questions, &answers), false)),
-                _ => ok(text("The user dismissed the question without answering.", true)),
+            match tokio::time::timeout(wait, rx).await {
+                Ok(Ok(Some(answers))) => ok(text(&format_answers(&questions, &answers), false)),
+                Ok(_) => ok(text("The user dismissed the question without answering.", true)),
+                // Dropping `rx` tells the chat the call is gone; the answer will come as a message.
+                Err(_) => ok(text(
+                    "The user hasn't answered yet. The question stays open in their chat. Don't ask it again and don't guess: stop here and wait. Their answers will arrive as their next message.",
+                    false,
+                )),
             }
         }
         m if m.starts_with("notifications/") => None,
@@ -154,7 +165,7 @@ fn text(t: &str, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": t}], "isError": is_error})
 }
 
-fn format_answers(questions: &[Question], answers: &[Vec<String>]) -> String {
+pub(crate) fn format_answers(questions: &[Question], answers: &[Vec<String>]) -> String {
     if answers.iter().all(|a| a.is_empty()) {
         return "The user skipped the question without answering.".into();
     }
@@ -212,13 +223,26 @@ fn parse(args: &Value) -> Vec<Question> {
     }).collect()
 }
 
+/// The answers as a chat message, for when the tool call has already given up waiting.
+pub(crate) fn answers_message(questions: &[Question], answers: &[Vec<String>]) -> String {
+    if answers.iter().all(|a| a.is_empty()) {
+        return "I'm skipping those questions.".into();
+    }
+    let mut out = String::from("Here are my answers to your questions:\n");
+    for (i, q) in questions.iter().enumerate() {
+        let a = answers.get(i).filter(|a| !a.is_empty()).map(|a| a.join(", ")).unwrap_or_else(|| "(skipped)".into());
+        out.push_str(&format!("- {}: {a}\n", q.question));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
     async fn tool_call_round_trips_through_http() {
-        let mut srv = start().await.unwrap();
+        let mut srv = start(Duration::from_secs(30)).await.unwrap();
         let url = srv.config["url"].as_str().unwrap().to_string();
         let (addr, path) = url.trim_start_matches("http://").split_once('/').map(|(a, p)| (a.to_string(), format!("/{p}"))).unwrap();
         let post = |path: String, body: Value| {

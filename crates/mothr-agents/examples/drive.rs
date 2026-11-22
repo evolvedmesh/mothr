@@ -43,9 +43,15 @@ async fn main() {
                 }
                 if let SessionEvent::Upsert { entry: Entry::Question(q) } = &e {
                     let answers = q.questions.iter().map(|qq| vec![qq.options.first().map(|o| o.label.clone()).unwrap_or("yes".into())]).collect();
-                    cmd.send(SessionCommand::AnswerQuestion { entry_id: q.id.clone(), answers }).unwrap();
+                    // DRIVE_ANSWER_DELAY=<secs> answers late, to exercise the tool-call timeout.
+                    let delay = std::env::var("DRIVE_ANSWER_DELAY").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+                    let (c, id) = (cmd.clone(), q.id.clone());
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                        let _ = c.send(SessionCommand::AnswerQuestion { entry_id: id, answers });
+                    });
                 }
-                if matches!(e, SessionEvent::Status { status: SessionStatus::Idle }) && prompted && state.entries.iter().any(|e| matches!(e, Entry::TurnEnd{..})) {
+                if matches!(e, SessionEvent::Status { status: SessionStatus::Idle }) && prompted && state.entries.iter().any(|e| matches!(e, Entry::TurnEnd{..})) && !state.entries.iter().any(Entry::is_pending_input) {
                     prompted = false;
                     cmd.send(SessionCommand::Shutdown).unwrap();
                 }
