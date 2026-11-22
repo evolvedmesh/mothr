@@ -209,7 +209,8 @@ pub enum Delivery {
     /// Send now if idle, otherwise queue until the turn ends.
     #[default]
     Normal,
-    /// Inject into the running turn so the agent picks it up at its next step (Claude Code).
+    /// Redirect the running turn: Claude Code takes the message at its next step; ACP agents are
+    /// cut short once no tool call is mid-run, then answer it with their context intact.
     Steer,
     /// Stop the current turn and send immediately.
     Interrupt,

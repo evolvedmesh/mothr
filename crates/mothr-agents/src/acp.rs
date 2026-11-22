@@ -54,6 +54,18 @@ struct Driver {
     mode: PermissionMode,
     /// Agent message segment currently being streamed.
     segment: Option<(EntryId, bool)>,
+    /// Copilot subagents: agentId → the tool call that spawned each.
+    agents: HashMap<String, String>,
+    /// Subagent tool calls whose agent hasn't sent an update yet, oldest first.
+    unbound: Vec<String>,
+    /// Every subagent tool call seen (so each is announced once).
+    spawned: std::collections::HashSet<String>,
+    /// Message segment being streamed per subagent (agents interleave, so each needs its own).
+    sub_segments: HashMap<String, (EntryId, bool)>,
+    /// Tool call → the subagent it belongs to.
+    tool_targets: HashMap<String, String>,
+    /// Tool calls a subagent has made, and the latest one.
+    sub_stats: HashMap<String, (u64, Option<String>)>,
     tools: HashMap<String, ToolCall>,
     permissions: HashMap<EntryId, PendingPermission>,
     turn: u32,
@@ -62,6 +74,8 @@ struct Driver {
     /// Prompts waiting for the running turn to end.
     deferred: Vec<SessionCommand>,
     turn_active: bool,
+    /// A steering message is waiting for the in-flight tool calls to finish before it cuts in.
+    steer_pending: bool,
     context_window: u64,
     /// Latest usage, shared with the background task that adds Copilot credits.
     usage: std::sync::Arc<std::sync::Mutex<ContextUsage>>,
@@ -151,6 +165,12 @@ pub async fn run(
         effort_config_id: None,
         effort: None,
         segment: None,
+        agents: HashMap::new(),
+        unbound: vec![],
+        spawned: Default::default(),
+        sub_segments: HashMap::new(),
+        tool_targets: HashMap::new(),
+        sub_stats: HashMap::new(),
         tools: HashMap::new(),
         permissions: HashMap::new(),
         turn: 0,
@@ -158,6 +178,7 @@ pub async fn run(
         queued: vec![],
         deferred: vec![],
         turn_active: false,
+        steer_pending: false,
         context_window: 0,
         usage: Default::default(),
         ready: false,
@@ -174,8 +195,12 @@ pub async fn run(
     );
 
     let mut lines = BufReader::new(stdout).lines();
+    // Copilot logs usage per model call; while a turn runs, poll it for the live credit meter.
+    let mut credit_tick = tokio::time::interval(std::time::Duration::from_millis(1200));
+    credit_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            _ = credit_tick.tick(), if d.turn_active && d.spec.agent == AgentKind::Copilot => d.refresh_credits(false),
             line = lines.next_line() => match line {
                 Ok(Some(l)) if !l.trim().is_empty() => match crate::claude::parse_traced(&l) {
                     Ok(v) => d.on_message(v).await,
@@ -243,6 +268,51 @@ impl Driver {
         if let Some((id, _)) = self.segment.take() {
             self.em.emit(SessionEvent::StreamEnd { entry_id: id });
         }
+        let open: Vec<String> = self.sub_segments.keys().cloned().collect();
+        for t in open {
+            self.end_segment_for(&Some(t));
+        }
+    }
+
+    /// Emit to the chat itself (`None`) or to the subagent session spawned by that tool call.
+    fn out(&self, target: &Option<String>, e: SessionEvent) {
+        match target {
+            None => self.em.emit(e),
+            Some(t) => self.em.sub(t.clone(), e),
+        }
+    }
+
+    fn end_segment_for(&mut self, target: &Option<String>) {
+        let seg = match target {
+            None => self.segment.take(),
+            Some(t) => self.sub_segments.remove(t),
+        };
+        if let Some((id, _)) = seg {
+            self.out(target, SessionEvent::StreamEnd { entry_id: id });
+        }
+    }
+
+    /// Which subagent (the tool call that spawned it) an update belongs to. Copilot tags every
+    /// update from a subagent with its `agentId` and says nothing else, so the first sight of
+    /// an id is matched to its spawning tool call from the session log, else to the oldest
+    /// subagent still waiting for one.
+    fn target_of(&mut self, v: &Value) -> Option<String> {
+        let meta = |m: &Value| m["github.com/copilot"]["agentId"].as_str().map(str::to_string);
+        let agent = meta(&v["params"]["update"]["_meta"]).or_else(|| meta(&v["params"]["_meta"]))?;
+        if let Some(t) = self.agents.get(&agent) {
+            return Some(t.clone());
+        }
+        let from_log = self.session_id.as_deref().and_then(|sid| copilot_subagent_tool(sid, &agent)).filter(|t| self.spawned.contains(t));
+        let tool = match from_log {
+            Some(t) => {
+                self.unbound.retain(|u| *u != t);
+                t
+            }
+            None if !self.unbound.is_empty() => self.unbound.remove(0),
+            None => return None,
+        };
+        self.agents.insert(agent, tool.clone());
+        Some(tool)
     }
 
     // ------------------------------------------------------------------ commands
@@ -255,12 +325,23 @@ impl Driver {
         match c {
             SessionCommand::Prompt { text, attachments, delivery } => {
                 if self.turn_active {
-                    // ACP has no mid-turn input: interrupt-and-send cancels first; anything else
-                    // waits for the turn to finish.
-                    if delivery == Delivery::Interrupt {
-                        self.notify("session/cancel", json!({"sessionId": self.sid()}));
+                    // ACP has no mid-turn input, so a message that can't wait cuts the turn short and
+                    // goes out first (the session and its context carry on): `Interrupt` does it
+                    // at once, `Steer` as soon as no tool call is mid-run so no edit is left
+                    // half-done. A plain message waits its turn.
+                    let urgent = delivery != Delivery::Normal;
+                    let prompt = SessionCommand::Prompt { text, attachments, delivery: Delivery::Normal };
+                    if urgent {
+                        self.deferred.insert(0, prompt);
+                    } else {
+                        self.deferred.push(prompt);
                     }
-                    self.deferred.push(SessionCommand::Prompt { text, attachments, delivery: Delivery::Normal });
+                    match delivery {
+                        Delivery::Interrupt => self.cancel_turn(),
+                        Delivery::Steer if self.tools.is_empty() => self.cancel_turn(),
+                        Delivery::Steer => self.steer_pending = true,
+                        Delivery::Normal => {}
+                    }
                     return;
                 }
                 self.em.emit(SessionEvent::Upsert {
@@ -290,14 +371,9 @@ impl Driver {
                 self.call("session/prompt", json!({"sessionId": self.sid(), "prompt": prompt}), Call::Prompt);
             }
             SessionCommand::Cancel => {
-                self.notify("session/cancel", json!({"sessionId": self.sid()}));
-                let pending: Vec<EntryId> = self.permissions.keys().cloned().collect();
-                for eid in pending {
-                    if let Some(p) = self.permissions.remove(&eid) {
-                        self.reply(&p.rpc_id, json!({"outcome": {"outcome": "cancelled"}}));
-                        self.em.emit(SessionEvent::Resolved { entry_id: eid, choice: Some("cancelled".into()), answers: None });
-                    }
-                }
+                // Stopping means stopping: nothing queued to steer in behind it.
+                self.deferred.clear();
+                self.cancel_turn();
             }
             SessionCommand::SetMode { mode } => self.apply_mode(mode),
             SessionCommand::SetModel { model } => {
@@ -362,6 +438,19 @@ impl Driver {
                 self.em.notice(NoticeLevel::Info, format!("{} doesn't support stopping individual subagents; stop the whole chat instead.", self.spec.agent.display_name()));
             }
             SessionCommand::Shutdown => {}
+        }
+    }
+
+    /// Stop the running turn and turn down anything still waiting on the user.
+    fn cancel_turn(&mut self) {
+        self.steer_pending = false;
+        self.notify("session/cancel", json!({"sessionId": self.sid()}));
+        let pending: Vec<EntryId> = self.permissions.keys().cloned().collect();
+        for eid in pending {
+            if let Some(p) = self.permissions.remove(&eid) {
+                self.reply(&p.rpc_id, json!({"outcome": {"outcome": "cancelled"}}));
+                self.em.emit(SessionEvent::Resolved { entry_id: eid, choice: Some("cancelled".into()), answers: None });
+            }
         }
     }
 
@@ -474,10 +563,15 @@ impl Driver {
             }
             Call::Prompt => {
                 self.end_segment();
-                for (_, mut t) in self.tools.drain() {
+                let stale: Vec<ToolCall> = self.tools.drain().map(|(_, t)| t).collect();
+                for mut t in stale {
                     if matches!(t.status, ToolStatus::Pending | ToolStatus::Running) {
                         t.status = ToolStatus::Failed;
-                        self.em.emit(SessionEvent::Upsert { entry: Entry::Tool(t) });
+                        let target = self.tool_targets.get(&t.id).cloned();
+                        if self.spawned.contains(&t.id) {
+                            self.em.emit(SessionEvent::SubagentFinished { tool_use_id: t.id.clone(), status: "failed".into() });
+                        }
+                        self.out(&target, SessionEvent::Upsert { entry: Entry::Tool(t) });
                     }
                 }
                 let stop = result["stopReason"].as_str().unwrap_or(if err_msg.is_some() { "error" } else { "end_turn" });
@@ -497,6 +591,7 @@ impl Driver {
                 });
                 self.set_status(SessionStatus::Idle);
                 self.turn_active = false;
+                self.steer_pending = false;
                 self.refresh_credits(true);
                 if !self.deferred.is_empty() {
                     let next = self.deferred.remove(0);
@@ -633,6 +728,7 @@ impl Driver {
         }
         let u = &v["params"]["update"];
         let kind = u["sessionUpdate"].as_str().unwrap_or("");
+        let target = self.target_of(v);
         if self.replaying && !matches!(kind, "current_mode_update" | "usage_update" | "available_commands_update") {
             return;
         }
@@ -640,31 +736,40 @@ impl Driver {
             "agent_message_chunk" | "agent_thought_chunk" => {
                 let thinking = kind == "agent_thought_chunk";
                 if let Some(entry) = image_entry(&u["content"]) {
-                    self.end_segment();
-                    self.em.emit(SessionEvent::Upsert { entry });
+                    self.end_segment_for(&target);
+                    self.out(&target, SessionEvent::Upsert { entry });
                     return;
                 }
                 let text = content_text(&u["content"]);
                 if text.is_empty() {
                     return;
                 }
-                let id = match &self.segment {
-                    Some((id, t)) if *t == thinking => id.clone(),
+                let open = match &target {
+                    None => self.segment.clone(),
+                    Some(t) => self.sub_segments.get(t).cloned(),
+                };
+                let id = match open {
+                    Some((id, t)) if t == thinking => id,
                     _ => {
-                        self.end_segment();
+                        self.end_segment_for(&target);
                         let id = new_entry_id();
-                        self.segment = Some((id.clone(), thinking));
+                        match &target {
+                            None => self.segment = Some((id.clone(), thinking)),
+                            Some(t) => {
+                                self.sub_segments.insert(t.clone(), (id.clone(), thinking));
+                            }
+                        }
                         id
                     }
                 };
-                self.em.emit(SessionEvent::AppendText { entry_id: id, thinking, delta: text });
+                self.out(&target, SessionEvent::AppendText { entry_id: id, thinking, delta: text });
             }
             "tool_call" | "tool_call_update" => {
-                self.end_segment();
-                self.on_tool(u, kind == "tool_call");
+                self.end_segment_for(&target);
+                self.on_tool(u, kind == "tool_call", target);
             }
             "plan" => {
-                self.end_segment();
+                self.end_segment_for(&target);
                 let items = u["entries"]
                     .as_array()
                     .map(|a| {
@@ -680,7 +785,11 @@ impl Driver {
                             .collect()
                     })
                     .unwrap_or_default();
-                self.em.emit(SessionEvent::Upsert { entry: Entry::Plan { id: format!("plan-{}", self.turn), items } });
+                let plan_id = match &target {
+                    None => format!("plan-{}", self.turn),
+                    Some(t) => format!("plan-{}-{t}", self.turn),
+                };
+                self.out(&target, SessionEvent::Upsert { entry: Entry::Plan { id: plan_id, items } });
             }
             "current_mode_update" => {
                 let id = u["currentModeId"].as_str().or(u["modeId"].as_str());
@@ -802,7 +911,7 @@ impl Driver {
         });
     }
 
-    fn on_tool(&mut self, u: &Value, create: bool) {
+    fn on_tool(&mut self, u: &Value, create: bool, target: Option<String>) {
         let Some(id) = u["toolCallId"].as_str().map(str::to_string) else { return };
         let mut call = self.tools.remove(&id).unwrap_or_else(|| ToolCall {
             id: id.clone(),
@@ -816,6 +925,16 @@ impl Driver {
             locations: vec![],
         });
         let _ = create;
+        if let Some(t) = &target {
+            self.tool_targets.insert(id.clone(), t.clone());
+            if create {
+                let stats = self.sub_stats.entry(t.clone()).or_default();
+                stats.0 += 1;
+                stats.1 = u["title"].as_str().map(str::to_string);
+                let (tool_uses, last_tool) = stats.clone();
+                self.em.emit(SessionEvent::SubagentProgress { tool_use_id: t.clone(), tokens: 0, tool_uses, last_tool });
+            }
+        }
         if let Some(t) = u["title"].as_str() {
             call.title = t.to_string();
             if call.name.is_empty() {
@@ -883,12 +1002,35 @@ impl Driver {
                 });
                 call.output = Some(truncate(&s, 20_000));
             }
-        self.em.emit(SessionEvent::Upsert { entry: Entry::Tool(call.clone()) });
+        // A tool call that starts an agent is a subagent: give it its own session.
+        if target.is_none()
+            && let Some(raw) = u.get("rawInput").filter(|r| r["agent_type"].is_string())
+            && self.spawned.insert(id.clone())
+        {
+            self.unbound.push(id.clone());
+            self.em.emit(SessionEvent::SubagentStarted {
+                tool_use_id: id.clone(),
+                task_id: None,
+                title: raw["description"].as_str().or(raw["name"].as_str()).unwrap_or("Subagent").to_string(),
+                agent_type: raw["agent_type"].as_str().map(str::to_string),
+                prompt: raw["prompt"].as_str().map(str::to_string),
+                background: raw["mode"].as_str() == Some("background"),
+            });
+        }
+        self.out(&target, SessionEvent::Upsert { entry: Entry::Tool(call.clone()) });
         for entry in images {
-            self.em.emit(SessionEvent::Upsert { entry });
+            self.out(&target, SessionEvent::Upsert { entry });
+        }
+        if self.spawned.contains(&id) && matches!(call.status, ToolStatus::Completed | ToolStatus::Failed) {
+            let status = if call.status == ToolStatus::Failed { "failed" } else { "completed" };
+            self.em.emit(SessionEvent::SubagentFinished { tool_use_id: id.clone(), status: status.to_string() });
         }
         if !matches!(call.status, ToolStatus::Completed | ToolStatus::Failed) {
             self.tools.insert(id, call);
+        }
+        // The last running tool call finished: this is where a steering message cuts in.
+        if self.steer_pending && self.tools.is_empty() {
+            self.cancel_turn();
         }
     }
 
@@ -950,6 +1092,7 @@ impl Driver {
             })
             .unwrap_or_default();
         let tool_id = tc["toolCallId"].as_str().map(str::to_string);
+        let target = tool_id.as_ref().and_then(|t| self.tool_targets.get(t)).cloned();
         let known = tool_id.as_ref().and_then(|t| self.tools.get(t));
         let kind = tc["kind"].as_str().map(acp_kind).or(known.map(|k| k.kind)).unwrap_or(ToolKind::Other);
         let title = tc["title"].as_str().map(str::to_string).or(known.map(|k| k.title.clone())).unwrap_or_else(|| "Permission requested".into());
@@ -972,9 +1115,12 @@ impl Driver {
         let diffs = if proposed.is_empty() { known.map(|k| k.diffs.clone()).unwrap_or_default() } else { proposed };
         let entry_id = new_entry_id();
         self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: false });
-        self.em.emit(SessionEvent::Upsert {
-            entry: Entry::Permission(PermissionRequest { id: entry_id, tool_call_id: tool_id, title, detail, kind, options, resolved: None, diffs }),
-        });
+        self.out(
+            &target,
+            SessionEvent::Upsert {
+                entry: Entry::Permission(PermissionRequest { id: entry_id, tool_call_id: tool_id, title, detail, kind, options, resolved: None, diffs }),
+            },
+        );
     }
 
     /// Best-effort support for agent questions sent as elicitation requests.
@@ -1060,7 +1206,28 @@ fn content_text(c: &Value) -> String {
 }
 
 
-/// Credits (AIC) a Copilot session has used, from the last `session.usage_checkpoint` in its log.
+/// The tool call that spawned a Copilot subagent, from its session log (`subagent.started`).
+fn copilot_subagent_tool(session_id: &str, agent_id: &str) -> Option<String> {
+    let home = std::env::var_os("COPILOT_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".copilot")))?;
+    subagent_tool_in(&home, session_id, agent_id)
+}
+
+fn subagent_tool_in(home: &std::path::Path, session_id: &str, agent_id: &str) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(home.join("session-state").join(session_id).join("events.jsonl")).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(2 << 20))).ok()?;
+    let mut bytes = Vec::new();
+    (&mut f).take(2 << 20).read_to_end(&mut bytes).ok()?;
+    String::from_utf8_lossy(&bytes).lines().rev().filter(|l| l.contains("\"subagent.started\"") && l.contains(agent_id)).find_map(|l| {
+        let v: Value = serde_json::from_str(l).ok()?;
+        (v["agentId"] == agent_id).then(|| v["data"]["toolCallId"].as_str().map(str::to_string)).flatten()
+    })
+}
+
+/// Credits (AIC) a Copilot session has used: the last `session.usage_checkpoint` (written when a
+/// turn ends) plus every `session.usage_record` logged since, one per model call, so the total
+/// keeps climbing while a turn is still running.
 fn copilot_credits(session_id: &str) -> Option<f64> {
     let home = std::env::var_os("COPILOT_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".copilot")))?;
     copilot_credits_in(&home, session_id)
@@ -1071,20 +1238,54 @@ fn copilot_credits_in(home: &std::path::Path, session_id: &str) -> Option<f64> {
     let path = home.join("session-state").join(session_id).join("events.jsonl");
     let mut f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
-    // Checkpoints are the last thing written each turn; the tail is enough.
-    f.seek(SeekFrom::Start(len.saturating_sub(4 << 20))).ok()?;
-    let mut bytes = Vec::new();
-    f.take(4 << 20).read_to_end(&mut bytes).ok()?;
-    let tail = String::from_utf8_lossy(&bytes);
-    tail.lines().rev().filter(|l| l.contains("\"session.usage_checkpoint\"")).find_map(|l| {
-        let v: Value = serde_json::from_str(l).ok()?;
-        Some(v["data"]["totalNanoAiu"].as_f64()? / 1e9)
-    })
+    // Polled every second or so during a turn, so read a small tail first and only widen it when
+    // it holds no checkpoint (a long turn without one).
+    for window in [1u64 << 20, 16 << 20] {
+        f.seek(SeekFrom::Start(len.saturating_sub(window))).ok()?;
+        let mut bytes = Vec::new();
+        (&mut f).take(window).read_to_end(&mut bytes).ok()?;
+        let tail = String::from_utf8_lossy(&bytes);
+        let mut since = 0.0;
+        let mut seen = false;
+        for l in tail.lines().rev() {
+            if l.contains("\"session.usage_checkpoint\"") {
+                if let Some(total) = serde_json::from_str::<Value>(l).ok().and_then(|v| v["data"]["totalNanoAiu"].as_f64()) {
+                    return Some(total / 1e9 + since);
+                }
+            } else if l.contains("\"session.usage_record\"")
+                && let Some(n) = serde_json::from_str::<Value>(l).ok().and_then(|v| v["data"]["usage"]["copilotUsage"]["totalNanoAiu"].as_f64())
+            {
+                since += n / 1e9;
+                seen = true;
+            }
+        }
+        // No checkpoint in reach: with the whole log in view, the records are the total.
+        if len <= window {
+            return seen.then_some(since);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_subagent_is_matched_to_the_tool_call_that_spawned_it() {
+        let home = std::env::temp_dir().join(format!("mothr-copilot-sub-{}", std::process::id()));
+        let dir = home.join("session-state").join("s1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = [
+            r#"{"type":"subagent.started","data":{"toolCallId":"toolu_a"},"agentId":"agent-1"}"#,
+            r#"{"type":"subagent.started","data":{"toolCallId":"toolu_b"},"agentId":"agent-2"}"#,
+        ]
+        .join("\n");
+        std::fs::write(dir.join("events.jsonl"), log).unwrap();
+        assert_eq!(subagent_tool_in(&home, "s1", "agent-2").as_deref(), Some("toolu_b"));
+        assert_eq!(subagent_tool_in(&home, "s1", "agent-9"), None);
+        let _ = std::fs::remove_dir_all(home);
+    }
 
     #[test]
     fn credits_come_from_the_last_usage_checkpoint() {
@@ -1097,9 +1298,20 @@ mod tests {
             r#"{"type":"session.usage_checkpoint","data":{"totalNanoAiu":6244550000,"totalPremiumRequests":1}}"#,
         ]
         .join("\n");
-        std::fs::write(dir.join("events.jsonl"), log).unwrap();
+        std::fs::write(dir.join("events.jsonl"), &log).unwrap();
         assert_eq!(copilot_credits_in(&home, "abc"), Some(6.24455));
         assert_eq!(copilot_credits_in(&home, "missing"), None);
+        // Records written after the checkpoint (a turn in flight) are added on top.
+        let live = format!(
+            "{log}\n{}\n{}",
+            r#"{"type":"session.usage_record","data":{"usage":{"copilotUsage":{"totalNanoAiu":500000000}}}}"#,
+            r#"{"type":"session.usage_record","data":{"usage":{"copilotUsage":{"totalNanoAiu":250000000}}}}"#
+        );
+        std::fs::write(dir.join("events.jsonl"), live).unwrap();
+        assert_eq!(copilot_credits_in(&home, "abc"), Some(6.99455));
+        // Before any checkpoint exists the records alone are the total.
+        std::fs::write(dir.join("events.jsonl"), r#"{"type":"session.usage_record","data":{"usage":{"copilotUsage":{"totalNanoAiu":2000000000}}}}"#).unwrap();
+        assert_eq!(copilot_credits_in(&home, "abc"), Some(2.0));
         let _ = std::fs::remove_dir_all(home);
     }
 }

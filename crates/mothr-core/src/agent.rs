@@ -103,9 +103,10 @@ impl AgentKind {
         }
     }
 
-    /// Messages can be injected into a running turn.
+    /// Messages can be sent into a running turn. Claude Code takes them at its next step; the ACP
+    /// agents have no mid-turn input, so their driver redirects at the next safe point.
     pub fn supports_steering(self) -> bool {
-        matches!(self, AgentKind::ClaudeCode)
+        true
     }
 
     /// Sent messages can be edited: the conversation (and files) rewind and the edit is resent.
