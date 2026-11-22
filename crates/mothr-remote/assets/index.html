@@ -858,8 +858,8 @@ function questionHTML(q) {
   const st = qState(q);
   const body = q.questions.map((x, qi) => `<div class="q">${x.header ? `<span class="qh">${esc(x.header)}</span>` : ''}<div class="qt">${esc(x.question)}${x.multi_select ? ' <small style="color:var(--dim);font-weight:400">(choose any)</small>' : ''}</div>
     <div class="chips">${x.options.map((o, oi) => `<button class="chip${st.sel[qi].has(oi) ? ' on' : ''}" data-act="qopt" data-eid="${esc(q.id)}" data-q="${qi}" data-o="${oi}">${esc(o.label)}${o.description ? `<small>${esc(o.description)}</small>` : ''}</button>`).join('')}
-    <button class="chip${st.otherOn[qi] ? ' on' : ''}" data-act="qother" data-eid="${esc(q.id)}" data-q="${qi}">Other…</button></div>
-    ${st.otherOn[qi] ? `<input class="qother" data-eid="${esc(q.id)}" data-q="${qi}" value="${esc(st.other[qi])}" placeholder="Type your answer">` : ''}</div>`).join('');
+    <button class="chip${st.otherOn[qi] ? ' on' : ''}" data-act="qother" data-eid="${esc(q.id)}" data-q="${qi}">None of these…</button></div>
+    ${st.otherOn[qi] ? `<input class="qother" data-eid="${esc(q.id)}" data-q="${qi}" value="${esc(st.other[qi])}" placeholder="Type your own answer">` : ''}</div>`).join('');
   return `<div class="card ask"><div class="ask-h">${ic('info', 'sm')} ${q.questions.length > 1 ? 'Questions' : 'Question'}</div>${body}
     <div class="opts"><button class="btn primary" data-act="qsubmit" data-eid="${esc(q.id)}">Send answer</button></div></div>`;
 }

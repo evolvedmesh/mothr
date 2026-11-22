@@ -508,7 +508,7 @@ private fun QuestionCard(model: AppModel, chat: ChatDetail, e: EntryView.Questio
                             ) { Text(o.label, style = type.label.copy(color = if (on) pal.bg else pal.text)) }
                         }
                     }
-                    Field(other[i].value, "Other…", singleLine = true) { other[i].value = it }
+                    Field(other[i].value, "None of these? Type your own answer", singleLine = true) { other[i].value = it }
                 }
             }
             Btn("Answer", tone = Tone.Primary, modifier = Modifier.fillMaxWidth()) {

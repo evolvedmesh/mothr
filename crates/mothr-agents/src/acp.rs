@@ -30,6 +30,8 @@ enum Call {
 struct PendingPermission {
     rpc_id: Value,
     question: bool,
+    /// Set when the question came from Mothr's own MCP tool rather than an ACP request.
+    ask: Option<tokio::sync::oneshot::Sender<Option<Vec<Vec<String>>>>>,
 }
 
 struct Driver {
@@ -81,6 +83,10 @@ struct Driver {
     usage: std::sync::Arc<std::sync::Mutex<ContextUsage>>,
     ready: bool,
     auth_methods: Vec<Value>,
+    /// Mothr's question tool as an `mcpServers` entry, when the agent can reach HTTP MCP servers.
+    ask_server: Option<Value>,
+    /// Tool calls to Mothr's own question tool; the question card replaces them in the chat.
+    ask_tools: std::collections::HashSet<String>,
 }
 
 pub async fn run(
@@ -183,7 +189,14 @@ pub async fn run(
         usage: Default::default(),
         ready: false,
         auth_methods: vec![],
+        ask_server: None,
+        ask_tools: Default::default(),
     };
+    let (mut ask_config, mut ask_rx) = match crate::ask_mcp::start().await {
+        Some(a) => (Some(a.config), a.requests),
+        None => (None, mpsc::unbounded_channel().1),
+    };
+    d.ask_server = ask_config.take();
     d.call(
         "initialize",
         json!({
@@ -209,6 +222,7 @@ pub async fn run(
                 Ok(Some(_)) => {}
                 _ => break,
             },
+            Some(req) = ask_rx.recv() => d.on_ask(req),
             cmd = commands.recv() => match cmd {
                 Some(SessionCommand::Shutdown) | None => { let _ = child.start_kill(); break; }
                 Some(c) => d.on_command(c),
@@ -412,7 +426,9 @@ impl Driver {
             SessionCommand::AnswerQuestion { entry_id, answers } => {
                 // ACP has no question primitive yet; agents ask via elicitation-like requests.
                 if let Some(p) = self.permissions.remove(&entry_id) {
-                    if p.question {
+                    if let Some(tx) = p.ask {
+                        let _ = tx.send(Some(answers.clone()));
+                    } else if p.question {
                         self.reply(&p.rpc_id, json!({"action": "accept", "content": {"answers": answers}}));
                     }
                     self.em.emit(SessionEvent::Resolved { entry_id, choice: None, answers: Some(answers) });
@@ -448,7 +464,13 @@ impl Driver {
         let pending: Vec<EntryId> = self.permissions.keys().cloned().collect();
         for eid in pending {
             if let Some(p) = self.permissions.remove(&eid) {
-                self.reply(&p.rpc_id, json!({"outcome": {"outcome": "cancelled"}}));
+                match p.ask {
+                    Some(tx) => {
+                        let _ = tx.send(None);
+                    }
+                    None if p.question => self.reply(&p.rpc_id, json!({"action": "cancel"})),
+                    None => self.reply(&p.rpc_id, json!({"outcome": {"outcome": "cancelled"}})),
+                }
                 self.em.emit(SessionEvent::Resolved { entry_id: eid, choice: Some("cancelled".into()), answers: None });
             }
         }
@@ -507,16 +529,19 @@ impl Driver {
                 let caps = &result["agentCapabilities"];
                 self.load_session = caps["loadSession"].as_bool().unwrap_or(false);
                 self.image_prompts = caps["promptCapabilities"]["image"].as_bool().unwrap_or(false);
+                if !caps["mcpCapabilities"]["http"].as_bool().unwrap_or(false) {
+                    self.ask_server = None;
+                }
                 self.auth_methods = result["authMethods"].as_array().cloned().unwrap_or_default();
                 let cwd = self.spec.cwd.display().to_string();
                 match (&self.spec.resume, self.load_session) {
                     (Some(sid), true) => {
                         self.replaying = true;
                         self.session_id = Some(sid.clone());
-                        self.call("session/load", json!({"sessionId": sid, "cwd": cwd, "mcpServers": []}), Call::LoadSession);
+                        self.call("session/load", json!({"sessionId": sid, "cwd": cwd, "mcpServers": self.mcp_servers()}), Call::LoadSession);
                     }
                     _ => {
-                        self.call("session/new", json!({"cwd": cwd, "mcpServers": []}), Call::NewSession);
+                        self.call("session/new", json!({"cwd": cwd, "mcpServers": self.mcp_servers()}), Call::NewSession);
                     }
                 }
             }
@@ -528,7 +553,7 @@ impl Driver {
                         // Fall back to a fresh session.
                         self.em.notice(NoticeLevel::Warning, format!("Couldn't restore the previous conversation ({e}); starting fresh."));
                         let cwd = self.spec.cwd.display().to_string();
-                        self.call("session/new", json!({"cwd": cwd, "mcpServers": []}), Call::NewSession);
+                        self.call("session/new", json!({"cwd": cwd, "mcpServers": self.mcp_servers()}), Call::NewSession);
                         return;
                     }
                     let auth = error.and_then(|e| e["code"].as_i64()) == Some(-32000)
@@ -913,6 +938,12 @@ impl Driver {
 
     fn on_tool(&mut self, u: &Value, create: bool, target: Option<String>) {
         let Some(id) = u["toolCallId"].as_str().map(str::to_string) else { return };
+        if u["title"].as_str().is_some_and(|t| t.contains(crate::ask_mcp::TOOL)) {
+            self.ask_tools.insert(id.clone());
+        }
+        if self.ask_tools.contains(&id) {
+            return;
+        }
         let mut call = self.tools.remove(&id).unwrap_or_else(|| ToolCall {
             id: id.clone(),
             name: String::new(),
@@ -1102,8 +1133,10 @@ impl Driver {
             .and_then(|r| crate::summarize_input(&title, r).1)
             .or(known.and_then(|k| k.input.clone()));
 
-        // Mothr's policy can answer without bothering the user.
-        let decision = policy::decide(self.mode, kind);
+        // Mothr's own question tool is always allowed; the question card is the prompt.
+        let is_ask = title.contains(crate::ask_mcp::TOOL) || tool_id.as_ref().is_some_and(|t| self.ask_tools.contains(t));
+        // Otherwise Mothr's policy can answer without bothering the user.
+        let decision = if is_ask { AutoDecision::Allow } else { policy::decide(self.mode, kind) };
         let pairs: Vec<(String, PermissionOptionKind)> = options.iter().map(|o| (o.id.clone(), o.kind)).collect();
         if decision != AutoDecision::Ask
             && let Some(opt) = policy::pick_option(decision, &pairs) {
@@ -1114,13 +1147,24 @@ impl Driver {
         let proposed: Vec<FileDiff> = tc["content"].as_array().into_iter().flatten().filter(|c| c["type"] == "diff").map(file_diff).collect();
         let diffs = if proposed.is_empty() { known.map(|k| k.diffs.clone()).unwrap_or_default() } else { proposed };
         let entry_id = new_entry_id();
-        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: false });
+        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: false, ask: None });
         self.out(
             &target,
             SessionEvent::Upsert {
                 entry: Entry::Permission(PermissionRequest { id: entry_id, tool_call_id: tool_id, title, detail, kind, options, resolved: None, diffs }),
             },
         );
+    }
+
+    fn mcp_servers(&self) -> Value {
+        json!(self.ask_server.iter().collect::<Vec<_>>())
+    }
+
+    /// The agent called Mothr's question tool: show a question card and hold the call open.
+    fn on_ask(&mut self, req: crate::ask_mcp::AskRequest) {
+        let entry_id = new_entry_id();
+        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: Value::Null, question: true, ask: Some(req.reply) });
+        self.em.emit(SessionEvent::Upsert { entry: Entry::Question(QuestionRequest { id: entry_id, questions: req.questions, answers: None }) });
     }
 
     /// Best-effort support for agent questions sent as elicitation requests.
@@ -1147,7 +1191,7 @@ impl Driver {
                 .unwrap_or_else(|| vec![Question { header: None, question: message.clone(), options: vec![], multi_select: false }]);
         }
         let entry_id = new_entry_id();
-        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: true });
+        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: true, ask: None });
         self.em.emit(SessionEvent::Upsert { entry: Entry::Question(QuestionRequest { id: entry_id, questions, answers: None }) });
     }
 }

@@ -7,6 +7,7 @@
 //! - [`acp`]: the Agent Client Protocol (Copilot, Codex via codex-acp, OpenCode, Hermes).
 
 pub mod acp;
+mod ask_mcp;
 pub mod claude;
 mod edits;
 pub mod detect;

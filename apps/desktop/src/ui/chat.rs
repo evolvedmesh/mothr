@@ -37,6 +37,9 @@ pub enum ChatEvent {
 
 impl EventEmitter<ChatEvent> for ChatView {}
 
+/// Placeholder of the free-text answer under every question.
+const OTHER_HINT: &str = "None of these? Type your own answer";
+
 pub struct ChatView {
     id: SessionId,
     store: Entity<Store>,
@@ -106,7 +109,7 @@ impl ChatView {
                             let key = (q.id.clone(), i);
                             this.other_inputs
                                 .entry(key)
-                                .or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder("Other…")));
+                                .or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder(OTHER_HINT)));
                         }
                     }
                     if let SessionEvent::Status { status } = e {
@@ -163,7 +166,7 @@ impl ChatView {
             .unwrap_or_default();
         for (qid, n) in pending {
             for i in 0..n {
-                this.other_inputs.insert((qid.clone(), i), cx.new(|cx| InputState::new(window, cx).placeholder("Other…")));
+                this.other_inputs.insert((qid.clone(), i), cx.new(|cx| InputState::new(window, cx).placeholder(OTHER_HINT)));
             }
         }
         this.scroll.scroll_to_bottom();
@@ -1652,6 +1655,16 @@ impl Render for ChatView {
             };
             (s, start)
         };
+        // Every pending question gets its own free-text answer, however the entry arrived.
+        for e in &s.entries {
+            if let Entry::Question(q) = e
+                && q.answers.is_none()
+            {
+                for i in 0..q.questions.len() {
+                    self.other_inputs.entry((q.id.clone(), i)).or_insert_with(|| cx.new(|cx| InputState::new(window, cx).placeholder(OTHER_HINT)));
+                }
+            }
+        }
         let theme = cx.theme().clone();
         let live = s.meta.status.is_live();
         let header = self.render_header(&s, cx);
