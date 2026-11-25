@@ -49,6 +49,13 @@ struct Driver {
     current_mode_id: Option<String>,
     mode_config_id: Option<String>,
     model_config_id: Option<String>,
+    /// The model the agent says the session runs on now.
+    current_model: Option<String>,
+    /// Model / effort switches the agent hasn't confirmed yet. A prompt sent before the switch
+    /// lands runs on the old model (Copilot handles them concurrently), so prompts wait.
+    settling: usize,
+    /// Prompts waiting for those switches.
+    held: Vec<SessionCommand>,
     /// The `thought_level` config option (reasoning effort), when the agent has one.
     effort_config_id: Option<String>,
     /// Effort the session runs with now (the agent's choice until the user picks one).
@@ -168,6 +175,9 @@ pub async fn run(
         current_mode_id: None,
         mode_config_id: None,
         model_config_id: None,
+        current_model: None,
+        settling: 0,
+        held: vec![],
         effort_config_id: None,
         effort: None,
         segment: None,
@@ -338,6 +348,10 @@ impl Driver {
         }
         match c {
             SessionCommand::Prompt { text, attachments, delivery } => {
+                if !self.turn_active && self.settling > 0 {
+                    self.held.push(SessionCommand::Prompt { text, attachments, delivery });
+                    return;
+                }
                 if self.turn_active {
                     // ACP has no mid-turn input, so a message that can't wait cuts the turn short and
                     // goes out first (the session and its context carry on): `Interrupt` does it
@@ -391,6 +405,7 @@ impl Driver {
             }
             SessionCommand::SetMode { mode } => self.apply_mode(mode),
             SessionCommand::SetModel { model } => {
+                self.settling += 1;
                 if let Some(cfg) = self.model_config_id.clone() {
                     self.call(
                         "session/set_config_option",
@@ -403,6 +418,7 @@ impl Driver {
             }
             SessionCommand::SetEffort { effort } => match self.effort_config_id.clone() {
                 Some(cfg) => {
+                    self.settling += 1;
                     self.call("session/set_config_option", json!({"sessionId": self.sid(), "configId": cfg, "value": effort}), Call::SetEffort(effort));
                 }
                 None => self.em.notice(NoticeLevel::Info, format!("{} has no reasoning setting.", self.spec.agent.display_name())),
@@ -579,7 +595,10 @@ impl Driver {
                 if mode != PermissionMode::Ask || policy::match_mode(mode, &self.modes).is_some() {
                     self.apply_mode(mode);
                 }
-                if let Some(m) = self.spec.model.clone() {
+                // Pin the model even when the user left it to the agent: Copilot reports one model
+                // as current but can run another (its own settings), so what Mothr shows would drift.
+                let pin = self.spec.model.clone().or_else(|| self.current_model.clone().filter(|_| self.spec.agent == AgentKind::Copilot));
+                if let Some(m) = pin {
                     self.on_command(SessionCommand::SetModel { model: m });
                 }
                 if let Some(e) = self.spec.effort.clone()
@@ -637,17 +656,42 @@ impl Driver {
                 // Client-side policy still applies.
                 self.em.emit(SessionEvent::Mode { mode: m });
             }
-            Call::SetEffort(e) => match err_msg {
-                Some(msg) => self.em.notice(NoticeLevel::Warning, format!("Couldn't change the reasoning effort: {msg}")),
-                None => {
-                    self.effort = Some(e);
-                    self.emit_options();
+            Call::SetEffort(e) => {
+                match err_msg {
+                    Some(msg) => self.em.notice(NoticeLevel::Warning, format!("Couldn't change the reasoning effort: {msg}")),
+                    None => {
+                        self.effort = Some(e);
+                        self.emit_options();
+                    }
                 }
-            },
-            Call::SetModel(m) => match err_msg {
-                Some(e) => self.em.notice(NoticeLevel::Warning, format!("Couldn't switch model: {e}")),
-                None => self.em.emit(SessionEvent::Model { model: m }),
-            },
+                self.settled();
+            }
+            Call::SetModel(m) => {
+                match err_msg {
+                    Some(e) => {
+                        self.em.notice(NoticeLevel::Warning, format!("Couldn't switch model: {e}"));
+                        // Show the model the session really runs on.
+                        if let Some(cur) = self.current_model.clone() {
+                            self.em.emit(SessionEvent::Model { model: cur });
+                        }
+                    }
+                    None => {
+                        self.current_model = Some(m.clone());
+                        self.em.emit(SessionEvent::Model { model: m });
+                    }
+                }
+                self.settled();
+            }
+        }
+    }
+
+    /// A model / effort switch was answered; once none is left, held prompts go out.
+    fn settled(&mut self) {
+        self.settling = self.settling.saturating_sub(1);
+        if self.settling == 0 {
+            for c in std::mem::take(&mut self.held) {
+                self.on_command(c);
+            }
         }
     }
 
@@ -746,9 +790,12 @@ impl Driver {
                 m.contexts = vec![ChoiceInfo::new("default", "Standard"), ChoiceInfo::new("long_context", "1M")];
             }
         }
+        self.current_model = current_model.clone();
         self.em.emit(SessionEvent::Ready {
             agent_session_id: self.session_id.clone(),
-            model: current_model,
+            // The chat keeps the model it was started with while the switch to it is in flight;
+            // a failed switch reports the real one.
+            model: self.spec.model.clone().or(current_model),
             models,
             modes: self.modes.clone(),
         });
@@ -857,13 +904,19 @@ impl Driver {
             "config_option_update" => {
                 for opt in u["configOptions"].as_array().into_iter().flatten() {
                     if opt["category"] == "thought_level"
+                        && target.is_none()
                         && let Some(e) = opt["currentValue"].as_str()
                         && self.effort.as_deref() != Some(e) {
                             self.effort = Some(e.to_string());
                             self.emit_options();
                         }
+                    // A subagent runs on its own model; that says nothing about the chat's.
                     if opt["category"] == "model"
-                        && let Some(m) = opt["currentValue"].as_str() {
+                        && target.is_none()
+                        && self.settling == 0
+                        && let Some(m) = opt["currentValue"].as_str()
+                        && self.current_model.as_deref() != Some(m) {
+                            self.current_model = Some(m.to_string());
                             self.em.emit(SessionEvent::Model { model: m.to_string() });
                         }
                 }
