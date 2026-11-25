@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -393,3 +394,66 @@ fun UsageSheet(model: AppModel) {
         }
     }
 }
+
+/** Theme, accent and tone for this phone. */
+@Composable
+fun AppearanceSheet(model: AppModel) {
+    Sheet({ model.showAppearance = false }) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
+            Text("Appearance", style = type.title)
+            Spacer(Modifier.height(4.dp))
+            Text("How Mothr looks on this phone.", style = type.body.copy(color = pal.textMuted))
+
+            Spacer(Modifier.height(20.dp))
+            Text("THEME", style = type.caption.copy(color = pal.textFaint))
+            Spacer(Modifier.height(8.dp))
+            Segmented(ThemeMode.entries.map { it.label }, ThemeMode.entries.indexOf(model.themeMode)) { model.setLook(mode = ThemeMode.entries[it]) }
+
+            Spacer(Modifier.height(22.dp))
+            Text("ACCENT", style = type.caption.copy(color = pal.textFaint))
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                AccentPreset.entries.forEach { a ->
+                    val on = a == model.accent
+                    val color = c(if (pal.dark) a.dark else a.light)
+                    Box(
+                        Modifier.size(34.dp).clip(Radius.full).border(2.dp, if (on) color else Color.Transparent, Radius.full)
+                            .tap(shape = Radius.full) { model.setLook(accent = a) }.padding(4.dp)
+                            .clip(Radius.full).background(color).border(1.dp, pal.borderStrong, Radius.full),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (on) Ico(Res.drawable.ic_check, size = 14.dp, tint = pal.onBrand)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(22.dp))
+            Text("TONE", style = type.caption.copy(color = pal.textFaint))
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                TonePreset.entries.forEach { t ->
+                    val on = t == model.tone
+                    val look = themedPalette(pal.dark, model.accent, t)
+                    Column(
+                        Modifier.weight(1f).clip(Radius.md).tap(shape = Radius.md) { model.setLook(tone = t) },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().height(52.dp).clip(Radius.md).border(2.dp, if (on) pal.brand else look.border, Radius.md).background(look.bg),
+                        ) {
+                            Box(Modifier.width(16.dp).fillMaxHeight().background(look.chrome))
+                            Column(Modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Box(Modifier.size(width = 26.dp, height = 7.dp).clip(Radius.sm).background(look.surfaceHover))
+                                Box(Modifier.size(width = 16.dp, height = 7.dp).clip(Radius.sm).background(look.brand))
+                            }
+                        }
+                        Text(t.label, style = type.caption.copy(color = if (on) pal.text else pal.textMuted))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun c(hex: Long) = Color(0xFF000000 or hex)

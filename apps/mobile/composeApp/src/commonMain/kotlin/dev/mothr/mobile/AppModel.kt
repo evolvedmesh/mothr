@@ -133,6 +133,24 @@ class AppModel(private val scope: CoroutineScope) {
     var runInBackground: Boolean by mutableStateOf(prefs.getBoolean(KEY_BACKGROUND, true))
         private set
 
+    /** How the app looks on this phone. */
+    var themeMode: ThemeMode by mutableStateOf(ThemeMode.of(prefs.getString(KEY_THEME, "system")))
+        private set
+    var accent: AccentPreset by mutableStateOf(AccentPreset.of(prefs.getString(KEY_ACCENT, "violet")))
+        private set
+    var tone: TonePreset by mutableStateOf(TonePreset.of(prefs.getString(KEY_TONE, "graphite")))
+        private set
+    var showAppearance by mutableStateOf(false)
+
+    fun setLook(mode: ThemeMode = themeMode, accent: AccentPreset = this.accent, tone: TonePreset = this.tone) {
+        themeMode = mode
+        this.accent = accent
+        this.tone = tone
+        prefs.putString(KEY_THEME, mode.id)
+        prefs.putString(KEY_ACCENT, accent.id)
+        prefs.putString(KEY_TONE, tone.id)
+    }
+
     private val background get() = Mothr.background
 
     /** The UI is on screen. Off screen, only the connection and [Attention] are tracked. */
@@ -692,6 +710,9 @@ class AppModel(private val scope: CoroutineScope) {
         private const val KEY_AGENT = "last_agent"
         private const val KEY_MODE = "last_mode"
         private const val KEY_BACKGROUND = "run_in_background"
+        private const val KEY_THEME = "theme_mode"
+        private const val KEY_ACCENT = "accent"
+        private const val KEY_TONE = "tone"
 
         private fun linkKey(id: String) = "computer.$id.link"
         private fun nameKey(id: String) = "computer.$id.name"

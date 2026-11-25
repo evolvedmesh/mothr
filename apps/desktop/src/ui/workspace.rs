@@ -31,6 +31,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+mod bar;
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum Route {
     Home,
@@ -643,82 +645,6 @@ impl Workspace {
         hub.update_settings(s);
         theme::apply_preference(pref, window, cx);
     }
-
-    fn render_title_bar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let pal = tokens::p(cx);
-        let remote = self.remote.status();
-        let current = match self.route {
-            Route::Session(id) => Some(id),
-            _ => None,
-        };
-        let pills = usage::limits_button(self.store.clone(), current, self.usage_open, cx.listener(|this, _: &ClickEvent, _, cx| {
-            this.usage_open = !this.usage_open;
-            cx.notify();
-        }), cx);
-        TitleBar::new()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        Button::new("toggle-sidebar")
-                            .icon(icon("panel-left"))
-                            .ghost()
-                            .tooltip("Toggle sidebar  (Ctrl+B)")
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
-                    )
-                    .child(
-                        h_flex()
-                            .gap(sz(8.))
-                            .items_center()
-                            .child(logo_mark(18., &pal))
-                            .child(div().text_size(sz(tokens::text::BASE)).font_weight(FontWeight::SEMIBOLD).child("Mothr")),
-                    )
-            )
-            .child(
-                h_flex()
-                    .gap(sz(6.))
-                    .px_2()
-                    .items_center()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(pills)
-                    .when(remote.running, |el| {
-                        el.child(
-                            h_flex()
-                                .id("remote-indicator")
-                                .gap(sz(6.))
-                                .px(sz(8.))
-                                .h(sz(24.))
-                                .items_center()
-                                .rounded_full()
-                                .bg(pal.success.opacity(0.10))
-                                .text_size(sz(tokens::text::XS))
-                                .text_color(pal.success)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(pal.success.opacity(0.18)))
-                                .on_click(cx.listener(|this, _, window, cx| this.navigate(Route::Settings, window, cx)))
-                                .child(div().size(sz(6.)).rounded_full().bg(pal.success))
-                                .when(remote.connected_clients > 0, |d| d.child(remote.connected_clients.to_string()))
-                                .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("Mothr Remote is on").build(window, cx)),
-                        )
-                    })
-                    .child(div().w(sz(1.)).h(sz(16.)).mx_1().bg(pal.border))
-                    .child(
-                        Button::new("toggle-theme")
-                            .icon(icon(if pal.dark { "sun" } else { "moon" }))
-                            .ghost()
-                            .tooltip(if pal.dark { "Light mode" } else { "Dark mode" })
-                            .on_click(cx.listener(|this, _, window, cx| this.toggle_theme(window, cx))),
-                    )
-                    .child(
-                        Button::new("open-settings")
-                            .icon(icon("settings"))
-                            .ghost()
-                            .tooltip("Settings  (Ctrl+,)")
-                            .on_click(cx.listener(|this, _, window, cx| this.navigate(Route::Settings, window, cx))),
-                    ),
-            )
-    }
 }
 
 impl Render for Workspace {
@@ -749,8 +675,26 @@ impl Render for Workspace {
             Route::Projects => "projects".into(),
             Route::Settings => "settings".into(),
         };
-        let title_bar = self.render_title_bar(window, cx);
+        let mut bar = Some(self.render_bar(cx));
+        let appearance = tokens::appearance();
+        let bar_bottom = appearance.bar_position == BarPosition::Bottom;
+        let sidebar_right = appearance.sidebar_side == Side::Right;
         let project_fullscreen = self.route == Route::Projects && self.projects.read(cx).fullscreen(cx);
+        let mut sidebar = (self.sidebar_open && !project_fullscreen).then(|| {
+            div()
+                .h_full()
+                .w(sz(286.))
+                .flex_none()
+                .map(|d| if sidebar_right { d.border_l_1() } else { d.border_r_1() })
+                .border_color(theme.sidebar_border)
+                .bg(theme.sidebar)
+                .child(self.sidebar.clone())
+                .with_animation(
+                    "sidebar-in",
+                    Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
+                    |d, t| d.opacity(t),
+                )
+        });
 
         v_flex()
             .id("workspace")
@@ -786,29 +730,16 @@ impl Render for Workspace {
                 Route::Projects => this.projects.update(cx, |p, cx| p.focus(window, cx)),
                 _ => this.home.update(cx, |h, cx| h.focus(window, cx)),
             }))
-            .child(title_bar)
+            // macOS draws its window buttons at the top whatever happens, so a bar moved to the
+            // bottom leaves a strip to hold them and to drag the window by.
+            .when(bar_bottom && cfg!(target_os = "macos"), |d| d.child(TitleBar::new()))
+            .when(!bar_bottom, |d| d.children(bar.take()))
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
                     .relative()
-                    .when(self.sidebar_open && !project_fullscreen, |el| {
-                        el.child(
-                            div()
-                                .h_full()
-                                .w(sz(286.))
-                                .flex_none()
-                                .border_r_1()
-                                .border_color(theme.sidebar_border)
-                                .bg(theme.sidebar)
-                                .child(self.sidebar.clone())
-                                .with_animation(
-                                    "sidebar-in",
-                                    Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
-                                    |d, t| d.opacity(t),
-                                ),
-                        )
-                    })
+                    .when(!sidebar_right, |el| el.children(sidebar.take()))
                     .child(
                         div()
                             .id(ElementId::Name(route_key.clone()))
@@ -822,6 +753,7 @@ impl Render for Workspace {
                                 |d, t| d.opacity(0.4 + 0.6 * t),
                             ),
                     )
+                    .when(sidebar_right, |el| el.children(sidebar.take()))
                     .when(self.usage_open, |el| {
                         let store = self.store.read(cx);
                         let current = match self.route {
@@ -841,7 +773,7 @@ impl Render for Workspace {
                         .child(
                             div()
                                 .absolute()
-                                .top(sz(6.))
+                                .map(|d| if bar_bottom { d.bottom(sz(6.)) } else { d.top(sz(6.)) })
                                 .right(sz(10.))
                                 .occlude()
                                 .child(usage::panel(
@@ -886,6 +818,7 @@ impl Render for Workspace {
                     })
                     .when_some(self.lightbox.clone(), |el, lightbox| el.child(div().absolute().inset_0().child(lightbox))),
             )
+            .when(bar_bottom, |d| d.children(bar.take()))
     }
 }
 

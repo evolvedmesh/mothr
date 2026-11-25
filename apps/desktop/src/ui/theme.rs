@@ -153,6 +153,17 @@ pub fn tune(cx: &mut App) {
     });
 }
 
+/// Change the accent, tone or layout: saved to settings and applied at once.
+pub fn edit_appearance(store: &Entity<crate::store::Store>, f: impl FnOnce(&mut mothr_core::Appearance), cx: &mut App) {
+    let hub = store.read(cx).hub.clone();
+    let mut s = hub.settings();
+    f(&mut s.appearance);
+    tokens::set_appearance(s.appearance.clone());
+    hub.update_settings(s);
+    tune(cx);
+    cx.refresh_windows();
+}
+
 /// Elevated card surface (composer, tool cards, settings groups).
 pub fn card(cx: &App) -> Div {
     let pal = tokens::p(cx);

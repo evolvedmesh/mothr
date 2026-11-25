@@ -7,9 +7,10 @@ use super::theme::{apply_preference, card};
 use crate::remote::{RemoteController, TunnelAvailability, detect_tunnels, generate_token, qr_matrix};
 use crate::store::Store;
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _,
+    ActiveTheme as _, Disableable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
+    input::{Input, InputEvent, InputState},
     switch::Switch,
     v_flex,
 };
@@ -24,13 +25,256 @@ pub struct SettingsView {
     tunnels: TunnelAvailability,
     show_token: bool,
     scroll: ScrollHandle,
+    /// Your own accent, as "#RRGGBB".
+    accent_input: Entity<InputState>,
     _subs: Vec<Subscription>,
 }
 
 impl SettingsView {
-    pub fn new(store: Entity<Store>, remote: RemoteController, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let subs = vec![cx.observe(&store, |_, _, cx| cx.notify())];
-        Self { store, remote, tunnels: detect_tunnels(), show_token: false, scroll: ScrollHandle::new(), _subs: subs }
+    pub fn new(store: Entity<Store>, remote: RemoteController, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let custom = store.read(cx).hub.settings().appearance.custom_accent.unwrap_or_default();
+        let accent_input = cx.new(|cx| InputState::new(window, cx).placeholder("#8B7CF6").default_value(custom));
+        let subs = vec![
+            cx.observe(&store, |_, _, cx| cx.notify()),
+            cx.subscribe(&accent_input, |this, input, ev: &InputEvent, cx| {
+                if let InputEvent::Change = ev {
+                    let text = input.read(cx).value().trim().to_string();
+                    // Applied as soon as it reads as a color.
+                    if let Some(hex) = parse_hex_color(&text) {
+                        this.edit_appearance(cx, |a| {
+                            a.accent = Accent::Custom;
+                            a.custom_accent = Some(format!("#{hex:06X}"));
+                        });
+                    }
+                }
+            }),
+        ];
+        Self { store, remote, tunnels: detect_tunnels(), show_token: false, scroll: ScrollHandle::new(), accent_input, _subs: subs }
+    }
+
+    fn edit_appearance(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Appearance)) {
+        super::theme::edit_appearance(&self.store, f, cx);
+        cx.notify();
+    }
+
+    /// Accent, tone, where the sidebar and the bar sit, and what the bar shows.
+    fn render_look(&mut self, s: &Settings, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pal = tokens::p(cx);
+        let a = s.appearance.clone();
+
+        let mut accents = h_flex().gap(sz(10.)).items_center().flex_wrap();
+        for preset in Accent::PRESETS {
+            let color = hex(preset.hex(pal.dark).unwrap_or(0x8B7CF6));
+            let selected = a.accent == preset;
+            accents = accents.child(
+                div()
+                    .id(SharedString::from(format!("accent-{}", preset.label())))
+                    .p(sz(2.))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(if selected { color } else { gpui_kit::transparent_black() })
+                    .cursor_pointer()
+                    .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(preset.label()).build(window, cx))
+                    .on_click(cx.listener(move |this, _, _, cx| this.edit_appearance(cx, |a| a.accent = preset)))
+                    .child(div().size(sz(22.)).rounded_full().bg(color).border_1().border_color(pal.border_strong)),
+            );
+        }
+        let custom = a.accent == Accent::Custom;
+        let custom_color = hex(a.accent_hex(pal.dark));
+        accents = accents.child(
+            h_flex()
+                .gap(sz(8.))
+                .items_center()
+                .pl(sz(6.))
+                .child(
+                    div()
+                        .id("accent-custom")
+                        .p(sz(2.))
+                        .rounded_full()
+                        .border_2()
+                        .border_color(if custom { custom_color } else { gpui_kit::transparent_black() })
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let ok = this.settings(cx).appearance.custom_accent.as_deref().and_then(parse_hex_color).is_some();
+                            if ok {
+                                this.edit_appearance(cx, |a| a.accent = Accent::Custom);
+                            }
+                        }))
+                        .child(
+                            div()
+                                .size(sz(22.))
+                                .rounded_full()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(if custom { custom_color } else { pal.surface_hover })
+                                .border_1()
+                                .border_color(pal.border_strong)
+                                .child(icon("pipette").size(sz(12.)).text_color(if custom { pal.on_brand } else { pal.text_muted })),
+                        ),
+                )
+                .child(div().w(sz(110.)).child(Input::new(&self.accent_input).small())),
+        );
+
+        let mut tones = h_flex().gap_3();
+        for tone in Tone::ALL {
+            let selected = a.tone == tone;
+            let mut look = a.clone();
+            look.tone = tone;
+            let preview = tokens::Palette::themed(pal.dark, &look);
+            tones = tones.child(
+                v_flex()
+                    .id(SharedString::from(format!("tone-{}", tone.label())))
+                    .gap(sz(6.))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.edit_appearance(cx, |a| a.tone = tone)))
+                    .child(
+                        div()
+                            .p(sz(3.))
+                            .rounded(sz(tokens::radius::MD + 3.))
+                            .border_2()
+                            .border_color(if selected { pal.brand } else { gpui_kit::transparent_black() })
+                            .child(
+                                h_flex()
+                                    .w(sz(84.))
+                                    .h(sz(44.))
+                                    .rounded(sz(tokens::radius::MD))
+                                    .overflow_hidden()
+                                    .border_1()
+                                    .border_color(preview.border)
+                                    .child(div().w(sz(22.)).h_full().bg(preview.chrome).border_r_1().border_color(preview.border))
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .h_full()
+                                            .bg(preview.bg)
+                                            .p(sz(6.))
+                                            .gap(sz(4.))
+                                            .child(div().h(sz(8.)).w(sz(30.)).rounded(sz(3.)).bg(preview.surface_hover))
+                                            .child(div().h(sz(8.)).w(sz(20.)).rounded(sz(3.)).bg(preview.brand)),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(sz(tokens::text::SM))
+                            .text_color(if selected { pal.text } else { pal.text_muted })
+                            .when(selected, |d| d.font_weight(FontWeight::MEDIUM))
+                            .child(tone.label()),
+                    ),
+            );
+        }
+
+        let side = |label: &'static str, active: bool, set: Side, cx: &mut Context<Self>| {
+            segment(SharedString::from(format!("side-{label}")), label, active, &pal)
+                .on_click(cx.listener(move |this, _, _, cx| this.edit_appearance(cx, |a| a.sidebar_side = set)))
+        };
+        let sides = segment_track(&pal)
+            .child(side("Left", a.sidebar_side == Side::Left, Side::Left, cx))
+            .child(side("Right", a.sidebar_side == Side::Right, Side::Right, cx));
+        let pos = |label: &'static str, active: bool, set: BarPosition, cx: &mut Context<Self>| {
+            segment(SharedString::from(format!("bar-{label}")), label, active, &pal)
+                .on_click(cx.listener(move |this, _, _, cx| this.edit_appearance(cx, |a| a.bar_position = set)))
+        };
+        let positions = segment_track(&pal)
+            .child(pos("Top", a.bar_position == BarPosition::Top, BarPosition::Top, cx))
+            .child(pos("Bottom", a.bar_position == BarPosition::Bottom, BarPosition::Bottom, cx));
+
+        // The bar's items: shown ones in their order (grouped by where they sit), then the rest.
+        let mut items: Vec<BarItem> = vec![];
+        for zone in [BarZone::Start, BarZone::Center, BarZone::End] {
+            items.extend(a.bar_items.iter().copied().filter(|i| i.zone() == zone));
+        }
+        items.extend(BarItem::ALL.iter().copied().filter(|i| !a.shows(*i)));
+        let mut list = v_flex().rounded(sz(tokens::radius::LG)).border_1().border_color(pal.border).overflow_hidden();
+        for (n, item) in items.iter().copied().enumerate() {
+            let shown = a.shows(item);
+            let zone_items: Vec<BarItem> = a.bar_items.iter().copied().filter(|i| i.zone() == item.zone()).collect();
+            let k = zone_items.iter().position(|i| *i == item);
+            let (can_up, can_down) = match k {
+                Some(k) => (k > 0, k + 1 < zone_items.len()),
+                None => (false, false),
+            };
+            let zone = match item.zone() {
+                BarZone::Start => "Start",
+                BarZone::Center => "Middle",
+                BarZone::End => "End",
+            };
+            list = list.child(
+                h_flex()
+                    .gap_3()
+                    .px(sz(12.))
+                    .py(sz(8.))
+                    .items_center()
+                    .when(n > 0, |d| d.border_t_1().border_color(pal.border))
+                    .when(!shown, |d| d.bg(pal.surface_hover.opacity(0.35)))
+                    .child(
+                        Switch::new(SharedString::from(format!("bar-show-{n}")))
+                            .checked(shown)
+                            .small()
+                            .on_click(cx.listener(move |this, on: &bool, _, cx| {
+                                let on = *on;
+                                this.edit_appearance(cx, |a| a.set_shown(item, on));
+                            })),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_size(sz(tokens::text::BASE)).text_color(if shown { pal.text } else { pal.text_muted }).child(item.label()))
+                            .child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).truncate().child(item.description())),
+                    )
+                    .child(div().flex_none().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(zone))
+                    .child(
+                        h_flex()
+                            .flex_none()
+                            .gap(sz(2.))
+                            .child(
+                                Button::new(SharedString::from(format!("bar-up-{n}")))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(icon("arrow-up"))
+                                    .disabled(!can_up)
+                                    .tooltip("Move earlier")
+                                    .on_click(cx.listener(move |this, _, _, cx| this.edit_appearance(cx, |a| a.move_item(item, -1)))),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("bar-down-{n}")))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(icon("arrow-down"))
+                                    .disabled(!can_down)
+                                    .tooltip("Move later")
+                                    .on_click(cx.listener(move |this, _, _, cx| this.edit_appearance(cx, |a| a.move_item(item, 1)))),
+                            ),
+                    ),
+            );
+        }
+
+        let row = |label: &'static str, body: AnyElement| {
+            h_flex()
+                .gap_3()
+                .items_center()
+                .child(div().w(sz(160.)).flex_none().text_size(sz(tokens::text::BASE)).child(label))
+                .child(body)
+        };
+        v_flex()
+            .gap_4()
+            .child(row("Accent", accents.into_any_element()))
+            .child(h_flex().gap_3().items_start().child(div().w(sz(160.)).flex_none().pt(sz(18.)).text_size(sz(tokens::text::BASE)).child("Tone")).child(tones))
+            .child(row("Sidebar", sides.into_any_element()))
+            .child(row("Bar", positions.into_any_element()))
+            .child(
+                v_flex()
+                    .gap_2()
+                    .pt_2()
+                    .child(
+                        v_flex()
+                            .child(div().text_size(sz(tokens::text::BASE)).font_weight(FontWeight::MEDIUM).child("In the bar"))
+                            .child(div().text_size(sz(tokens::text::SM)).text_color(pal.text_muted).child("Pick what the bar shows and in which order. Right-click the bar to change it there.")),
+                    )
+                    .child(list),
+            )
     }
 
     pub fn scroll_to_bottom(&self) {
@@ -297,6 +541,7 @@ impl Render for SettingsView {
         let project_count = store.project_count;
         let weak = cx.entity().downgrade();
 
+        let look = self.render_look(&s, cx);
         // Appearance
         let mut themes = h_flex().gap_3();
         for (pref, label) in [(ThemePreference::System, "System"), (ThemePreference::Light, "Light"), (ThemePreference::Dark, "Dark")] {
@@ -321,11 +566,11 @@ impl Render for SettingsView {
                                 ThemePreference::System => h_flex()
                                     .rounded(sz(tokens::radius::LG))
                                     .overflow_hidden()
-                                    .child(theme_preview(&tokens::Palette::light(), 76.))
-                                    .child(theme_preview(&tokens::Palette::dark(), 76.))
+                                    .child(theme_preview(&tokens::Palette::themed(false, &s.appearance), 76.))
+                                    .child(theme_preview(&tokens::Palette::themed(true, &s.appearance), 76.))
                                     .into_any_element(),
-                                ThemePreference::Light => div().rounded(sz(tokens::radius::LG)).overflow_hidden().child(theme_preview(&tokens::Palette::light(), 152.)).into_any_element(),
-                                ThemePreference::Dark => div().rounded(sz(tokens::radius::LG)).overflow_hidden().child(theme_preview(&tokens::Palette::dark(), 152.)).into_any_element(),
+                                ThemePreference::Light => div().rounded(sz(tokens::radius::LG)).overflow_hidden().child(theme_preview(&tokens::Palette::themed(false, &s.appearance), 152.)).into_any_element(),
+                                ThemePreference::Dark => div().rounded(sz(tokens::radius::LG)).overflow_hidden().child(theme_preview(&tokens::Palette::themed(true, &s.appearance), 152.)).into_any_element(),
                             }),
                     )
                     .child(
@@ -477,6 +722,7 @@ impl Render for SettingsView {
                         ),
                     cx,
                 ))
+                .child(group("Colors and layout", "Make Mothr yours: its accent, its tone, and where things sit.", look, cx))
                 .child(group(
                     "Agents",
                     "Mothr talks to each agent over its native protocol — no terminal UI involved.",

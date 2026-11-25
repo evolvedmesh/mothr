@@ -96,6 +96,7 @@ fn main() {
             cx.on_action(|_: &Quit, cx| cx.quit());
 
             ui::tokens::set_scale(settings.ui_scale);
+            ui::tokens::set_appearance(settings.appearance.clone());
             ui::theme::load_fonts(cx);
             ui::theme::apply_mode(ui::theme::resolve(settings.theme, None), None, cx);
             ui::init(cx);

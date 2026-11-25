@@ -53,6 +53,7 @@ import dev.mothr.mobile.resources.ic_chevron_down
 import dev.mothr.mobile.resources.ic_layers
 import dev.mothr.mobile.resources.ic_monitor
 import dev.mothr.mobile.resources.ic_palette
+import dev.mothr.mobile.resources.ic_palette
 import dev.mothr.mobile.resources.ic_plus
 import dev.mothr.mobile.resources.ic_search
 import dev.mothr.mobile.resources.ic_settings_2
@@ -146,6 +147,11 @@ private fun Header(model: AppModel) {
                     text = { Text("Computers", style = type.body) },
                     leadingIcon = { Ico(Res.drawable.ic_monitor) },
                     onClick = { menu = false; model.showComputers = true },
+                )
+                DropdownMenuItem(
+                    text = { Text("Appearance", style = type.body) },
+                    leadingIcon = { Ico(Res.drawable.ic_palette) },
+                    onClick = { menu = false; model.showAppearance = true },
                 )
             }
         }

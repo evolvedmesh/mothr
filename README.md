@@ -55,6 +55,11 @@ with the app.
   anywhere on the system, such as editing a config file. They run from your home directory.
   Start one with the globe button, the "General" chip, the first row of the project finder, or
   `Ctrl+Shift+G`.
+- **Make it yours.** Pick an accent (eight presets or any hex color) and a surface tone
+  (Graphite, Slate, Warm, or pure Black), put the sidebar on either side, move the bar to the top
+  or bottom, and choose which bar items show and in what order: in Settings, or by
+  right-clicking the bar. The bar shows where you are, a live count of chats working or waiting
+  on you, and your limits. The phone app has its own theme, accent and tone.
 - **Saved preferences**:
   - one app-wide default permission mode for every agent (an agent that lacks that mode falls
     back to its closest equivalent)

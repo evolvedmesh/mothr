@@ -24,6 +24,8 @@ pub fn limits_button(
     store: Entity<Store>,
     current: Option<SessionId>,
     pinned: bool,
+    // The bar is at the bottom: the card opens upwards.
+    above: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> AnyElement {
@@ -67,7 +69,7 @@ pub fn limits_button(
         return trigger.into_any_element();
     }
     HoverCard::new("ai-limits-card")
-        .anchor(Anchor::TopRight)
+        .anchor(if above { Anchor::BottomRight } else { Anchor::TopRight })
         .appearance(false)
         .open_delay(std::time::Duration::from_millis(250))
         .close_delay(std::time::Duration::from_millis(200))
@@ -77,7 +79,7 @@ pub fn limits_button(
             let st = store.read(cx);
             let meta = current.and_then(|id| st.session(id)).map(|s| s.meta.clone());
             let refresh = store.clone();
-            div().mt(sz(6.)).child(panel(
+            div().map(|d| if above { d.mb(sz(6.)) } else { d.mt(sz(6.)) }).child(panel(
                 st,
                 meta.as_ref(),
                 move |_, window, cx| {

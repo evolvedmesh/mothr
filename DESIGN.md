@@ -57,6 +57,22 @@ Mothr's design system lives in three places that stay in step:
 The thresholds for limit meters are: green below 75%, amber from 75%, red from 90%, and
 exhausted at 100%.
 
+### Making it yours
+
+The user can recolor and rearrange Mothr (Settings → Colors and layout; on the phone, Chats →
+⋯ → Appearance). The principles hold whatever they pick: there is still exactly one accent.
+
+- **Accent**: Violet (default), Blue, Teal, Green, Orange, Rose, Pink, Mono, or any `#RRGGBB`.
+  It replaces `brand` everywhere; `brand_hover`, `brand_soft` and `on_brand` (dark or white text,
+  by the accent's luminance) follow from it.
+- **Tone**: Graphite (default), Slate (cool), Warm, or Black (pure black in dark mode). A tone
+  swaps the surface ramp (`bg` … `border_strong`, `code_bg`); text and semantic colors stay.
+- **Layout**: the sidebar on the left or right, the bar at the top or bottom, and which bar
+  items show in which order.
+
+The presets live in `mothr_core::{Accent, Tone}` and are mirrored in the phone app's
+`Theme.kt`; change both together.
+
 ## Typography
 
 Fonts are **Geist** and **Geist Mono**, bundled under the SIL OFL (`assets/fonts`), so the app
@@ -119,7 +135,9 @@ window's rem size, so text, buttons, menus and spacing grow together.
 | Composer | Raised surface. On focus its border turns violet and it glows. Shows agent, model, project and mode pickers; Enter sends. |
 | Subagent strip | Below an orchestrator's header: one chip per subagent with live status and tool and token counts. |
 | Usage meter | 5 px track, colored by usage level, with a reset countdown. |
-| Limits button | Title bar: a sparkle, then one 20 px progress ring per agent account with its logo inside. Rings use the agent's tint until 75%, then amber/red. Hover shows the limits card; click pins it. |
+| Bar | The window's title / status bar, at the top or the bottom. Start: sidebar toggle, logo, back/forward. Middle: the location pill (status dot or place icon, title, project, the palette shortcut) that opens the project finder. End: a live activity pill (pulsing; violet while chats work, amber when one needs you), the limits rings, Mothr Remote, and the plain icon buttons grouped in one hairline island. Which items show, and their order within each zone, is the user's (Settings or right-click). |
+| Limits button | In the bar: one 20 px progress ring per agent account with its logo inside. Rings use the agent's tint until 75%, then amber/red. Hover shows the limits card (it opens upwards from a bottom bar); click pins it. |
+| Home | A time-of-day greeting over a typed headline that cycles short phrases ("Fix a bug", "Ship it"), its caret in the accent and blinking while a phrase rests; the agent and project under it; the composer docked at the bottom with the project picker below. |
 | Agent avatar | The agent's real logo on a soft tile of its brand tint (logos in `apps/desktop/assets/logos`). |
 
 ## Voice

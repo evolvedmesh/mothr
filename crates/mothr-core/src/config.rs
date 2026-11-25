@@ -181,6 +181,293 @@ impl Default for RemoteSettings {
     }
 }
 
+/// The accent color: violet by default, a preset, or your own (`Appearance::custom_accent`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Accent {
+    #[default]
+    Violet,
+    Blue,
+    Teal,
+    Green,
+    Orange,
+    Rose,
+    Pink,
+    /// Monochrome: text color as the accent.
+    Mono,
+    Custom,
+}
+
+impl Accent {
+    pub const PRESETS: [Accent; 8] = [Accent::Violet, Accent::Blue, Accent::Teal, Accent::Green, Accent::Orange, Accent::Rose, Accent::Pink, Accent::Mono];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Accent::Violet => "Violet",
+            Accent::Blue => "Blue",
+            Accent::Teal => "Teal",
+            Accent::Green => "Green",
+            Accent::Orange => "Orange",
+            Accent::Rose => "Rose",
+            Accent::Pink => "Pink",
+            Accent::Mono => "Mono",
+            Accent::Custom => "Custom",
+        }
+    }
+
+    /// The preset's color as 0xRRGGBB on a dark and a light background (None for `Custom`).
+    pub fn hex(self, dark: bool) -> Option<u32> {
+        Some(match (self, dark) {
+            (Accent::Violet, true) => 0x8B7CF6,
+            (Accent::Violet, false) => 0x6D5BEF,
+            (Accent::Blue, true) => 0x5B9DFF,
+            (Accent::Blue, false) => 0x2F6FE0,
+            (Accent::Teal, true) => 0x2DD4BF,
+            (Accent::Teal, false) => 0x0E9384,
+            (Accent::Green, true) => 0x4ADE80,
+            (Accent::Green, false) => 0x16A34A,
+            (Accent::Orange, true) => 0xFB923C,
+            (Accent::Orange, false) => 0xEA580C,
+            (Accent::Rose, true) => 0xFB7185,
+            (Accent::Rose, false) => 0xE11D48,
+            (Accent::Pink, true) => 0xF472B6,
+            (Accent::Pink, false) => 0xDB2777,
+            (Accent::Mono, true) => 0xECECF1,
+            (Accent::Mono, false) => 0x15161A,
+            (Accent::Custom, _) => return None,
+        })
+    }
+}
+
+/// The tone of the surfaces (backgrounds, cards, borders).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Tone {
+    /// Neutral greys.
+    #[default]
+    Graphite,
+    /// Cool, a little blue.
+    Slate,
+    /// Warm, a little brown.
+    Warm,
+    /// Pure black in dark mode (OLED).
+    Black,
+}
+
+impl Tone {
+    pub const ALL: [Tone; 4] = [Tone::Graphite, Tone::Slate, Tone::Warm, Tone::Black];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tone::Graphite => "Graphite",
+            Tone::Slate => "Slate",
+            Tone::Warm => "Warm",
+            Tone::Black => "Black",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    #[default]
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BarPosition {
+    #[default]
+    Top,
+    Bottom,
+}
+
+/// Where an item sits in the bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BarZone {
+    Start,
+    Center,
+    End,
+}
+
+/// Something the bar can show. The bar lists the items you keep, in your order, each in its zone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BarItem {
+    SidebarToggle,
+    Brand,
+    Navigation,
+    /// Where you are (project and chat); click to jump anywhere.
+    Location,
+    /// Chats working or waiting on you right now.
+    Activity,
+    NewChat,
+    Search,
+    Usage,
+    Remote,
+    Theme,
+    Settings,
+}
+
+impl BarItem {
+    pub const ALL: [BarItem; 11] = [
+        BarItem::SidebarToggle,
+        BarItem::Brand,
+        BarItem::Navigation,
+        BarItem::Location,
+        BarItem::Activity,
+        BarItem::NewChat,
+        BarItem::Search,
+        BarItem::Usage,
+        BarItem::Remote,
+        BarItem::Theme,
+        BarItem::Settings,
+    ];
+
+    pub fn default_items() -> Vec<BarItem> {
+        vec![
+            BarItem::SidebarToggle,
+            BarItem::Brand,
+            BarItem::Location,
+            BarItem::Activity,
+            BarItem::Usage,
+            BarItem::Remote,
+            BarItem::Theme,
+            BarItem::Settings,
+        ]
+    }
+
+    pub fn zone(self) -> BarZone {
+        match self {
+            BarItem::SidebarToggle | BarItem::Brand | BarItem::Navigation => BarZone::Start,
+            BarItem::Location => BarZone::Center,
+            _ => BarZone::End,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BarItem::SidebarToggle => "Sidebar toggle",
+            BarItem::Brand => "Mothr logo",
+            BarItem::Navigation => "Back and forward",
+            BarItem::Location => "Location",
+            BarItem::Activity => "Live activity",
+            BarItem::NewChat => "New chat",
+            BarItem::Search => "Search",
+            BarItem::Usage => "Usage & limits",
+            BarItem::Remote => "Mothr Remote",
+            BarItem::Theme => "Light / dark",
+            BarItem::Settings => "Settings",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            BarItem::SidebarToggle => "Show or hide the sidebar",
+            BarItem::Brand => "The Mothr mark and name",
+            BarItem::Navigation => "Go back and forward through places you visited",
+            BarItem::Location => "The project and chat you are in; click to jump anywhere",
+            BarItem::Activity => "Chats working or waiting on you, live",
+            BarItem::NewChat => "Start a new chat",
+            BarItem::Search => "Find a project or chat (Ctrl+P)",
+            BarItem::Usage => "Account limits and this chat's usage",
+            BarItem::Remote => "Shown while Mothr Remote is on",
+            BarItem::Theme => "Switch between light and dark",
+            BarItem::Settings => "Open Settings",
+        }
+    }
+}
+
+/// Unknown bar items (from a newer version) are skipped instead of failing the whole file.
+fn lenient_bar_items<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<BarItem>, D::Error> {
+    let raw: Vec<toml::Value> = Vec::deserialize(d)?;
+    let mut out = vec![];
+    for v in raw {
+        if let Ok(item) = v.try_into::<BarItem>()
+            && !out.contains(&item)
+        {
+            out.push(item);
+        }
+    }
+    Ok(out)
+}
+
+/// How Mothr looks and where things sit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    pub accent: Accent,
+    /// "#RRGGBB" used when `accent` is `Custom`.
+    pub custom_accent: Option<String>,
+    pub tone: Tone,
+    pub sidebar_side: Side,
+    pub bar_position: BarPosition,
+    /// The bar's items, in order; anything not listed is hidden.
+    #[serde(deserialize_with = "lenient_bar_items")]
+    pub bar_items: Vec<BarItem>,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            accent: Accent::Violet,
+            custom_accent: None,
+            tone: Tone::Graphite,
+            sidebar_side: Side::Left,
+            bar_position: BarPosition::Top,
+            bar_items: BarItem::default_items(),
+        }
+    }
+}
+
+impl Appearance {
+    /// The accent as 0xRRGGBB for a dark or light background.
+    pub fn accent_hex(&self, dark: bool) -> u32 {
+        match self.accent {
+            Accent::Custom => self.custom_accent.as_deref().and_then(parse_hex_color).unwrap_or(Accent::Violet.hex(dark).unwrap_or(0x8B7CF6)),
+            a => a.hex(dark).unwrap_or(0x8B7CF6),
+        }
+    }
+
+    pub fn shows(&self, item: BarItem) -> bool {
+        self.bar_items.contains(&item)
+    }
+
+    /// Show or hide an item. A shown item goes back to where it sits by default.
+    pub fn set_shown(&mut self, item: BarItem, shown: bool) {
+        self.bar_items.retain(|i| *i != item);
+        if shown {
+            let rank = |i: &BarItem| BarItem::ALL.iter().position(|x| x == i).unwrap_or(usize::MAX);
+            let at = self.bar_items.iter().position(|i| rank(i) > rank(&item)).unwrap_or(self.bar_items.len());
+            self.bar_items.insert(at, item);
+        }
+    }
+
+    /// Move a shown item one place earlier (`-1`) or later (`1`) among the items of its zone.
+    pub fn move_item(&mut self, item: BarItem, by: i32) {
+        let zone = item.zone();
+        let same: Vec<usize> = self.bar_items.iter().enumerate().filter(|(_, i)| i.zone() == zone).map(|(n, _)| n).collect();
+        let Some(k) = same.iter().position(|&n| self.bar_items[n] == item) else { return };
+        let j = k as i32 + by;
+        if j < 0 || j as usize >= same.len() {
+            return;
+        }
+        self.bar_items.swap(same[k], same[j as usize]);
+    }
+}
+
+/// "#8B7CF6", "8b7cf6" or "#87f" → 0x8B7CF6.
+pub fn parse_hex_color(s: &str) -> Option<u32> {
+    let h = s.trim().trim_start_matches('#');
+    let full: String = match h.len() {
+        3 => h.chars().flat_map(|c| [c, c]).collect(),
+        6 => h.to_string(),
+        _ => return None,
+    };
+    u32::from_str_radix(&full, 16).ok()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -213,6 +500,8 @@ pub struct Settings {
     pub last_contexts: BTreeMap<AgentKind, String>,
     /// Whether the sidebar was open when the app last ran.
     pub sidebar_open: bool,
+    /// Accent, tone and layout.
+    pub appearance: Appearance,
 }
 
 impl Default for Settings {
@@ -248,6 +537,7 @@ impl Default for Settings {
             last_efforts: BTreeMap::new(),
             last_contexts: BTreeMap::new(),
             sidebar_open: true,
+            appearance: Appearance::default(),
         }
     }
 }
@@ -366,6 +656,45 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appearance_round_trips_and_skips_unknown_bar_items() {
+        let mut s = Settings::default();
+        s.appearance.accent = Accent::Custom;
+        s.appearance.custom_accent = Some("#12ab34".into());
+        s.appearance.sidebar_side = Side::Right;
+        s.appearance.bar_position = BarPosition::Bottom;
+        let text = toml::to_string(&s).unwrap();
+        let back: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(back.appearance, s.appearance);
+        assert_eq!(back.appearance.accent_hex(true), 0x12AB34);
+        // A bar item from a newer version doesn't lose the rest of the settings.
+        let text = text.replace("bar_items = [", "bar_items = [\"hologram\", ");
+        let back: Settings = toml::from_str(&text).unwrap();
+        assert_eq!(back.appearance.bar_items, BarItem::default_items());
+        // Older files without the section get the defaults.
+        let old: Settings = toml::from_str("theme = \"dark\"").unwrap();
+        assert_eq!(old.appearance, Appearance::default());
+    }
+
+    #[test]
+    fn bar_items_show_hide_and_move_within_their_zone() {
+        let mut a = Appearance::default();
+        a.set_shown(BarItem::Theme, false);
+        assert!(!a.shows(BarItem::Theme));
+        a.set_shown(BarItem::NewChat, true);
+        // A shown item lands where it sits by default: after Activity, before Usage.
+        let at = |a: &Appearance, i| a.bar_items.iter().position(|x| *x == i).unwrap();
+        assert!(at(&a, BarItem::Activity) < at(&a, BarItem::NewChat) && at(&a, BarItem::NewChat) < at(&a, BarItem::Usage));
+        a.move_item(BarItem::NewChat, -1);
+        assert!(at(&a, BarItem::NewChat) < at(&a, BarItem::Activity));
+        // Location is alone in the center; it can't move into another zone.
+        let before = a.bar_items.clone();
+        a.move_item(BarItem::Location, 1);
+        assert_eq!(a.bar_items, before);
+        assert_eq!(parse_hex_color("#87f"), Some(0x8877FF));
+        assert_eq!(parse_hex_color("nope"), None);
+    }
 
     #[test]
     fn remembered_selection_wins_when_enabled() {

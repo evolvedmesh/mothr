@@ -134,9 +134,72 @@ impl Palette {
         }
     }
 
+    /// The palette in use: the base one with your tone and accent.
     pub fn for_mode(dark: bool) -> Self {
-        if dark { Self::dark() } else { Self::light() }
+        Self::themed(dark, &appearance())
     }
+
+    /// A base palette with a tone and an accent applied.
+    pub fn themed(dark: bool, a: &mothr_core::Appearance) -> Self {
+        let mut p = if dark { Self::dark() } else { Self::light() };
+        p.apply_tone(a.tone);
+        p.apply_accent(a.accent_hex(dark));
+        p
+    }
+
+    fn apply_tone(&mut self, tone: mothr_core::Tone) {
+        use mothr_core::Tone;
+        // bg, chrome, surface, surface_hover, raised, border, border_strong, code_bg
+        let set: [u32; 8] = match (tone, self.dark) {
+            (Tone::Graphite, _) => return,
+            (Tone::Slate, true) => [0x0A0D13, 0x0D1119, 0x121722, 0x19202C, 0x151B26, 0x1D2431, 0x293243, 0x0E121A],
+            (Tone::Slate, false) => [0xFAFBFD, 0xF1F4F9, 0xFFFFFF, 0xEBEFF6, 0xFFFFFF, 0xE1E6EF, 0xD0D8E4, 0xF3F6FA],
+            (Tone::Warm, true) => [0x0F0D0B, 0x13110E, 0x191613, 0x201C18, 0x1C1915, 0x28231E, 0x36302A, 0x14120F],
+            (Tone::Warm, false) => [0xFCFBF9, 0xF6F3EF, 0xFFFFFF, 0xF1EDE7, 0xFFFFFF, 0xE8E2DA, 0xD9D1C6, 0xF7F4EF],
+            (Tone::Black, true) => [0x000000, 0x050506, 0x0C0C0E, 0x141417, 0x111113, 0x1A1A1E, 0x27272C, 0x08080A],
+            (Tone::Black, false) => return,
+        };
+        self.bg = c(set[0]);
+        self.chrome = c(set[1]);
+        self.surface = c(set[2]);
+        self.surface_hover = c(set[3]);
+        self.raised = c(set[4]);
+        self.border = c(set[5]);
+        self.border_strong = c(set[6]);
+        self.code_bg = c(set[7]);
+    }
+
+    fn apply_accent(&mut self, hex: u32) {
+        let accent = c(hex);
+        self.brand = accent;
+        let mut hover = accent;
+        hover.l = if self.dark { (hover.l + 0.06).min(0.97) } else { (hover.l - 0.05).max(0.05) };
+        self.brand_hover = hover;
+        self.brand_soft = accent.opacity(if self.dark { 0.14 } else { 0.10 });
+        // Text on the accent stays readable whatever its lightness.
+        self.on_brand = if luminance(hex) > 0.5 { c(0x111216) } else { c(0xFFFFFF) };
+    }
+}
+
+/// Relative luminance (0 black … 1 white) of 0xRRGGBB.
+pub fn luminance(hex: u32) -> f32 {
+    let ch = |v: u32| {
+        let v = v as f32 / 255.0;
+        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * ch((hex >> 16) & 0xFF) + 0.7152 * ch((hex >> 8) & 0xFF) + 0.0722 * ch(hex & 0xFF)
+}
+
+static APPEARANCE: std::sync::RwLock<Option<mothr_core::Appearance>> = std::sync::RwLock::new(None);
+
+/// Set the accent, tone and layout the palette and the workspace follow. Re-apply the theme
+/// (`theme::tune`) afterwards for colors to change.
+pub fn set_appearance(a: mothr_core::Appearance) {
+    *APPEARANCE.write().unwrap_or_else(|e| e.into_inner()) = Some(a);
+}
+
+pub fn appearance() -> mothr_core::Appearance {
+    APPEARANCE.read().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_default()
 }
 
 impl Global for Palette {}

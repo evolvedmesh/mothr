@@ -31,8 +31,8 @@ import kotlinx.coroutines.delay
 @Suppress("DEPRECATION") // BackHandler → NavigationEventHandler once it is stable in Compose Multiplatform.
 @Composable
 fun App() {
-    MothrTheme {
-        val model = Mothr.model
+    val model = Mothr.model
+    MothrTheme(model.themeMode, model.accent, model.tone) {
         Box(Modifier.fillMaxSize().background(pal.bg)) {
             val screen = when {
                 model.client == null || model.addingComputer -> "pair"
@@ -67,17 +67,19 @@ fun App() {
             }
 
             val inProjects = model.showProjects || model.openProject != null
-            BackHandler(enabled = model.stack.isNotEmpty() || model.showNewChat || model.showUsage || model.addingComputer || inProjects) {
+            BackHandler(enabled = model.stack.isNotEmpty() || model.showNewChat || model.showUsage || model.showAppearance || model.addingComputer || inProjects) {
                 when {
                     model.addingComputer -> model.cancelAdding()
                     model.showNewChat -> model.showNewChat = false
                     model.showUsage -> model.showUsage = false
+                    model.showAppearance -> model.showAppearance = false
                     model.stack.isNotEmpty() -> model.back()
                     else -> model.projectBack()
                 }
             }
 
             if (model.showUsage) UsageSheet(model)
+            if (model.showAppearance) AppearanceSheet(model)
             if (model.showComputers) ComputersSheet(model)
 
             // Toasts: brief, bottom, quiet.
