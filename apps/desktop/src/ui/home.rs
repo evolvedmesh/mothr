@@ -6,6 +6,7 @@ use super::options::{Pick, RunSettings, run_settings, settings_for};
 use super::{clip, tokens};
 use crate::store::Store;
 use std::path::PathBuf;
+use std::time::Duration;
 use gpui_kit::component::{
     WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -46,7 +47,70 @@ pub struct Home {
     effort: Option<String>,
     context: Option<String>,
     slash_sel: usize,
+    /// The headline being typed out.
+    headline: Typewriter,
     _subs: Vec<Subscription>,
+    _typing: Task<()>,
+}
+
+/// What the home page offers to do, typed out one after another.
+const HEADLINES: &[&str] = &["Build something new", "Fix a bug", "Explore a codebase", "Refactor with care", "Write the tests", "Ship it"];
+
+/// The headline's typewriter: types a phrase, holds it, erases it and moves on to the next.
+#[derive(Default)]
+struct Typewriter {
+    phrase: usize,
+    /// Characters of the phrase on screen.
+    shown: usize,
+    erasing: bool,
+}
+
+impl Typewriter {
+    fn phrase(&self) -> &'static str {
+        HEADLINES[self.phrase % HEADLINES.len()]
+    }
+
+    /// The text on screen now.
+    fn text(&self) -> String {
+        self.phrase().chars().take(self.shown).collect()
+    }
+
+    /// The phrase is fully typed.
+    fn complete(&self) -> bool {
+        self.shown >= self.phrase().chars().count()
+    }
+
+    /// Advance one step and say how long until the next.
+    fn tick(&mut self) -> std::time::Duration {
+        let ms = std::time::Duration::from_millis;
+        let chars: Vec<char> = self.phrase().chars().collect();
+        if !self.erasing {
+            if self.shown < chars.len() {
+                self.shown += 1;
+                // A beat after each word, like a person typing.
+                return if chars.get(self.shown) == Some(&' ') { ms(130) } else { ms(62 + (self.shown as u64 * 37) % 40) };
+            }
+            self.erasing = true;
+            return ms(2600);
+        }
+        if self.shown > 0 {
+            self.shown -= 1;
+            return ms(26);
+        }
+        self.erasing = false;
+        self.phrase = (self.phrase + 1) % HEADLINES.len();
+        ms(420)
+    }
+}
+
+/// "Good morning" … by the local clock.
+fn greeting() -> &'static str {
+    use chrono::Timelike as _;
+    match chrono::Local::now().hour() {
+        5..=11 => "Good morning",
+        12..=17 => "Good afternoon",
+        _ => "Good evening",
+    }
 }
 
 impl Home {
@@ -80,7 +144,35 @@ impl Home {
                 cx.notify();
             }),
         ];
-        let mut this = Self { id, store, input, attachments: vec![], agent: None, project: None, general: false, model: None, effort: None, context: None, slash_sel: 0, _subs: subs };
+        // Drives the headline. Notifying a view that isn't on screen doesn't redraw anything.
+        let typing = cx.spawn(async move |this, cx| {
+            loop {
+                let Ok(delay) = this.update(cx, |h, cx| {
+                    let d = h.headline.tick();
+                    cx.notify();
+                    d
+                }) else {
+                    break;
+                };
+                cx.background_executor().timer(delay).await;
+            }
+        });
+        let mut this = Self {
+            id,
+            store,
+            input,
+            attachments: vec![],
+            agent: None,
+            project: None,
+            general: false,
+            model: None,
+            effort: None,
+            context: None,
+            slash_sel: 0,
+            headline: Typewriter::default(),
+            _subs: subs,
+            _typing: typing,
+        };
         this.sync_defaults(cx);
         this
     }
@@ -504,10 +596,10 @@ impl Render for Home {
             }
             div()
                 .absolute()
-                .top_full()
+                .bottom_full()
                 .left_0()
                 .right_0()
-                .mt_2()
+                .mb_2()
                 .rounded(sz(tokens::radius::LG))
                 .border_1()
                 .border_color(pal.border_strong)
@@ -592,25 +684,86 @@ impl Render for Home {
                     ),
             );
 
-        div().id("home-scroll").size_full().overflow_y_scroll().child(
-            v_flex()
-                .w_full()
-                .max_w(sz(720.))
-                .mx_auto()
-                .px_6()
-                .pt(sz(120.))
-                .pb_10()
-                .gap(sz(20.))
-                .items_center()
-                .child(
+        let headline = self.headline.text();
+        let typed = self.headline.complete();
+        let subtitle = match (&self.project, general, self.agent) {
+            (_, true, Some(a)) => format!("{} · a general chat", a.display_name()),
+            (Some(p), false, Some(a)) => format!("{} in {}", a.display_name(), p.name),
+            (_, _, Some(a)) => a.display_name().to_string(),
+            _ => String::new(),
+        };
+        let hero = v_flex()
+            .items_center()
+            .gap(sz(14.))
+            .px_6()
+            .child(
+                div()
+                    .text_size(sz(tokens::text::SM))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(pal.text_faint)
+                    .child(greeting()),
+            )
+            .child(
+                h_flex()
+                    .h(sz(tokens::text::DISPLAY * 1.3))
+                    .items_center()
+                    .text_size(sz(tokens::text::DISPLAY))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(pal.text)
+                    .child(headline)
+                    .child({
+                        // The caret: steady while typing, blinking while the phrase rests.
+                        let caret = div().ml(sz(3.)).w(sz(3.)).h(sz(tokens::text::DISPLAY * 0.95)).rounded(sz(1.5)).bg(pal.brand);
+                        if typed {
+                            caret
+                                .with_animation(
+                                    "home-caret",
+                                    Animation::new(Duration::from_millis(1100)).repeat().with_easing(pulsating_between(0.15, 1.0)),
+                                    |d, t| d.opacity(t),
+                                )
+                                .into_any_element()
+                        } else {
+                            caret.into_any_element()
+                        }
+                    }),
+            )
+            .when(!subtitle.is_empty(), |d| {
+                d.child(div().text_size(sz(tokens::text::BASE)).text_color(pal.text_muted).child(subtitle))
+            })
+            .when(no_agents, |d| {
+                d.child(
                     div()
-                        .text_size(sz(tokens::text::XXL + 4.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(pal.text)
-                        .child("What are we working on?"),
+                        .pt_2()
+                        .text_size(sz(tokens::text::SM))
+                        .text_color(pal.warning)
+                        .child("No agents found. Install Claude Code, Codex, Copilot CLI, OpenCode or Hermes, then rescan in Settings."),
                 )
-                .child(
-                    v_flex().w_full().mt_2().gap(sz(6.)).child(composer).child(
+            })
+            .with_animation(
+                "home-hero",
+                Animation::new(Duration::from_millis(320)).with_easing(ease_out_quint()),
+                |d, t| d.opacity(t).mt(sz((1.0 - t) * 8.0)),
+            );
+
+        v_flex()
+            .size_full()
+            .child(
+                // The headline sits in the open space above the box.
+                div().id("home-scroll").flex_1().min_h_0().overflow_y_scroll().child(
+                    v_flex().size_full().min_h(sz(220.)).items_center().justify_center().pb(sz(24.)).child(hero),
+                ),
+            )
+            .child(
+                v_flex()
+                    .flex_none()
+                    .w_full()
+                    .max_w(sz(760.))
+                    .mx_auto()
+                    .px_6()
+                    .pb(sz(22.))
+                    .gap(sz(6.))
+                    .child(composer)
+                    .child(
                         // Where the chat runs sits under the box, not among the per-message controls.
                         h_flex().px(sz(6.)).child(
                             Button::new("project-pick")
@@ -625,15 +778,6 @@ impl Render for Home {
                                 .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::PickProject))),
                         ),
                     ),
-                )
-                .when(no_agents, |d| {
-                    d.child(
-                        div()
-                            .text_size(sz(tokens::text::SM))
-                            .text_color(pal.warning)
-                            .child("No agents found. Install Claude Code, Codex, Copilot CLI, OpenCode or Hermes, then rescan in Settings."),
-                    )
-                }),
-        )
+            )
     }
 }
