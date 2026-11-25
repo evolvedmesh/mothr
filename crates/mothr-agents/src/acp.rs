@@ -37,6 +37,9 @@ struct PendingPermission {
 struct Driver {
     em: Emitter,
     spec: SessionSpec,
+    /// The chat's other projects haven't been mentioned to the agent yet. ACP has no way to
+    /// add folders to a session, so the next prompt carries a note naming them.
+    projects_note: bool,
     writer: mpsc::UnboundedSender<String>,
     next_id: u64,
     calls: HashMap<u64, Call>,
@@ -170,6 +173,7 @@ pub async fn run(
     let mut d = Driver {
         em: em.clone(),
         mode: spec.mode,
+        projects_note: !spec.extra_dirs.is_empty(),
         spec,
         writer: wtx,
         next_id: 0,
@@ -390,7 +394,13 @@ impl Driver {
                 self.em.emit(SessionEvent::Upsert {
                     entry: Entry::User { id: new_entry_id(), text: text.clone(), attachments: attachments.clone(), at: chrono::Utc::now(), agent_ref: None, prev_ref: None },
                 });
-                let mut prompt = vec![json!({"type": "text", "text": text})];
+                let mut prompt = vec![];
+                if std::mem::take(&mut self.projects_note)
+                    && let Some(note) = SessionMeta::extra_projects_note(&self.spec.extra_dirs)
+                {
+                    prompt.push(json!({"type": "text", "text": note}));
+                }
+                prompt.push(json!({"type": "text", "text": text}));
                 for a in attachments {
                     let uri = format!("file://{}", a.path.display());
                     let name = a.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -490,6 +500,10 @@ impl Driver {
             }
             SessionCommand::StopSubagent { .. } => {
                 self.em.notice(NoticeLevel::Info, format!("{} doesn't support stopping individual subagents; stop the whole chat instead.", self.spec.agent.display_name()));
+            }
+            SessionCommand::SetExtraProjects { projects } => {
+                self.projects_note = !projects.is_empty();
+                self.spec.extra_dirs = projects;
             }
             SessionCommand::Shutdown => {}
         }

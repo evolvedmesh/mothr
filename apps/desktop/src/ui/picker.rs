@@ -32,6 +32,8 @@ pub struct ProjectPicker {
     hits: Vec<ProjectHit>,
     selected: usize,
     scroll: ScrollHandle,
+    /// Adding another project to a chat (no "General chat" row).
+    adding: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -57,9 +59,16 @@ impl ProjectPicker {
             InputEvent::PressEnter { .. } => this.confirm(cx),
             _ => {}
         })];
-        let mut this = Self { store, input, hits: vec![], selected: 0, scroll: ScrollHandle::new(), _subs: subs };
+        let mut this = Self { store, input, hits: vec![], selected: 0, scroll: ScrollHandle::new(), adding: false, _subs: subs };
         this.search("", cx);
         this
+    }
+
+    /// Pick a project to add to a chat, next to the one it already has.
+    pub fn adding(mut self, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        self.adding = true;
+        self.input.update(cx, |i, cx| i.set_placeholder("Add a project to the chat…", window, cx));
+        self
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -100,8 +109,9 @@ impl Render for ProjectPicker {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let count = self.store.read(cx).project_count;
+        let adding = self.adding;
         let mut list = v_flex().gap(sz(1.)).p_1();
-        list = list.child(
+        if !adding { list = list.child(
             h_flex()
                 .id("hit-general")
                 .px_3()
@@ -128,7 +138,7 @@ impl Render for ProjectPicker {
                         .child(div().text_sm().child("General chat"))
                         .child(div().text_xs().text_color(theme.muted_foreground).child("Not tied to a project — questions, quick tasks, files anywhere")),
                 ),
-        );
+        ); }
         for (i, h) in self.hits.iter().enumerate() {
             let selected = i == self.selected;
             let p = h.project.clone();
@@ -235,7 +245,7 @@ impl Render for ProjectPicker {
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(h_flex().gap_1().child(kbd_hint("↑↓", cx)).child("navigate"))
-                    .child(h_flex().gap_1().child(kbd_hint("↵", cx)).child("start chat here"))
+                    .child(h_flex().gap_1().child(kbd_hint("↵", cx)).child(if adding { "add to the chat" } else { "start chat here" }))
                     .child(h_flex().gap_1().child(kbd_hint("esc", cx)).child("close"))
                     .child(div().flex_1())
                     .child(match count {

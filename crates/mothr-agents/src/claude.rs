@@ -133,6 +133,10 @@ pub async fn run(program: PathBuf, spec: SessionSpec, mut commands: mpsc::Unboun
     if let Some(sp) = &spec.system_prompt {
         cmd.args(["--append-system-prompt", sp]);
     }
+    // The chat's other projects: Claude Code may read and edit files in them too.
+    for dir in &spec.extra_dirs {
+        cmd.arg("--add-dir").arg(dir);
+    }
     cmd.current_dir(&spec.cwd)
         .env("CLAUDE_CODE_ENTRYPOINT", "sdk-mothr")
         // File checkpoints make "edit & resend" able to revert the agent's file changes.
@@ -381,6 +385,8 @@ impl Driver {
                     self.control(json!({"subtype": "stop_task", "task_id": task_id}), Pending::Other);
                 }
             }
+            // Folders are given when Claude Code starts; the hub restarts the chat to change them.
+            SessionCommand::SetExtraProjects { .. } => {}
             SessionCommand::Shutdown => {}
         }
     }

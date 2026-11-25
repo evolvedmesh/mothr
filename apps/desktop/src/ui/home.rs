@@ -25,6 +25,8 @@ use mothr_core::*;
 pub enum HomeEvent {
     Started(SessionId),
     PickProject,
+    /// Add another project to the chat, next to the primary one.
+    AddProject,
     /// The text or attachments of the draft changed.
     Changed,
 }
@@ -39,6 +41,9 @@ pub struct Home {
     attachments: Vec<PathBuf>,
     agent: Option<AgentKind>,
     project: Option<ProjectRef>,
+    /// More projects the chat will work across; `project` stays the primary one (where the
+    /// agent runs).
+    extra: Vec<ProjectRef>,
     /// A general chat, not tied to any project folder.
     general: bool,
     /// Model for the next chat (None = the agent's own default).
@@ -164,6 +169,7 @@ impl Home {
             attachments: vec![],
             agent: None,
             project: None,
+            extra: vec![],
             general: false,
             model: None,
             effort: None,
@@ -223,7 +229,11 @@ impl Home {
     }
 
     pub fn project_name(&self) -> String {
-        if self.general { "General".into() } else { self.project.as_ref().map(|p| p.name.clone()).unwrap_or_default() }
+        if self.general {
+            return "General".into();
+        }
+        let name = self.project.as_ref().map(|p| p.name.clone()).unwrap_or_default();
+        if self.extra.is_empty() || name.is_empty() { name } else { format!("{name} +{}", self.extra.len()) }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -231,9 +241,45 @@ impl Home {
     }
 
     pub fn set_project(&mut self, p: ProjectRef, cx: &mut Context<Self>) {
+        self.extra.retain(|x| x.path != p.path);
         self.project = Some(p);
         self.general = false;
         cx.notify();
+    }
+
+    /// Add a project next to the primary one (or make it the primary when there's none).
+    pub fn add_project(&mut self, p: ProjectRef, cx: &mut Context<Self>) {
+        match &self.project {
+            Some(primary) if !self.general => {
+                if primary.path != p.path && !self.extra.iter().any(|x| x.path == p.path) {
+                    self.extra.push(p);
+                }
+            }
+            _ => {
+                self.project = Some(p);
+                self.general = false;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Make one of the other projects the primary one; the old primary joins the others.
+    fn make_primary(&mut self, i: usize, cx: &mut Context<Self>) {
+        if i >= self.extra.len() {
+            return;
+        }
+        let p = self.extra.remove(i);
+        if let Some(old) = self.project.replace(p) {
+            self.extra.insert(i, old);
+        }
+        cx.notify();
+    }
+
+    fn remove_extra(&mut self, i: usize, cx: &mut Context<Self>) {
+        if i < self.extra.len() {
+            self.extra.remove(i);
+            cx.notify();
+        }
     }
 
     /// Switch the launcher to a general chat (no project folder).
@@ -438,6 +484,7 @@ impl Home {
             context: self.context.clone(),
             prompt,
             workspace: self.store.read(cx).active_workspace_id(),
+            extra_projects: if self.general { vec![] } else { self.extra.iter().map(|p| p.path.clone()).collect() },
         };
         let id = self.store.update(cx, |s, cx| s.dispatch(cmd, window, cx));
         if let Some(id) = id {
@@ -560,11 +607,14 @@ impl Render for Home {
         } else {
             format!("{} — {}", default_mode.label(), default_mode.description())
         };
+        let extra = if general { vec![] } else { self.extra.clone() };
         let project_label = match &self.project {
             _ if general => "General".to_string(),
+            Some(p) if !extra.is_empty() => format!("{} · primary", p.name),
             Some(p) => p.name.clone(),
             None => "Choose project".into(),
         };
+        let can_add = !general && self.project.is_some();
         let send_enabled = self.agent.is_some() && (self.has_draft(cx));
 
         let matches = self.slash_matches(cx);
@@ -689,6 +739,7 @@ impl Render for Home {
         let typed = self.headline.complete();
         let subtitle = match (&self.project, general, self.agent) {
             (_, true, Some(a)) => format!("{} · a general chat", a.display_name()),
+            (Some(p), false, Some(a)) if !extra.is_empty() => format!("{} in {} and {} more", a.display_name(), p.name, extra.len()),
             (Some(p), false, Some(a)) => format!("{} in {}", a.display_name(), p.name),
             (_, _, Some(a)) => a.display_name().to_string(),
             _ => String::new(),
@@ -766,18 +817,59 @@ impl Render for Home {
                     .child(composer)
                     .child(
                         // Where the chat runs sits under the box, not among the per-message controls.
-                        h_flex().px(sz(6.)).child(
-                            Button::new("project-pick")
-                                .ghost()
-                                .small()
-                                .max_w(sz(260.))
-                                .text_color(pal.text_muted)
-                                .icon(icon(if general { "globe" } else { "folder" }))
-                                .label(project_label)
-                                .dropdown_caret(true)
-                                .tooltip("Choose project  (Ctrl+P)")
-                                .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::PickProject))),
-                        ),
+                        h_flex()
+                            .px(sz(6.))
+                            .gap(sz(2.))
+                            .flex_wrap()
+                            .items_center()
+                            .child(
+                                Button::new("project-pick")
+                                    .ghost()
+                                    .small()
+                                    .max_w(sz(260.))
+                                    .text_color(pal.text_muted)
+                                    .icon(icon(if general { "globe" } else { "folder" }))
+                                    .label(project_label)
+                                    .dropdown_caret(true)
+                                    .tooltip(if extra.is_empty() { "Choose project  (Ctrl+P)" } else { "The primary project: the agent runs here  (Ctrl+P to change)" })
+                                    .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::PickProject))),
+                            )
+                            .children(extra.iter().enumerate().map(|(i, p)| {
+                                let weak = weak.clone();
+                                Button::new(ElementId::Name(format!("project-extra-{i}").into()))
+                                    .ghost()
+                                    .small()
+                                    .max_w(sz(200.))
+                                    .text_color(pal.text_muted)
+                                    .icon(icon("folder-plus"))
+                                    .label(p.name.clone())
+                                    .tooltip(tildify(&p.path))
+                                    .dropdown_menu(move |menu, _, _| {
+                                        let (w1, w2) = (weak.clone(), weak.clone());
+                                        menu.item(PopupMenuItem::new("Make primary").icon(icon("star")).on_click(move |_, _, cx| {
+                                            if let Some(h) = w1.upgrade() {
+                                                h.update(cx, |h, cx| h.make_primary(i, cx));
+                                            }
+                                        }))
+                                        .item(PopupMenuItem::new("Remove from chat").icon(icon("x")).on_click(move |_, _, cx| {
+                                            if let Some(h) = w2.upgrade() {
+                                                h.update(cx, |h, cx| h.remove_extra(i, cx));
+                                            }
+                                        }))
+                                    })
+                            }))
+                            .when(can_add, |d| {
+                                d.child(
+                                    Button::new("project-add")
+                                        .ghost()
+                                        .small()
+                                        .text_color(pal.text_faint)
+                                        .icon(icon("plus"))
+                                        .when(extra.is_empty(), |b| b.label("Add project"))
+                                        .tooltip("Work across another project too; the agent can read and edit it")
+                                        .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::AddProject))),
+                                )
+                            }),
                     ),
             )
     }

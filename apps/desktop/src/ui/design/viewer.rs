@@ -195,6 +195,8 @@ impl DesignViewer {
         let view = cx.new(|cx| ChatView::new(id, store, window, cx));
         self._subs.push(cx.subscribe(&view, |_, _, ev: &ChatEvent, cx| match ev {
             ChatEvent::Open(id) => cx.emit(ViewerEvent::OpenChat(*id)),
+            // Design chats work in their design's folder only.
+            ChatEvent::AddProject(_) => {}
         }));
         self.chat = Some((id, view));
     }

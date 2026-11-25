@@ -40,6 +40,8 @@ pub struct SessionSpec {
     pub resume_at: Option<String>,
     /// Extra instructions (used by Design mode).
     pub system_prompt: Option<String>,
+    /// More project folders the agent may work in besides `cwd`.
+    pub extra_dirs: Vec<PathBuf>,
     pub title: String,
 }
 

@@ -77,6 +77,10 @@ struct History {
 enum PickerFor {
     Chat,
     Design,
+    /// Another project for the new-chat box on screen.
+    AddToDraft,
+    /// Another project for a running chat.
+    AddToChat(SessionId),
 }
 
 pub struct Workspace {
@@ -241,6 +245,7 @@ impl Workspace {
                     this.open_session(*id, window, cx);
                 }
                 HomeEvent::PickProject if active => this.open_picker(PickerFor::Chat, window, cx),
+                HomeEvent::AddProject if active => this.open_picker(PickerFor::AddToDraft, window, cx),
                 HomeEvent::Changed => this.refresh_drafts(cx),
                 _ => {}
             }
@@ -549,6 +554,7 @@ impl Workspace {
             let view = cx.new(|cx| ChatView::new(id, store, window, cx));
             self._subs.push(cx.subscribe_in(&view, window, |this, _, ev: &ChatEvent, window, cx| match ev {
                 ChatEvent::Open(id) => this.open_session(*id, window, cx),
+                ChatEvent::AddProject(id) => this.open_picker(PickerFor::AddToChat(*id), window, cx),
             }));
             self.chats.insert(id, view);
         }
@@ -590,6 +596,7 @@ impl Workspace {
                     context: None,
                     prompt: Some(text.to_string()),
                     workspace: None,
+                    extra_projects: vec![],
                 };
                 if let Some(id) = this.store.update(cx, |s, cx| s.dispatch(cmd, window, cx)) {
                     this.open_session(id, window, cx);
@@ -719,7 +726,11 @@ impl Workspace {
 
     fn open_picker(&mut self, purpose: PickerFor, window: &mut Window, cx: &mut Context<Self>) {
         self.picker_for = purpose;
-        let picker = cx.new(|cx| ProjectPicker::new(self.store.clone(), window, cx));
+        let adding = matches!(purpose, PickerFor::AddToDraft | PickerFor::AddToChat(_));
+        let picker = cx.new(|cx| {
+            let p = ProjectPicker::new(self.store.clone(), window, cx);
+            if adding { p.adding(window, cx) } else { p }
+        });
         self._subs.push(cx.subscribe_in(&picker, window, |this, _, ev: &PickerEvent, window, cx| {
             match ev {
                 PickerEvent::Picked(p) => {
@@ -735,11 +746,27 @@ impl Workspace {
                         }
                         PickerFor::Chat => this.new_chat(Some(p), window, cx),
                         PickerFor::Design => this.new_design(Some(p), window, cx),
+                        PickerFor::AddToDraft => this.home.update(cx, |h, cx| {
+                            h.add_project(p, cx);
+                            h.focus(window, cx);
+                        }),
+                        PickerFor::AddToChat(id) => {
+                            let current = this.store.read(cx).session(id).map(|s| s.meta.extra_projects.clone());
+                            if let Some(mut projects) = current {
+                                projects.push(p.path);
+                                this.store.update(cx, |s, cx| {
+                                    s.dispatch(AppCommand::SetExtraProjects { id, projects }, window, cx);
+                                });
+                            }
+                        }
                     }
                 }
                 PickerEvent::General => {
                     this.picker = None;
-                    this.new_general_chat(window, cx);
+                    if matches!(this.picker_for, PickerFor::Chat | PickerFor::Design) {
+                        this.new_general_chat(window, cx);
+                    }
+                    cx.notify();
                 }
                 PickerEvent::Dismiss => {
                     this.picker = None;

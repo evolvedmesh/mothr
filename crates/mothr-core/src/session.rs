@@ -184,6 +184,10 @@ pub struct SessionMeta {
     /// The workspace the chat belongs to (the hub fills it in for chats from older versions).
     #[serde(default)]
     pub workspace: Option<crate::workspace::WorkspaceId>,
+    /// More projects the chat works across, besides its primary `project` (the agent's working
+    /// directory). The agent may read and edit files in them too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_projects: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -251,6 +255,7 @@ impl SessionMeta {
             general: false,
             queue: Vec::new(),
             workspace: None,
+            extra_projects: Vec::new(),
         }
     }
 
@@ -262,10 +267,56 @@ impl SessionMeta {
         if self.general {
             return "General".into();
         }
-        self.project
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.project.display().to_string())
+        folder_name(&self.project)
+    }
+
+    /// The primary project's name, and how many more the chat covers: "mothr +2".
+    pub fn projects_label(&self) -> String {
+        match self.extra_projects.len() {
+            0 => self.project_name(),
+            n => format!("{} +{n}", self.project_name()),
+        }
+    }
+
+    /// Every project the chat works in: the primary one first, then the others.
+    pub fn projects(&self) -> impl Iterator<Item = &PathBuf> {
+        std::iter::once(&self.project).chain(self.extra_projects.iter())
+    }
+
+    /// Whether `path` is one of the chat's projects.
+    pub fn has_project(&self, path: &std::path::Path) -> bool {
+        self.projects().any(|p| p == path)
+    }
+}
+
+/// A folder's own name ("mothr" for `~/dev/mothr`).
+pub fn folder_name(path: &std::path::Path) -> String {
+    path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string())
+}
+
+/// Clean up the extra projects of a chat: no duplicates, not the primary, only real folders.
+pub fn normalize_extra_projects(primary: &std::path::Path, extra: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = vec![];
+    for p in extra {
+        if p.as_os_str().is_empty() || p == primary || out.contains(&p) || !p.is_dir() {
+            continue;
+        }
+        out.push(p);
+    }
+    out
+}
+
+impl SessionMeta {
+    /// A note telling an agent which projects besides its working directory a chat covers.
+    pub fn extra_projects_note(extra: &[PathBuf]) -> Option<String> {
+        if extra.is_empty() {
+            return None;
+        }
+        let list: Vec<String> = extra.iter().map(|p| format!("- {}", p.display())).collect();
+        Some(format!(
+            "[Mothr] Besides the working directory, this chat also covers these projects; read and edit files in them as needed:\n{}",
+            list.join("\n")
+        ))
     }
 }
 
@@ -812,12 +863,38 @@ pub enum SessionCommand {
     RewindFiles { user_message_id: String },
     /// Stop one subagent of an orchestrator chat.
     StopSubagent { tool_use_id: String },
+    /// The projects the chat covers besides its working directory changed (sent by the hub to
+    /// drivers that can take them without a restart).
+    SetExtraProjects { projects: Vec<PathBuf> },
     Shutdown,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extra_projects_are_deduplicated_and_labelled() {
+        let base = std::env::temp_dir().join(format!("mothr-extra-{}", std::process::id()));
+        let (a, b) = (base.join("a"), base.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let extra = normalize_extra_projects(&a, vec![b.clone(), a.clone(), b.clone(), base.join("missing"), PathBuf::new()]);
+        assert_eq!(extra, vec![b.clone()], "no primary, no repeats, only real folders");
+        let mut m = SessionMeta::new(AgentKind::ClaudeCode, SessionKind::Chat, a.clone(), PermissionMode::Ask);
+        assert_eq!(m.projects_label(), "a");
+        m.extra_projects = extra;
+        assert_eq!(m.project_name(), "a");
+        assert_eq!(m.projects_label(), "a +1");
+        assert!(m.has_project(&b) && m.has_project(&a) && !m.has_project(&base));
+        let note = SessionMeta::extra_projects_note(&m.extra_projects).unwrap();
+        assert!(note.contains(&b.display().to_string()));
+        assert!(SessionMeta::extra_projects_note(&[]).is_none());
+        // Older transcripts have no list, and an empty one isn't written.
+        let json = serde_json::to_string(&SessionMeta::new(AgentKind::ClaudeCode, SessionKind::Chat, a, PermissionMode::Ask)).unwrap();
+        assert!(!json.contains("extra_projects"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     fn state() -> SessionState {
         SessionState::new(SessionMeta::new(AgentKind::ClaudeCode, SessionKind::Chat, "/tmp".into(), PermissionMode::Ask))

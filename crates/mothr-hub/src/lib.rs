@@ -232,6 +232,7 @@ impl Hub {
                     resume: None,
                     resume_at: None,
                     system_prompt: None,
+                    extra_dirs: vec![],
                     title: "model probe".into(),
                 };
                 let (tx, mut rx) = mpsc::unbounded_channel();
@@ -649,6 +650,7 @@ impl Hub {
         meta.title = title.unwrap_or_else(|| "Subagent".into());
         meta.parent = Some(parent);
         meta.workspace = pm.workspace;
+        meta.extra_projects = pm.extra_projects.clone();
         meta.model = pm.model.clone();
         meta.status = SessionStatus::Working;
         meta.subagent = Some(SubagentInfo {
@@ -821,6 +823,7 @@ impl Hub {
             resume: if resume { meta.agent_session_id.clone() } else { None },
             resume_at,
             system_prompt,
+            extra_dirs: if meta.kind == SessionKind::Chat { meta.extra_projects.clone() } else { vec![] },
             title: meta.title.clone(),
         };
         let _guard = self.rt.enter();
@@ -839,6 +842,7 @@ impl Hub {
         context: Option<String>,
         prompt: Option<String>,
         workspace: Option<WorkspaceId>,
+        extra_projects: Vec<PathBuf>,
     ) -> anyhow::Result<SessionId> {
         let general = project.as_os_str().is_empty() && kind == SessionKind::Chat;
         if general {
@@ -857,12 +861,16 @@ impl Hub {
         meta.effort = effort.filter(|e| !e.is_empty());
         meta.context_limit = context.filter(|c| !c.is_empty());
         meta.general = general;
+        if kind == SessionKind::Chat && !general {
+            meta.extra_projects = normalize_extra_projects(&project, extra_projects);
+        }
         meta.workspace = {
             let st = self.state.read();
             workspace.filter(|w| st.workspaces.iter().any(|x| x.id == *w)).or_else(|| st.default_workspace())
         };
         let tx = self.spawn_driver(&meta, false)?;
         let id = meta.id;
+        let extra = meta.extra_projects.clone();
         let state = SessionState::new(meta);
         {
             let mut st = self.state.write();
@@ -872,7 +880,9 @@ impl Hub {
         }
         self.broadcast(HubEvent::SessionCreated { state: Box::new(state) });
         if !general {
-            self.projects.touch_recent(&project);
+            for p in extra.iter().rev().chain(std::iter::once(&project)) {
+                self.projects.touch_recent(p);
+            }
             self.broadcast_projects();
         }
         if let Some(text) = prompt.filter(|p| !p.trim().is_empty()) {
@@ -902,6 +912,47 @@ impl Hub {
             let _ = tx; // Other agents have no context choice to apply.
             return Ok(());
         }
+        self.restart_resuming(id, tx)
+    }
+
+    /// Change the projects a chat covers besides its primary one. Claude Code takes folders
+    /// only when it starts, so a running Claude chat restarts, resuming the conversation;
+    /// other agents hear about them with their next message.
+    fn set_extra_projects(&self, id: SessionId, projects: Vec<PathBuf>) -> anyhow::Result<()> {
+        let meta = self.state.read().session(id).map(|s| s.meta.clone()).ok_or_else(|| anyhow::anyhow!("no such session"))?;
+        anyhow::ensure!(meta.parent.is_none(), "Subagents work in their orchestrator's projects");
+        anyhow::ensure!(meta.kind == SessionKind::Chat && !meta.general, "Only chats in a project can add more projects");
+        let projects = normalize_extra_projects(&meta.project, projects);
+        if projects == meta.extra_projects {
+            return Ok(());
+        }
+        let live = self.state.read().drivers.get(&id).cloned();
+        let restart = live.is_some() && meta.agent == AgentKind::ClaudeCode;
+        anyhow::ensure!(
+            !restart || !matches!(meta.status, SessionStatus::Working | SessionStatus::NeedsInput | SessionStatus::Starting),
+            "Wait for the current turn to finish before changing the chat's projects"
+        );
+        let children: Vec<SessionId> = self.state.read().sessions.iter().filter(|s| s.meta.parent == Some(id)).map(|s| s.meta.id).collect();
+        for c in std::iter::once(id).chain(children) {
+            self.update_meta(c, |m| m.extra_projects = projects.clone())?;
+        }
+        for p in &projects {
+            self.projects.touch_recent(p);
+        }
+        self.broadcast_projects();
+        match live {
+            Some(tx) if restart => self.restart_resuming(id, tx)?,
+            Some(tx) => {
+                let _ = tx.send(SessionCommand::SetExtraProjects { projects });
+            }
+            None => {}
+        }
+        Ok(())
+    }
+
+    /// Stop a chat's agent process and start it again on the same conversation, so settings
+    /// fixed at start-up (context window, folders) take effect.
+    fn restart_resuming(&self, id: SessionId, tx: CommandTx) -> anyhow::Result<()> {
         let hub = self.me.upgrade().ok_or_else(|| anyhow::anyhow!("hub is shutting down"))?;
         self.rt.spawn(async move {
             let _ = tx.send(SessionCommand::Shutdown);
@@ -1037,8 +1088,8 @@ impl HubApi for Hub {
 
     fn dispatch(&self, command: AppCommand) -> anyhow::Result<Option<SessionId>> {
         match command {
-            AppCommand::NewSession { agent, kind, project, mode, model, effort, context, prompt, workspace } => {
-                return self.create_session(agent, kind, project, mode, model, effort, context, prompt, workspace).map(Some);
+            AppCommand::NewSession { agent, kind, project, mode, model, effort, context, prompt, workspace, extra_projects } => {
+                return self.create_session(agent, kind, project, mode, model, effort, context, prompt, workspace, extra_projects).map(Some);
             }
             AppCommand::Session { id, command } => {
                 let sub = self.state.read().session(id).and_then(|s| Some((s.meta.parent?, s.meta.subagent.as_ref()?.tool_use_id.clone())));
@@ -1088,6 +1139,7 @@ impl HubApi for Hub {
                 m.title = title;
                 m.titled = true;
             })?,
+            AppCommand::SetExtraProjects { id, projects } => self.set_extra_projects(id, projects)?,
             AppCommand::PinSession { id, pinned } => self.update_meta(id, |m| m.pinned = pinned)?,
             AppCommand::Archive { id, archived } => {
                 if archived
@@ -1174,7 +1226,7 @@ impl Hub {
     /// remote API can't be pointed at the rest of the disk.
     fn browsable<'a>(&self, project: &'a std::path::Path) -> anyhow::Result<&'a std::path::Path> {
         let known = self.projects.get(project).is_some()
-            || self.state.read().sessions.iter().any(|s| s.meta.project == project);
+            || self.state.read().sessions.iter().any(|s| s.meta.has_project(project));
         if !known || !project.is_absolute() {
             anyhow::bail!("{} isn't a known project", project.display());
         }

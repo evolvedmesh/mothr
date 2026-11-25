@@ -69,6 +69,9 @@ pub enum AppCommand {
         /// Where the chat goes; None = the workspace open on the desktop.
         #[serde(default)]
         workspace: Option<WorkspaceId>,
+        /// More projects the chat works across besides `project`, its primary one.
+        #[serde(default)]
+        extra_projects: Vec<PathBuf>,
     },
     Session {
         id: SessionId,
@@ -81,6 +84,9 @@ pub enum AppCommand {
     /// Re-spawn an ended session, resuming the agent's conversation if possible.
     Resume { id: SessionId },
     Rename { id: SessionId, title: String },
+    /// Replace the projects a chat works across besides its primary one. A running chat picks
+    /// them up from its next message (Claude Code restarts, resuming the conversation).
+    SetExtraProjects { id: SessionId, projects: Vec<PathBuf> },
     PinSession { id: SessionId, pinned: bool },
     Archive { id: SessionId, archived: bool },
     SetGroup { id: SessionId, group: Option<String> },

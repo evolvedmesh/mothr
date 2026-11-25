@@ -386,7 +386,7 @@ impl Sidebar {
             .filter(|m| {
                 q.is_empty()
                     || m.title.to_lowercase().contains(&q)
-                    || m.project_name().to_lowercase().contains(&q)
+                    || m.projects().any(|p| folder_name(p).to_lowercase().contains(&q))
                     || m.agent.display_name().to_lowercase().contains(&q)
             })
             .collect();
@@ -485,7 +485,7 @@ impl Sidebar {
         } else if working {
             "Working…".into()
         } else {
-            format!("{} · {}", m.project_name(), relative_time(m.updated_at)).into()
+            format!("{} · {}", m.projects_label(), relative_time(m.updated_at)).into()
         };
         h_flex()
             .id(ElementId::Name(format!("row-{id}").into()))

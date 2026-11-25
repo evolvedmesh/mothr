@@ -33,6 +33,8 @@ const EARLIER_STEP: usize = 200;
 
 pub enum ChatEvent {
     Open(SessionId),
+    /// Pick another project for this chat to work across.
+    AddProject(SessionId),
 }
 
 impl EventEmitter<ChatEvent> for ChatView {}
@@ -427,6 +429,47 @@ impl ChatView {
 
     // ------------------------------------------------------------------ header
 
+    /// "+2 projects" next to the chat's folder: lists them, removes one, adds another.
+    fn render_projects_chip(&self, primary: &std::path::Path, extra: &[PathBuf], cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pal = tokens::p(cx);
+        let id = self.id;
+        let store = self.store.clone();
+        let weak = cx.entity().downgrade();
+        let primary = primary.to_path_buf();
+        let extra = extra.to_vec();
+        let label = match extra.len() {
+            0 => "+ project".to_string(),
+            1 => "+1 project".to_string(),
+            n => format!("+{n} projects"),
+        };
+        Button::new("chat-projects")
+            .ghost()
+            .xsmall()
+            .text_color(if extra.is_empty() { pal.text_faint } else { pal.text_muted })
+            .label(label)
+            .tooltip("Projects this chat works across")
+            .dropdown_menu(move |mut menu, _, _| {
+                menu = menu.label("Projects").item(PopupMenuItem::new(format!("{} · primary", folder_name(&primary))).icon(icon("folder")).disabled(true));
+                for (i, p) in extra.iter().enumerate() {
+                    let store = store.clone();
+                    let mut rest = extra.clone();
+                    rest.remove(i);
+                    menu = menu.item(PopupMenuItem::new(format!("Remove {}", folder_name(p))).icon(icon("x")).on_click(move |_, window, cx| {
+                        let projects = rest.clone();
+                        store.update(cx, |s, cx| {
+                            s.dispatch(AppCommand::SetExtraProjects { id, projects }, window, cx);
+                        });
+                    }));
+                }
+                let weak = weak.clone();
+                menu.separator().item(PopupMenuItem::new("Add project…").icon(icon("folder-plus")).on_click(move |_, _, cx| {
+                    if let Some(v) = weak.upgrade() {
+                        v.update(cx, |_, cx| cx.emit(ChatEvent::AddProject(id)));
+                    }
+                }))
+            })
+    }
+
     fn render_header(&mut self, s: &SessionState, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
         let m = &s.meta;
@@ -441,6 +484,9 @@ impl ChatView {
         let ctx = m.context;
         let store = self.store.clone();
         let project = m.project.clone();
+        let extra = m.extra_projects.clone();
+        // Chats in a project can take more projects; subagents follow their orchestrator.
+        let multi = m.kind == SessionKind::Chat && !m.general && m.parent.is_none();
         let pinned = m.pinned;
         let changes = Some(self.refresh_change_summary(cx)).filter(|c| c.total > 0 && m.kind == SessionKind::Chat);
         let changes_open = self.changes_open;
@@ -479,11 +525,19 @@ impl ChatView {
                             ),
                     )
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .truncate()
-                            .child(format!("{} · {}", m.agent.display_name(), tildify(&m.project))),
+                        h_flex()
+                            .min_w_0()
+                            .gap(sz(4.))
+                            .items_center()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .truncate()
+                                    .child(format!("{} · {}", m.agent.display_name(), tildify(&m.project))),
+                            )
+                            .when(multi, |d| d.child(self.render_projects_chip(&project, &extra, cx))),
                     ),
             )
             .when_some(changes, |el, c| {

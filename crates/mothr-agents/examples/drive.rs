@@ -15,7 +15,7 @@ async fn main() {
     // DRIVE_ATTACH=<image path> attaches an image to the prompt.
     let spec = SessionSpec {
         id: meta.id, agent: kind, kind: SessionKind::Chat, cwd: args[2].clone().into(), mode: PermissionMode::Ask,
-        model: args.get(4).cloned(), effort: std::env::var("DRIVE_EFFORT").ok(), context: std::env::var("DRIVE_CONTEXT").ok(), resume: None, resume_at: None, system_prompt: None, title: "smoke".into(),
+        model: args.get(4).cloned(), effort: std::env::var("DRIVE_EFFORT").ok(), context: std::env::var("DRIVE_CONTEXT").ok(), resume: None, resume_at: None, system_prompt: None, extra_dirs: vec![], title: "smoke".into(),
     };
     let mut state = SessionState::new(meta);
     let cmd = spawn(&transport, spec, out_tx).unwrap();

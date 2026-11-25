@@ -51,6 +51,11 @@ with the app.
   - **Send now:** stops the current turn and sends immediately.
 - **Slash commands.** Type `/` to list the agent's own commands, with descriptions and argument
   hints: Claude Code's commands and skills, and ACP agents' `available_commands`.
+- **Chats across several projects.** A chat runs in one primary project and can work in more:
+  add them under the new-chat box (any of them can be made primary there) or later from the
+  `+N projects` button in the chat's header. Claude Code gets them as `--add-dir` folders (a
+  running chat restarts on the same conversation to pick up a change); other agents are told
+  about them with the next message.
 - **General chats.** These aren't tied to any project. They're for questions and quick tasks
   anywhere on the system, such as editing a config file. They run from your home directory.
   Start one with the globe button, the "General" chip, the first row of the project finder, or

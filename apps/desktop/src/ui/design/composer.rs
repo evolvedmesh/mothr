@@ -127,6 +127,7 @@ impl DesignComposer {
             context,
             prompt: (!text.is_empty()).then_some(text),
             workspace: None,
+            extra_projects: vec![],
         };
         if let Some(session) = self.store.update(cx, |s, cx| s.dispatch(cmd, window, cx)) {
             self.input.update(cx, |i, cx| i.set_value("", window, cx));
