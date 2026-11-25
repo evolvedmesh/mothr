@@ -172,7 +172,7 @@ impl Render for DesignComposer {
                                 .max_w(sz(180.))
                                 .icon(icon(if self.project.is_some() { "folder" } else { "folder-plus" }))
                                 .label(project_label)
-                                .tooltip("Keep this design in a project")
+                                .tooltip("Keep this design in a repo")
                                 .on_click(cx.listener(|_, _, _, cx| cx.emit(ComposerEvent::PickProject))),
                         )
                     })

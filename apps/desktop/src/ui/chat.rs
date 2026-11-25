@@ -438,18 +438,18 @@ impl ChatView {
         let primary = primary.to_path_buf();
         let extra = extra.to_vec();
         let label = match extra.len() {
-            0 => "+ project".to_string(),
-            1 => "+1 project".to_string(),
-            n => format!("+{n} projects"),
+            0 => "+ repo".to_string(),
+            1 => "+1 repo".to_string(),
+            n => format!("+{n} repos"),
         };
         Button::new("chat-projects")
             .ghost()
             .xsmall()
             .text_color(if extra.is_empty() { pal.text_faint } else { pal.text_muted })
             .label(label)
-            .tooltip("Projects this chat works across")
+            .tooltip("Repos this chat works across")
             .dropdown_menu(move |mut menu, _, _| {
-                menu = menu.label("Projects").item(PopupMenuItem::new(format!("{} · primary", folder_name(&primary))).icon(icon("folder")).disabled(true));
+                menu = menu.label("Repos").item(PopupMenuItem::new(format!("{} · primary", folder_name(&primary))).icon(icon("folder")).disabled(true));
                 for (i, p) in extra.iter().enumerate() {
                     let store = store.clone();
                     let mut rest = extra.clone();
@@ -462,7 +462,7 @@ impl ChatView {
                     }));
                 }
                 let weak = weak.clone();
-                menu.separator().item(PopupMenuItem::new("Add project…").icon(icon("folder-plus")).on_click(move |_, _, cx| {
+                menu.separator().item(PopupMenuItem::new("Add repo…").icon(icon("folder-plus")).on_click(move |_, _, cx| {
                     if let Some(v) = weak.upgrade() {
                         v.update(cx, |_, cx| cx.emit(ChatEvent::AddProject(id)));
                     }
@@ -667,7 +667,7 @@ impl ChatView {
                                 s.dispatch(AppCommand::PinSession { id, pinned: !pinned }, w, cx);
                             });
                         }))
-                        .item(PopupMenuItem::new("Open project folder").icon(icon("folder-open")).on_click(move |_, _, cx| {
+                        .item(PopupMenuItem::new("Open repo folder").icon(icon("folder-open")).on_click(move |_, _, cx| {
                             cx.open_url(&format!("file://{}", project.display()));
                         }))
                         .separator()

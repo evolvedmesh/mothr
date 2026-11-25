@@ -212,7 +212,7 @@ impl SettingsView {
     }
 
     fn add_root(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: true, prompt: Some("Add project folder".into()) });
+        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: true, prompt: Some("Add a folder to scan for repos".into()) });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
                 let _ = this.update(cx, |this, cx| {
@@ -744,9 +744,9 @@ impl Render for SettingsView {
                     cx,
                 ))
                 .child(group(
-                    "Projects",
+                    "Repos",
                     match project_count {
-                        Some(n) => format!("{n} projects found. Mothr scans these folders for repositories and seeds from agent history."),
+                        Some(n) => format!("{n} repos found. Mothr scans these folders, and the folders your agents have worked in."),
                         None => "Scanning…".into(),
                     },
                     v_flex().gap_2().child(roots).child(

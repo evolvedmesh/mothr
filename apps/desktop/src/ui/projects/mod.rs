@@ -60,7 +60,7 @@ pub struct ProjectsPage {
 
 impl ProjectsPage {
     pub fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Find a project by name or path…"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Find a repo by name or path…"));
         let subs = vec![
             cx.subscribe_in(&search, window, |this, input, ev: &InputEvent, window, cx| match ev {
                 InputEvent::Change => {
@@ -194,7 +194,7 @@ impl ProjectsPage {
     }
 
     fn add_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Add project".into()) });
+        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Add repo".into()) });
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await
                 && let Some(path) = paths.into_iter().next()
@@ -322,17 +322,17 @@ impl ProjectsPage {
         let n = self.hits.len();
         let searching = !self.query.trim().is_empty();
         let summary = match (count, searching) {
-            (None, _) => "Indexing projects…".to_string(),
+            (None, _) => "Indexing repos…".to_string(),
             (Some(_), true) => format!("{n} match{}", if n == 1 { "" } else { "es" }),
-            (Some(c), false) => format!("{c} project{} indexed", if c == 1 { "" } else { "s" }),
+            (Some(c), false) => format!("{c} repo{} indexed", if c == 1 { "" } else { "s" }),
         };
         let list: AnyElement = if n == 0 {
             div()
                 .pt(sz(48.))
                 .child(if searching {
-                    empty_state("search-x", "No projects match", "Try fewer letters, or part of the path.", cx)
+                    empty_state("search-x", "No repos match", "Try fewer letters, or part of the path.", cx)
                 } else {
-                    empty_state("folder-search", "No projects yet", "Mothr looks in the folders set in Settings → Projects. Add one with Add folder.", cx)
+                    empty_state("folder-search", "No repos yet", "Mothr looks in the folders set in Settings → Repos. Add one with Add folder.", cx)
                 })
                 .into_any_element()
         } else {
@@ -371,7 +371,7 @@ impl ProjectsPage {
                                         v_flex()
                                             .flex_1()
                                             .gap(sz(2.))
-                                            .child(div().text_size(sz(tokens::text::XXL)).font_weight(FontWeight::SEMIBOLD).child("Projects"))
+                                            .child(div().text_size(sz(tokens::text::XXL)).font_weight(FontWeight::SEMIBOLD).child("Repos"))
                                             .child(div().text_size(sz(tokens::text::SM)).text_color(pal.text_faint).child(summary)),
                                     )
                                     .child(
@@ -379,7 +379,7 @@ impl ProjectsPage {
                                             .ghost()
                                             .small()
                                             .icon(icon("refresh-cw"))
-                                            .tooltip("Look for projects again")
+                                            .tooltip("Look for repos again")
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.store.update(cx, |s, cx| {
                                                     s.dispatch(AppCommand::RescanProjects, window, cx);

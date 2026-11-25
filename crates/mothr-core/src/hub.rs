@@ -164,16 +164,16 @@ pub trait HubApi: Send + Sync + 'static {
     /// List a folder of a known project (`dir` is relative, `""` for the root).
     fn list_dir(&self, project: &std::path::Path, dir: &str) -> anyhow::Result<crate::DirListing> {
         let _ = (project, dir);
-        anyhow::bail!("browsing projects isn't available here")
+        anyhow::bail!("browsing repos isn't available here")
     }
     /// Read a file of a known project (`file` is relative).
     fn read_file(&self, project: &std::path::Path, file: &str) -> anyhow::Result<crate::FileContent> {
         let _ = (project, file);
-        anyhow::bail!("browsing projects isn't available here")
+        anyhow::bail!("browsing repos isn't available here")
     }
     /// Fuzzy-find files of a known project by path.
     fn find_files(&self, project: &std::path::Path, query: &str, limit: usize) -> anyhow::Result<Vec<crate::FileHit>> {
         let _ = (project, query, limit);
-        anyhow::bail!("browsing projects isn't available here")
+        anyhow::bail!("browsing repos isn't available here")
     }
 }

@@ -341,7 +341,7 @@ impl ProjectBrowser {
         let full = match resolve_inside(&self.root(), &path) {
             Some(p) => p,
             None => {
-                self.toast(format!("“{path}” isn't in this project"), cx);
+                self.toast(format!("“{path}” isn't in this repo"), cx);
                 return;
             }
         };
@@ -411,7 +411,7 @@ impl ProjectBrowser {
                 }
             }
             Target::Project { path, anchor } => self.go_to(path, anchor, window, cx),
-            Target::Outside => self.toast("That link points outside the project".into(), cx),
+            Target::Outside => self.toast("That link points outside the repo".into(), cx),
         }
     }
 
@@ -493,7 +493,7 @@ impl ProjectBrowser {
                 Button::new("proj-back")
                     .ghost()
                     .icon(icon("arrow-left"))
-                    .tooltip("All projects  (Esc)")
+                    .tooltip("All repos  (Esc)")
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(BrowserEvent::Back))),
             )
             .child(
@@ -534,7 +534,7 @@ impl ProjectBrowser {
                 Button::new("proj-pin")
                     .ghost()
                     .icon(icon(if pinned { "pin-off" } else { "pin" }))
-                    .tooltip(if pinned { "Unpin project" } else { "Pin project" })
+                    .tooltip(if pinned { "Unpin repo" } else { "Pin repo" })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let path = pin_path.clone();
                         this.project.pinned = !pinned;

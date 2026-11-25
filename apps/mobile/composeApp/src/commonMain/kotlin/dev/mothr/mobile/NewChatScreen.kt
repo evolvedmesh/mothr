@@ -68,7 +68,7 @@ private data class Starter(val label: String, val text: String)
 
 private val chatStarters = listOf(
     Starter("Fix a bug", "Find and fix the bug where "),
-    Starter("Explain this project", "Explain how this project is structured."),
+    Starter("Explain this repo", "Explain how this repo is structured."),
     Starter("Write tests", "Write tests for "),
     Starter("Review my changes", "Review my uncommitted changes."),
 )

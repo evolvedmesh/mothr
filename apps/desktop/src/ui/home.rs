@@ -612,7 +612,7 @@ impl Render for Home {
             _ if general => "General".to_string(),
             Some(p) if !extra.is_empty() => format!("{} · primary", p.name),
             Some(p) => p.name.clone(),
-            None => "Choose project".into(),
+            None => "Choose repo".into(),
         };
         let can_add = !general && self.project.is_some();
         let send_enabled = self.agent.is_some() && (self.has_draft(cx));
@@ -831,7 +831,7 @@ impl Render for Home {
                                     .icon(icon(if general { "globe" } else { "folder" }))
                                     .label(project_label)
                                     .dropdown_caret(true)
-                                    .tooltip(if extra.is_empty() { "Choose project  (Ctrl+P)" } else { "The primary project: the agent runs here  (Ctrl+P to change)" })
+                                    .tooltip(if extra.is_empty() { "Choose repo  (Ctrl+P)" } else { "The primary repo: the agent runs here  (Ctrl+P to change)" })
                                     .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::PickProject))),
                             )
                             .children(extra.iter().enumerate().map(|(i, p)| {
@@ -865,8 +865,8 @@ impl Render for Home {
                                         .small()
                                         .text_color(pal.text_faint)
                                         .icon(icon("plus"))
-                                        .when(extra.is_empty(), |b| b.label("Add project"))
-                                        .tooltip("Work across another project too; the agent can read and edit it")
+                                        .when(extra.is_empty(), |b| b.label("Add repo"))
+                                        .tooltip("Work across another repo too; the agent can read and edit it")
                                         .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::AddProject))),
                                 )
                             }),

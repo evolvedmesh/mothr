@@ -35,12 +35,12 @@ pub fn resolve(root: &Path, rel: &str) -> anyhow::Result<PathBuf> {
         let mut comps = Path::new(part).components();
         match (comps.next(), comps.next()) {
             (Some(Component::Normal(c)), None) => path.push(c),
-            _ => bail!("“{rel}” isn't a path inside the project"),
+            _ => bail!("“{rel}” isn't a path inside the repo"),
         }
     }
     let real = path.canonicalize().with_context(|| format!("“{rel}” doesn't exist"))?;
     if !real.starts_with(&root) {
-        bail!("“{rel}” points outside the project");
+        bail!("“{rel}” points outside the repo");
     }
     Ok(real)
 }

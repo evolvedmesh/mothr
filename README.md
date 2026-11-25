@@ -51,19 +51,19 @@ with the app.
   - **Send now:** stops the current turn and sends immediately.
 - **Slash commands.** Type `/` to list the agent's own commands, with descriptions and argument
   hints: Claude Code's commands and skills, and ACP agents' `available_commands`.
-- **Chats across several projects.** A chat runs in one primary project and can work in more:
+- **Chats across several repos.** A chat runs in one primary repo and can work in more:
   add them under the new-chat box (any of them can be made primary there) or later from the
-  `+N projects` button in the chat's header. Claude Code gets them as `--add-dir` folders (a
+  `+N repos` button in the chat's header. Claude Code gets them as `--add-dir` folders (a
   running chat restarts on the same conversation to pick up a change); other agents are told
   about them with the next message.
-- **General chats.** These aren't tied to any project. They're for questions and quick tasks
+- **General chats.** These aren't tied to any repo. They're for questions and quick tasks
   anywhere on the system, such as editing a config file. They run from your home directory.
-  Start one with the globe button, the "General" chip, the first row of the project finder, or
+  Start one with the globe button, the "General" chip, the first row of the repo finder, or
   `Ctrl+Shift+G`.
 - **Make it yours.** Pick an accent (eight presets or any hex color) and a surface tone
   (Graphite, Slate, Warm, or pure Black), and put the sidebar on either side. The phone app has
   its own theme, accent and tone.
-- **No title bar.** The sidebar is the window's frame: its header finds projects and goes
+- **No title bar.** The sidebar is the window's frame: its header finds repos and goes
   back/forward, a live row counts chats working or waiting on you, and its footer holds your
   limits, Mothr Remote, light/dark and Settings. Collapsed (Ctrl+B) it's a rail of the same
   controls.
@@ -80,10 +80,10 @@ with the app.
     give an icon, reorder and delete them there (a deleted workspace's chats move to the first)
   - right-click a chat to move it to another workspace; new chats start in the open one
 - **Smart grouping.** Chats are grouped as Pinned → Needs you → Working → your own groups → by
-  recency. You can also group by project, agent or date. Unread dots, and toasts when a
+  recency. You can also group by repo, agent or date. Unread dots, and toasts when a
   background chat needs you.
-- **Fast fuzzy project finder** (`Ctrl+P`). Uses `nucleo` over a parallel scan of your project
-  roots plus Claude/Codex history, with highlighted matches, git branch and stack tags. Projects
+- **Fast fuzzy repo finder** (`Ctrl+P`). Uses `nucleo` over a parallel scan of your repo
+  roots plus Claude/Codex history, with highlighted matches, git branch and stack tags. Repos
   can be pinned and recents are tracked.
 - **Limits and usage**:
   - Claude 5-hour, weekly and per-model weekly windows (OAuth usage API, plus live
@@ -129,19 +129,19 @@ with the app.
       static site you can host anywhere.
 
     Both use the same renderer, ported from the canvas, so exports match what you see in the app.
-- **Projects.** A page in the sidebar (Ctrl+Shift+P) listing every indexed project, pinned and
+- **Repos.** A page in the sidebar (Ctrl+Shift+P) listing every indexed repo, pinned and
   recent first, with fuzzy search over names and paths. Open one to read it without leaving
   Mothr:
   - folders with their README rendered underneath; `.gitignore`d files and `.git` stay hidden
   - Markdown rendered for reading, with Preview / Source, links that open other files of the
-    project, and relative images
+    repo, and relative images
   - code with highlighting and line numbers, images shown as pictures
-  - **Full screen** (F11): the app sidebar steps aside for a tree of the whole project, a fuzzy
+  - **Full screen** (F11): the app sidebar steps aside for a tree of the whole repo, a fuzzy
     **Go to file** (Ctrl+P), and an "On this page" outline for Markdown
-  - pin the project or start a chat in it from its header
+  - pin the repo or start a chat in it from its header
 
   The phone app has the same page: the folder button on the chat list. Only folders Mothr knows
-  as projects can be browsed remotely, and paths can't leave the project.
+  as repos can be browsed remotely, and paths can't leave the repo.
 
 ## Repository layout
 
@@ -177,7 +177,7 @@ mothr-design/      Mothr's own design system, written in its Design format
 - **Data locations.** Transcripts go to `~/.local/share/mothr/sessions/*.json` (or the
   platform equivalent) and settings to `~/.config/mothr/settings.toml`. Set `MOTHR_HOME`
   to relocate both. Mothr was called Shepherd before; on first launch it moves the old
-  `shepherd` config and data folders over, and Design mode still reads a project's old
+  `shepherd` config and data folders over, and Design mode still reads a repo's old
   `shepherd-design/` folder.
 
 ## Running
@@ -201,7 +201,7 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 | `Ctrl+N`                | New chat                |
 | `Ctrl+Shift+N`          | New design              |
 | `Ctrl+Shift+G`          | New general chat        |
-| `Ctrl+P` / `Ctrl+K`     | Find project            |
+| `Ctrl+P` / `Ctrl+K`     | Find repo               |
 | `Ctrl+B`                | Toggle sidebar          |
 | `Ctrl+L`                | Focus composer          |
 | `Ctrl+,`                | Settings                |
@@ -212,7 +212,7 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 - `MOTHR_HOME=<dir>`: isolated config and data.
 - `MOTHR_OPEN=settings|remote|picker|usage|latest|changes|designs|design|subagent|projects|workspaces`: open
   a view at startup (`MOTHR_OPEN_DELAY_MS` delays it). `changes` opens the newest chat's Changes
-  panel; `design` opens the newest design. `project:<path>[:<file>[:full]]` opens a project, a
+  panel; `design` opens the newest design. `project:<path>[:<file>[:full]]` opens a repo, a
   file in it, and full screen. `image:<path>` opens the image viewer.
 - `MOTHR_DESIGN_PAGE=overview|color|type|space|elevation|component:<n>|screen:<n>`: the page a
   design opens on. `MOTHR_DESIGN_EXPORT=menu|html|storybook` opens the export menu or exports.
@@ -224,7 +224,7 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
   the current directory.
 - `MOTHR_EXPORT_DIR=<dir>`: Design exports skip the save dialogs and write into this folder.
 - `cargo run -p mothr-app --example export_design -- <project> <out.html> [storybook-dir] [--build]`:
-  export a project's design without opening the app.
+  export a repo's design without opening the app.
 - `cargo run -p mothr-agents --example drive -- <agent_id> <cwd> "<prompt>" [model]`: headless
   driver smoke test.
 - `cargo run -p mothr-remote --example demo`: the remote web client against a fake hub.

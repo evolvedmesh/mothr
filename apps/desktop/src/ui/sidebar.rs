@@ -30,7 +30,7 @@ impl GroupMode {
     fn label(self) -> &'static str {
         match self {
             GroupMode::Smart => "Smart",
-            GroupMode::Project => "Project",
+            GroupMode::Project => "Repo",
             GroupMode::Agent => "Agent",
             GroupMode::Date => "Date",
         }
@@ -229,7 +229,7 @@ impl Sidebar {
                     .text_size(sz(tokens::text::BASE))
                     .text_color(if active { pal.text } else { pal.text.opacity(0.88) })
                     .when(active, |d| d.font_weight(FontWeight::MEDIUM))
-                    .child("Projects"),
+                    .child("Repos"),
             )
             .when_some(count, |d, n| d.child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(n.to_string())))
     }
@@ -825,7 +825,7 @@ impl Render for Sidebar {
                                     .border_color(pal.border_strong)
                                     .cursor_pointer()
                                     .hover(|d| d.bg(pal.surface_hover))
-                                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("General chat — no project  (Ctrl+Shift+G)").build(window, cx))
+                                    .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("General chat — no repo  (Ctrl+Shift+G)").build(window, cx))
                                     .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::NewGeneral)))
                                     .child(icon("globe").size(sz(15.)).text_color(pal.text_muted)),
                             )
@@ -906,7 +906,7 @@ impl Render for Sidebar {
                 d.child(
                     v_flex()
                         .pt_2()
-                        .child(div().px(sz(18.)).pb_1().text_size(sz(tokens::text::XS)).font_weight(FontWeight::MEDIUM).text_color(pal.text_faint).child("Pinned projects"))
+                        .child(div().px(sz(18.)).pb_1().text_size(sz(tokens::text::XS)).font_weight(FontWeight::MEDIUM).text_color(pal.text_faint).child("Pinned repos"))
                         .child(projects),
                 )
             })

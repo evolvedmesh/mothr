@@ -115,7 +115,7 @@ impl Workspace {
                             .ghost()
                             .small()
                             .icon(icon("search"))
-                            .tooltip(format!("Find a project  ({FINDER_KEYS})"))
+                            .tooltip(format!("Find a repo  ({FINDER_KEYS})"))
                             .on_click(cx.listener(|this, _, window, cx| this.open_picker(PickerFor::Chat, window, cx))),
                     )
                     .child(
@@ -251,7 +251,7 @@ impl Workspace {
                 Button::new("rail-find")
                     .ghost()
                     .icon(icon("search"))
-                    .tooltip(format!("Find a project  ({FINDER_KEYS})"))
+                    .tooltip(format!("Find a repo  ({FINDER_KEYS})"))
                     .on_click(cx.listener(|this, _, window, cx| this.open_picker(PickerFor::Chat, window, cx))),
             )
             // The empty middle moves the window, as the header would.

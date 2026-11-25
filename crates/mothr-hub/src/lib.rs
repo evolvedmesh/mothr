@@ -920,8 +920,8 @@ impl Hub {
     /// other agents hear about them with their next message.
     fn set_extra_projects(&self, id: SessionId, projects: Vec<PathBuf>) -> anyhow::Result<()> {
         let meta = self.state.read().session(id).map(|s| s.meta.clone()).ok_or_else(|| anyhow::anyhow!("no such session"))?;
-        anyhow::ensure!(meta.parent.is_none(), "Subagents work in their orchestrator's projects");
-        anyhow::ensure!(meta.kind == SessionKind::Chat && !meta.general, "Only chats in a project can add more projects");
+        anyhow::ensure!(meta.parent.is_none(), "Subagents work in their orchestrator's repos");
+        anyhow::ensure!(meta.kind == SessionKind::Chat && !meta.general, "Only chats in a repo can add more repos");
         let projects = normalize_extra_projects(&meta.project, projects);
         if projects == meta.extra_projects {
             return Ok(());
@@ -930,7 +930,7 @@ impl Hub {
         let restart = live.is_some() && meta.agent == AgentKind::ClaudeCode;
         anyhow::ensure!(
             !restart || !matches!(meta.status, SessionStatus::Working | SessionStatus::NeedsInput | SessionStatus::Starting),
-            "Wait for the current turn to finish before changing the chat's projects"
+            "Wait for the current turn to finish before changing the chat's repos"
         );
         let children: Vec<SessionId> = self.state.read().sessions.iter().filter(|s| s.meta.parent == Some(id)).map(|s| s.meta.id).collect();
         for c in std::iter::once(id).chain(children) {
@@ -1228,7 +1228,7 @@ impl Hub {
         let known = self.projects.get(project).is_some()
             || self.state.read().sessions.iter().any(|s| s.meta.has_project(project));
         if !known || !project.is_absolute() {
-            anyhow::bail!("{} isn't a known project", project.display());
+            anyhow::bail!("{} isn't a known repo", project.display());
         }
         Ok(project)
     }

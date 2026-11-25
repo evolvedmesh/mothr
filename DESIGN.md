@@ -107,7 +107,7 @@ window's rem size, so text, buttons, menus and spacing grow together.
 - **Elevation**:
   - `sm` for the selected segment
   - `md` for the composer and cards
-  - `lg` for modals and the project finder
+  - `lg` for modals and the repo finder
   - `glow` is reserved for design previews; the app's chrome doesn't use it
 - **Layout**:
   - the sidebar is 272 px
@@ -131,12 +131,12 @@ window's rem size, so text, buttons, menus and spacing grow together.
 | Design card | A design introduced by its own tokens: its surface, type, a real component, palette and first screen. |
 | Design viewer | Storybook layout: page list, a page per foundation, component and screen, Export at the top right, chat on demand. |
 | Question card | Violet frame, option chips (single or multi select), plus a free-text "Other" field. |
-| Composer | Raised surface. On focus its border turns violet and it glows. Shows agent, model, project and mode pickers; Enter sends. |
+| Composer | Raised surface. On focus its border turns violet and it glows. Shows agent, model, repo and mode pickers; Enter sends. |
 | Subagent strip | Below an orchestrator's header: one chip per subagent with live status and tool and token counts. |
 | Usage meter | 5 px track, colored by usage level, with a reset countdown. |
-| Sidebar frame | There is no separate title bar; the sidebar is the window's frame. Header (drag to move, double-click to maximize, window buttons when Mothr draws them): the Mothr mark, then find a project, back/forward and collapse. Above the footer, while any chat works or waits on you, a live activity row (pulsing; violet working, amber needs you) that opens the first. Footer: the limits rings, Mothr Remote while it's on, and light/dark and Settings in one hairline island. Collapsed, it becomes a 52 px rail of the same controls. |
+| Sidebar frame | There is no separate title bar; the sidebar is the window's frame. Header (drag to move, double-click to maximize, window buttons when Mothr draws them): the Mothr mark, then find a repo, back/forward and collapse. Above the footer, while any chat works or waits on you, a live activity row (pulsing; violet working, amber needs you) that opens the first. Footer: the limits rings, Mothr Remote while it's on, and light/dark and Settings in one hairline island. Collapsed, it becomes a 52 px rail of the same controls. |
 | Limits button | At the foot of the sidebar: one 20 px progress ring per agent account with its logo inside. Rings use the agent's tint until 75%, then amber/red. Hover shows the limits card, opening upwards; click pins it beside the sidebar. |
-| Home | A time-of-day greeting over a typed headline that cycles short phrases ("Fix a bug", "Ship it"), its caret in the accent and blinking while a phrase rests; the agent and project under it; the composer docked at the bottom with the project picker below. |
+| Home | A time-of-day greeting over a typed headline that cycles short phrases ("Fix a bug", "Ship it"), its caret in the accent and blinking while a phrase rests; the agent and repo under it; the composer docked at the bottom with the repo picker below. |
 | Agent avatar | The agent's real logo on a soft tile of its brand tint (logos in `apps/desktop/assets/logos`). |
 
 ## Voice

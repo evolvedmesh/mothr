@@ -50,7 +50,7 @@ pub fn init(cx: &mut App) {
 
 impl ProjectPicker {
     pub fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search projects by name or path…"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search repos by name or path…"));
         let subs = vec![cx.subscribe(&input, |this, input, ev: &InputEvent, cx| match ev {
             InputEvent::Change => {
                 let q = input.read(cx).value().to_string();
@@ -67,7 +67,7 @@ impl ProjectPicker {
     /// Pick a project to add to a chat, next to the one it already has.
     pub fn adding(mut self, window: &mut Window, cx: &mut Context<Self>) -> Self {
         self.adding = true;
-        self.input.update(cx, |i, cx| i.set_placeholder("Add a project to the chat…", window, cx));
+        self.input.update(cx, |i, cx| i.set_placeholder("Add a repo to the chat…", window, cx));
         self
     }
 
@@ -89,7 +89,7 @@ impl ProjectPicker {
     }
 
     fn browse(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Open project".into()) });
+        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Open repo".into()) });
         let _ = window;
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await
@@ -136,7 +136,7 @@ impl Render for ProjectPicker {
                     v_flex()
                         .flex_1()
                         .child(div().text_sm().child("General chat"))
-                        .child(div().text_xs().text_color(theme.muted_foreground).child("Not tied to a project — questions, quick tasks, files anywhere")),
+                        .child(div().text_xs().text_color(theme.muted_foreground).child("Not tied to a repo — questions, quick tasks, files anywhere")),
                 ),
         ); }
         for (i, h) in self.hits.iter().enumerate() {
@@ -189,7 +189,7 @@ impl Render for ProjectPicker {
             );
         }
         if self.hits.is_empty() {
-            list = list.child(div().p_6().text_sm().text_color(theme.muted_foreground).text_center().child("No projects match. Use Browse… to open any folder."));
+            list = list.child(div().p_6().text_sm().text_color(theme.muted_foreground).text_center().child("No repos match. Use Browse… to open any folder."));
         }
 
         v_flex()
@@ -249,7 +249,7 @@ impl Render for ProjectPicker {
                     .child(h_flex().gap_1().child(kbd_hint("esc", cx)).child("close"))
                     .child(div().flex_1())
                     .child(match count {
-                        Some(n) => format!("{n} projects indexed"),
+                        Some(n) => format!("{n} repos indexed"),
                         None => "Indexing…".into(),
                     }),
             )

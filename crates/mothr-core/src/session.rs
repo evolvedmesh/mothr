@@ -314,7 +314,7 @@ impl SessionMeta {
         }
         let list: Vec<String> = extra.iter().map(|p| format!("- {}", p.display())).collect();
         Some(format!(
-            "[Mothr] Besides the working directory, this chat also covers these projects; read and edit files in them as needed:\n{}",
+            "[Mothr] Besides the working directory, this chat also covers these repos; read and edit files in them as needed:\n{}",
             list.join("\n")
         ))
     }

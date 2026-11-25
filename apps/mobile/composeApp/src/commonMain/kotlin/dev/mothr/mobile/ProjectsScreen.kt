@@ -108,7 +108,7 @@ fun ProjectsScreen(model: AppModel) {
         Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconBtn(Res.drawable.ic_arrow_left, tint = pal.text) { model.projectBack() }
             Column(Modifier.weight(1f).padding(start = 4.dp)) {
-                Text("Projects", style = type.display)
+                Text("Repos", style = type.display)
                 val n = hits?.size
                 Text(
                     when {
@@ -120,12 +120,12 @@ fun ProjectsScreen(model: AppModel) {
                 )
             }
         }
-        SearchBox(query, "Find a project by name or path", Res.drawable.ic_search) { query = it }
+        SearchBox(query, "Find a repo by name or path", Res.drawable.ic_search) { query = it }
         val list = hits
         when {
             error != null && list == null -> Notice(error ?: "", pal.danger)
-            list == null -> Notice("Loading projects…", pal.textMuted)
-            list.isEmpty() -> Notice(if (query.isBlank()) "No projects indexed yet" else "No projects match", pal.textMuted)
+            list == null -> Notice("Loading repos…", pal.textMuted)
+            list.isEmpty() -> Notice(if (query.isBlank()) "No repos indexed yet" else "No repos match", pal.textMuted)
             else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + navBottom())) {
                 items(list, key = { it.path }) { p -> ProjectRow(p) { model.openProject(p) } }
             }
@@ -478,7 +478,7 @@ private fun DocLinks(model: AppModel, project: ProjectView, from: String, conten
                     null -> {}
                     is LinkTarget.External -> runCatching { outer.openUri(target.url) }.onFailure { model.toast = "Can't open $uri" }
                     is LinkTarget.InProject -> if (target.path.isEmpty()) model.browse("") else model.openFile(target.path)
-                    LinkTarget.Outside -> model.toast = "That link points outside the project"
+                    LinkTarget.Outside -> model.toast = "That link points outside the repo"
                 }
             }
         }

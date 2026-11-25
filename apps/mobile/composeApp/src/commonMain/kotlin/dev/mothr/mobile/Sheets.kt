@@ -248,14 +248,14 @@ fun ProjectPickerSheet(model: AppModel, selected: ProjectView?, onDismiss: () ->
         hits = model.searchProjects(query)
     }
     Sheet(onDismiss) {
-        PickerBody("Project") {
-            Box(Modifier.padding(horizontal = 4.dp)) { Field(query, "Search projects", singleLine = true) { query = it } }
+        PickerBody("Repo") {
+            Box(Modifier.padding(horizontal = 4.dp)) { Field(query, "Search repos", singleLine = true) { query = it } }
             Spacer(Modifier.height(8.dp))
             if (query.isBlank()) ProjectRow(null, selected = selected == null) { onPick(null) }
             val list = if (query.isBlank()) model.projects else hits
             list.forEach { p -> ProjectRow(p, selected = selected?.path == p.path) { onPick(p) } }
             if (query.isNotBlank() && hits.isEmpty()) {
-                Text("No projects match", style = type.body.copy(color = pal.textMuted), modifier = Modifier.padding(12.dp))
+                Text("No repos match", style = type.body.copy(color = pal.textMuted), modifier = Modifier.padding(12.dp))
             }
         }
     }
@@ -272,7 +272,7 @@ private fun ProjectRow(p: ProjectView?, selected: Boolean, onClick: () -> Unit) 
         Ico(if (p == null) Res.drawable.ic_globe else Res.drawable.ic_folder, size = 17.dp, tint = if (selected) pal.text else pal.textMuted)
         Column(Modifier.weight(1f)) {
             Text(p?.name ?: "General", style = type.label)
-            Text(p?.displayPath ?: "Not tied to a project · runs from your home folder", style = type.caption.copy(color = pal.textFaint), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(p?.displayPath ?: "Not tied to a repo · runs from your home folder", style = type.caption.copy(color = pal.textFaint), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         p?.branch?.let {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
