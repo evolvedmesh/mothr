@@ -12,8 +12,13 @@ use std::sync::Arc;
 
 actions!(
     mothr,
-    [NewChat, NewDesign, NewGeneralChat, OpenProjectPalette, OpenProjects, ToggleSidebar, OpenSettings, FocusComposer, GoBack, GoForward, Quit]
+    [NewChat, NewDesign, NewGeneralChat, OpenProjectPalette, OpenProjects, OpenWorkspaces, NextWorkspace, PrevWorkspace, ToggleSidebar, OpenSettings, FocusComposer, GoBack, GoForward, Quit]
 );
+
+/// Switch to the workspace at this position (0-based), like a browser's tab shortcuts.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = mothr, no_json)]
+pub struct SwitchWorkspace(pub usize);
 
 #[cfg(target_os = "macos")]
 macro_rules! k {
@@ -83,6 +88,20 @@ fn main() {
                 KeyBinding::new(k!(","), OpenSettings, None),
                 KeyBinding::new(k!("l"), FocusComposer, None),
                 KeyBinding::new(k!("q"), Quit, None),
+                // Workspaces: step through them, or jump straight to one by its number.
+                KeyBinding::new(k!("alt-right"), NextWorkspace, None),
+                KeyBinding::new(k!("alt-left"), PrevWorkspace, None),
+                KeyBinding::new(k!("shift-w"), OpenWorkspaces, None),
+                KeyBinding::new(k!("1"), SwitchWorkspace(0), None),
+                KeyBinding::new(k!("2"), SwitchWorkspace(1), None),
+                KeyBinding::new(k!("3"), SwitchWorkspace(2), None),
+                KeyBinding::new(k!("4"), SwitchWorkspace(3), None),
+                KeyBinding::new(k!("5"), SwitchWorkspace(4), None),
+                KeyBinding::new(k!("6"), SwitchWorkspace(5), None),
+                KeyBinding::new(k!("7"), SwitchWorkspace(6), None),
+                KeyBinding::new(k!("8"), SwitchWorkspace(7), None),
+                KeyBinding::new(k!("9"), SwitchWorkspace(8), None),
+                KeyBinding::new(k!("0"), SwitchWorkspace(9), None),
                 // Back/forward through the places visited (the mouse's side buttons do the same).
                 #[cfg(target_os = "macos")]
                 KeyBinding::new("cmd-[", GoBack, None),

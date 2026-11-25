@@ -11,10 +11,14 @@ use super::projects::{Location, ProjectsEvent, ProjectsPage};
 use super::settings::SettingsView;
 use super::sidebar::{DraftRow, Sidebar, SidebarEvent};
 use super::usage;
+use super::workspaces::{WorkspacesEvent, WorkspacesPage};
 use super::{theme, tokens};
 use crate::remote::RemoteController;
 use crate::store::{Store, StoreEvent};
-use crate::{FocusComposer, GoBack, GoForward, NewChat, NewDesign, OpenProjectPalette, OpenProjects, OpenSettings, ToggleSidebar};
+use crate::{
+    FocusComposer, GoBack, GoForward, NewChat, NewDesign, NextWorkspace, OpenProjectPalette, OpenProjects, OpenSettings, OpenWorkspaces, PrevWorkspace, SwitchWorkspace,
+    ToggleSidebar,
+};
 use gpui_kit::component::{
     ActiveTheme as _, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -40,6 +44,7 @@ pub enum Route {
     Session(SessionId),
     Designs,
     Projects,
+    Workspaces,
     Settings,
 }
 
@@ -53,6 +58,7 @@ enum Place {
     Designs(Option<(PathBuf, DesignPage)>),
     /// The list, or a folder or file of one project.
     Projects(Option<(PathBuf, Location)>),
+    Workspaces,
 }
 
 /// Back/forward through the places visited, like a browser.
@@ -85,6 +91,9 @@ pub struct Workspace {
     next_draft: u64,
     designs: Entity<DesignsPage>,
     projects: Entity<ProjectsPage>,
+    workspaces: Entity<WorkspacesPage>,
+    /// The chat each workspace had open, to come back to it when you switch back.
+    workspace_chats: HashMap<WorkspaceId, SessionId>,
     chats: HashMap<SessionId, Entity<ChatView>>,
     settings_view: Option<Entity<SettingsView>>,
     picker: Option<Entity<ProjectPicker>>,
@@ -108,6 +117,7 @@ impl Workspace {
         let home = cx.new(|cx| Home::new(0, store.clone(), window, cx));
         let designs = cx.new(|cx| DesignsPage::new(store.clone(), window, cx));
         let projects = cx.new(|cx| ProjectsPage::new(store.clone(), window, cx));
+        let workspaces = cx.new(|cx| WorkspacesPage::new(store.clone(), window, cx));
         let mut subs = vec![];
         subs.push(cx.subscribe_in(&sidebar, window, |this, _, ev: &SidebarEvent, window, cx| match ev {
             SidebarEvent::Open(id) => this.open_session(*id, window, cx),
@@ -119,6 +129,27 @@ impl Workspace {
             SidebarEvent::NewChatIn(p) => this.new_chat(Some(p.clone()), window, cx),
             SidebarEvent::OpenDraft(id) => this.open_draft(*id, window, cx),
             SidebarEvent::DiscardDraft(id) => this.discard_draft(*id, window, cx),
+            SidebarEvent::OpenWorkspaces => this.open_workspaces(window, cx),
+            SidebarEvent::SwitchWorkspace(id) => this.switch_workspace(*id, window, cx),
+            SidebarEvent::NewWorkspace => {
+                this.open_workspaces(window, cx);
+                this.workspaces.update(cx, |w, cx| w.create(window, cx));
+            }
+            SidebarEvent::RenameWorkspace(id) => {
+                this.open_workspaces(window, cx);
+                this.workspaces.update(cx, |w, cx| w.rename(*id, window, cx));
+            }
+        }));
+        subs.push(cx.subscribe_in(&workspaces, window, |this, _, ev: &WorkspacesEvent, window, cx| match ev {
+            WorkspacesEvent::OpenChat(id) => this.open_session(*id, window, cx),
+            WorkspacesEvent::Switch(id) => {
+                this.switch_workspace(*id, window, cx);
+                this.show_workspace(*id, window, cx);
+            }
+            WorkspacesEvent::NewChatIn(id) => {
+                this.switch_workspace(*id, window, cx);
+                this.new_chat(None, window, cx);
+            }
         }));
         subs.push(cx.subscribe_in(&designs, window, |this, _, ev: &DesignsEvent, window, cx| match ev {
             DesignsEvent::OpenChat(id) => this.open_session(*id, window, cx),
@@ -181,6 +212,8 @@ impl Workspace {
             next_draft: 1,
             designs,
             projects,
+            workspaces,
+            workspace_chats: HashMap::new(),
             chats: HashMap::new(),
             settings_view: None,
             picker: None,
@@ -304,6 +337,7 @@ impl Workspace {
             Route::Settings => Place::Settings,
             Route::Designs => Place::Designs(self.designs.read(cx).place(cx)),
             Route::Projects => Place::Projects(self.projects.read(cx).place(cx)),
+            Route::Workspaces => Place::Workspaces,
         }
     }
 
@@ -353,6 +387,7 @@ impl Workspace {
                 self.navigate(Route::Projects, window, cx);
                 self.projects.update(cx, |pr, cx| pr.restore(p, window, cx));
             }
+            Place::Workspaces => self.open_workspaces(window, cx),
         }
     }
 
@@ -371,9 +406,17 @@ impl Workspace {
             Route::Session(id) => Some(id),
             _ => None,
         };
+        // Each workspace remembers the chat it had open.
+        if let Some(id) = active {
+            let store = self.store.read(cx);
+            if let Some(ws) = store.session(id).and_then(|s| store.workspace_of(&s.meta)) {
+                self.workspace_chats.insert(ws, id);
+            }
+        }
         let designs = route == Route::Designs;
         let projects = route == Route::Projects;
-        self.sidebar.update(cx, |s, cx| s.set_active(active, designs, projects, cx));
+        let workspaces = route == Route::Workspaces;
+        self.sidebar.update(cx, |s, cx| s.set_active(active, designs, projects, workspaces, cx));
         self.refresh_drafts(cx);
         cx.notify();
     }
@@ -392,6 +435,68 @@ impl Workspace {
         } else {
             self.navigate(Route::Projects, window, cx);
             self.projects.update(cx, |p, cx| p.focus(window, cx));
+        }
+    }
+
+    /// The Workspaces overview.
+    fn open_workspaces(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate(Route::Workspaces, window, cx);
+        self.workspaces.update(cx, |w, cx| w.focus(window, cx));
+    }
+
+    /// Make `id` the workspace on screen. A chat from another workspace gives way to the one
+    /// this workspace had open (or a new chat), like switching spaces in a browser; pages that
+    /// aren't chats stay put.
+    fn switch_workspace(&mut self, id: WorkspaceId, window: &mut Window, cx: &mut Context<Self>) {
+        let store = self.store.read(cx);
+        if store.workspace(id).is_none() {
+            return;
+        }
+        let changed = store.active_workspace_id() != Some(id);
+        let showing_chat = match self.route {
+            Route::Session(sid) => store.session(sid).is_some_and(|s| store.workspace_of(&s.meta) != Some(id)),
+            _ => false,
+        };
+        if changed {
+            self.store.update(cx, |s, cx| {
+                // Show it now; the hub's broadcast confirms it a moment later.
+                s.active_workspace = Some(id);
+                s.dispatch(AppCommand::SelectWorkspace { id }, window, cx);
+                cx.notify();
+            });
+        }
+        if showing_chat {
+            self.show_workspace(id, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Open the chat a workspace had open, else its most recent one, else a new chat.
+    fn show_workspace(&mut self, id: WorkspaceId, window: &mut Window, cx: &mut Context<Self>) {
+        let store = self.store.read(cx);
+        let remembered = self.workspace_chats.get(&id).copied().filter(|c| store.session(*c).is_some_and(|s| store.workspace_of(&s.meta) == Some(id)));
+        let target = remembered.or_else(|| store.workspace_chats(id).first().map(|s| s.meta.id));
+        match target {
+            Some(chat) => self.open_session(chat, window, cx),
+            None => self.new_chat(None, window, cx),
+        }
+    }
+
+    /// Step to the next (or previous) workspace, wrapping around.
+    fn cycle_workspace(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let store = self.store.read(cx);
+        let n = store.workspaces.len() as isize;
+        if n < 2 {
+            return;
+        }
+        let at = store.active_workspace_id().and_then(|a| store.workspaces.iter().position(|w| w.id == a)).unwrap_or(0) as isize;
+        let id = store.workspaces[(at + step).rem_euclid(n) as usize].id;
+        self.switch_workspace(id, window, cx);
+    }
+
+    fn jump_to_workspace(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.store.read(cx).workspaces.get(index).map(|w| w.id) {
+            self.switch_workspace(id, window, cx);
         }
     }
 
@@ -420,6 +525,24 @@ impl Workspace {
                 s.dispatch(AppCommand::MarkRead { id }, window, cx);
             });
             return;
+        }
+        // A chat from another workspace brings its workspace along.
+        let ws = {
+            let store = self.store.read(cx);
+            let meta = store.session(id).map(|s| s.meta.clone()).or_else(|| store.hub.session(id).map(|s| s.meta));
+            meta.and_then(|m| {
+                let root = m.parent.and_then(|p| store.session(p)).map(|p| p.meta.clone()).unwrap_or(m);
+                store.workspace_of(&root)
+            })
+        };
+        if let Some(ws) = ws
+            && self.store.read(cx).active_workspace_id() != Some(ws)
+        {
+            self.store.update(cx, |s, cx| {
+                s.active_workspace = Some(ws);
+                s.dispatch(AppCommand::SelectWorkspace { id: ws }, window, cx);
+                cx.notify();
+            });
         }
         if !self.chats.contains_key(&id) {
             let store = self.store.clone();
@@ -466,6 +589,7 @@ impl Workspace {
                     effort: None,
                     context: None,
                     prompt: Some(text.to_string()),
+                    workspace: None,
                 };
                 if let Some(id) = this.store.update(cx, |s, cx| s.dispatch(cmd, window, cx)) {
                     this.open_session(id, window, cx);
@@ -502,6 +626,7 @@ impl Workspace {
             }
             Some("designs") => this.open_designs(window, cx),
             Some("projects") => this.open_projects(window, cx),
+            Some("workspaces") => this.open_workspaces(window, cx),
             // MOTHR_OPEN=image:<path> opens the image viewer (for screenshots).
             Some(p) if p.starts_with("image:") => {
                 let path = PathBuf::from(&p["image:".len()..]);
@@ -663,6 +788,7 @@ impl Render for Workspace {
             },
             Route::Designs => self.designs.clone().into_any_element(),
             Route::Projects => self.projects.clone().into_any_element(),
+            Route::Workspaces => self.workspaces.clone().into_any_element(),
             Route::Settings => match &self.settings_view {
                 Some(s) => s.clone().into_any_element(),
                 None => div().into_any_element(),
@@ -674,6 +800,7 @@ impl Render for Workspace {
             Route::Session(id) => id.to_string().into(),
             Route::Designs => "designs".into(),
             Route::Projects => "projects".into(),
+            Route::Workspaces => "workspaces".into(),
             Route::Settings => "settings".into(),
         };
         let sidebar_right = tokens::appearance().sidebar_side == Side::Right;
@@ -703,6 +830,10 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &OpenProjectPalette, window, cx| this.open_picker(PickerFor::Chat, window, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.navigate(Route::Settings, window, cx)))
             .on_action(cx.listener(|this, _: &OpenProjects, window, cx| this.open_projects(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenWorkspaces, window, cx| this.open_workspaces(window, cx)))
+            .on_action(cx.listener(|this, _: &NextWorkspace, window, cx| this.cycle_workspace(1, window, cx)))
+            .on_action(cx.listener(|this, _: &PrevWorkspace, window, cx| this.cycle_workspace(-1, window, cx)))
+            .on_action(cx.listener(|this, a: &SwitchWorkspace, window, cx| this.jump_to_workspace(a.0, window, cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &GoBack, window, cx| this.go_history(NavigationDirection::Back, window, cx)))
             .on_action(cx.listener(|this, _: &GoForward, window, cx| this.go_history(NavigationDirection::Forward, window, cx)))
@@ -721,6 +852,7 @@ impl Render for Workspace {
                 }
                 Route::Designs => this.designs.update(cx, |d, cx| d.focus(window, cx)),
                 Route::Projects => this.projects.update(cx, |p, cx| p.focus(window, cx)),
+                Route::Workspaces => this.workspaces.update(cx, |w, cx| w.focus(window, cx)),
                 _ => this.home.update(cx, |h, cx| h.focus(window, cx)),
             }))
             // bottom leaves a strip to hold them and to drag the window by.

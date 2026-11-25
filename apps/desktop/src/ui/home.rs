@@ -437,6 +437,7 @@ impl Home {
             effort: self.effort.clone(),
             context: self.context.clone(),
             prompt,
+            workspace: self.store.read(cx).active_workspace_id(),
         };
         let id = self.store.update(cx, |s, cx| s.dispatch(cmd, window, cx));
         if let Some(id) = id {

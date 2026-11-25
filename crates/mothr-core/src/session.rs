@@ -181,6 +181,9 @@ pub struct SessionMeta {
     /// Messages waiting to be sent when the agent finishes its current turn.
     #[serde(default)]
     pub queue: Vec<QueuedPrompt>,
+    /// The workspace the chat belongs to (the hub fills it in for chats from older versions).
+    #[serde(default)]
+    pub workspace: Option<crate::workspace::WorkspaceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -247,6 +250,7 @@ impl SessionMeta {
             subagent: None,
             general: false,
             queue: Vec::new(),
+            workspace: None,
         }
     }
 

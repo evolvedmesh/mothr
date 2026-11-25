@@ -307,6 +307,7 @@ impl MothrClient {
             effort: effort.filter(|e| !e.is_empty()),
             context: context.filter(|c| !c.is_empty()),
             prompt: prompt.filter(|p| !p.trim().is_empty()),
+            workspace: None,
         })?;
         reply.map(|id| id.to_string()).ok_or_else(|| ClientError::Rejected { reason: "Mothr didn't return the new chat".into() })
     }

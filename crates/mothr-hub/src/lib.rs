@@ -30,6 +30,10 @@ struct State {
     rewound: HashSet<SessionId>,
     /// Last known model list per agent (persisted to `models.json`).
     models: BTreeMap<AgentKind, Vec<ModelInfo>>,
+    /// In order, never empty (persisted to `workspaces.json`).
+    workspaces: Vec<Workspace>,
+    /// The workspace the desktop shows; new chats without one go there.
+    active_workspace: Option<WorkspaceId>,
 }
 
 impl State {
@@ -38,6 +42,11 @@ impl State {
     }
     fn session(&self, id: SessionId) -> Option<&SessionState> {
         self.sessions.iter().find(|s| s.meta.id == id)
+    }
+
+    /// The workspace new chats go to when none is named: the active one, else the first.
+    fn default_workspace(&self) -> Option<WorkspaceId> {
+        self.active_workspace.filter(|a| self.workspaces.iter().any(|w| w.id == *a)).or_else(|| self.workspaces.first().map(|w| w.id))
     }
 }
 
@@ -69,6 +78,7 @@ impl Hub {
         });
         hub.load_sessions();
         hub.load_models();
+        hub.load_workspaces();
         let h = hub.clone();
         rt.spawn(async move { h.pump(driver_rx).await });
         let h = hub.clone();
@@ -246,6 +256,154 @@ impl Hub {
                 }
             });
         }
+    }
+
+    // ------------------------------------------------------------------ workspaces
+
+    /// Read the workspaces, make sure there is one, and put every chat in one.
+    fn load_workspaces(&self) {
+        let saved: SavedWorkspaces = std::fs::read_to_string(workspaces_path())
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        let mut st = self.state.write();
+        st.workspaces = saved.workspaces;
+        st.workspaces.truncate(MAX_WORKSPACES);
+        let fresh = st.workspaces.is_empty();
+        if fresh {
+            st.workspaces.push(Workspace::new(DEFAULT_WORKSPACE_NAME));
+        }
+        st.active_workspace = saved.active;
+        let fallback = st.default_workspace();
+        let known: HashSet<WorkspaceId> = st.workspaces.iter().map(|w| w.id).collect();
+        // Chats from before workspaces (or from one that's gone) join the default one.
+        let mut moved = vec![];
+        for s in &mut st.sessions {
+            if !s.meta.workspace.is_some_and(|w| known.contains(&w)) {
+                s.meta.workspace = fallback;
+                moved.push(s.meta.id);
+            }
+        }
+        st.dirty.extend(moved);
+        if fresh {
+            self.save_workspaces(&st);
+        }
+    }
+
+    fn save_workspaces(&self, st: &State) {
+        let saved = SavedWorkspaces { workspaces: st.workspaces.clone(), active: st.active_workspace };
+        let path = workspaces_path();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match serde_json::to_vec_pretty(&saved) {
+            Ok(bytes) => {
+                if let Err(e) = write_atomic(&path, &bytes) {
+                    tracing::warn!("saving {}: {e}", path.display());
+                }
+            }
+            Err(e) => tracing::warn!("encoding workspaces: {e}"),
+        }
+    }
+
+    /// Change the workspaces under the lock, then save and broadcast them.
+    fn edit_workspaces(&self, f: impl FnOnce(&mut State) -> anyhow::Result<()>) -> anyhow::Result<()> {
+        let event = {
+            let mut st = self.state.write();
+            f(&mut st)?;
+            self.save_workspaces(&st);
+            HubEvent::Workspaces { workspaces: st.workspaces.clone(), active: st.default_workspace() }
+        };
+        self.broadcast(event);
+        Ok(())
+    }
+
+    fn create_workspace(&self, mut workspace: Workspace) -> anyhow::Result<()> {
+        self.edit_workspaces(|st| {
+            anyhow::ensure!(st.workspaces.len() < MAX_WORKSPACES, "You can have up to {MAX_WORKSPACES} workspaces");
+            anyhow::ensure!(!st.workspaces.iter().any(|w| w.id == workspace.id), "That workspace already exists");
+            workspace.name = clean_workspace_name(&workspace.name).unwrap_or_else(|| next_workspace_name(&st.workspaces));
+            st.workspaces.push(workspace);
+            Ok(())
+        })
+    }
+
+    fn update_workspace(&self, workspace: Workspace) -> anyhow::Result<()> {
+        let name = clean_workspace_name(&workspace.name).ok_or_else(|| anyhow::anyhow!("A workspace needs a name"))?;
+        self.edit_workspaces(|st| {
+            let w = st.workspaces.iter_mut().find(|w| w.id == workspace.id).ok_or_else(|| anyhow::anyhow!("no such workspace"))?;
+            w.name = name;
+            w.icon = workspace.icon.filter(|i| WORKSPACE_ICONS.contains(&i.as_str()));
+            Ok(())
+        })
+    }
+
+    fn delete_workspace(&self, id: WorkspaceId) -> anyhow::Result<()> {
+        let mut moved = vec![];
+        self.edit_workspaces(|st| {
+            anyhow::ensure!(st.workspaces.len() > 1, "Mothr needs at least one workspace");
+            let before = st.workspaces.len();
+            st.workspaces.retain(|w| w.id != id);
+            anyhow::ensure!(st.workspaces.len() < before, "no such workspace");
+            if st.active_workspace == Some(id) {
+                st.active_workspace = None;
+            }
+            let to = st.default_workspace();
+            for s in &mut st.sessions {
+                if s.meta.workspace == Some(id) {
+                    s.meta.workspace = to;
+                    moved.push(s.meta.clone());
+                }
+            }
+            st.dirty.extend(moved.iter().map(|m| m.id));
+            Ok(())
+        })?;
+        for meta in moved {
+            self.broadcast(HubEvent::SessionMeta { meta });
+        }
+        Ok(())
+    }
+
+    fn move_workspace(&self, id: WorkspaceId, index: usize) -> anyhow::Result<()> {
+        self.edit_workspaces(|st| {
+            let from = st.workspaces.iter().position(|w| w.id == id).ok_or_else(|| anyhow::anyhow!("no such workspace"))?;
+            let w = st.workspaces.remove(from);
+            let to = index.min(st.workspaces.len());
+            st.workspaces.insert(to, w);
+            Ok(())
+        })
+    }
+
+    fn select_workspace(&self, id: WorkspaceId) -> anyhow::Result<()> {
+        if self.state.read().active_workspace == Some(id) {
+            return Ok(());
+        }
+        self.edit_workspaces(|st| {
+            anyhow::ensure!(st.workspaces.iter().any(|w| w.id == id), "no such workspace");
+            st.active_workspace = Some(id);
+            Ok(())
+        })
+    }
+
+    /// Move a chat and its subagents to another workspace.
+    fn set_workspace(&self, id: SessionId, workspace: WorkspaceId) -> anyhow::Result<()> {
+        let moved: Vec<SessionMeta> = {
+            let mut st = self.state.write();
+            anyhow::ensure!(st.workspaces.iter().any(|w| w.id == workspace), "no such workspace");
+            let mut out = vec![];
+            for s in &mut st.sessions {
+                if (s.meta.id == id || s.meta.parent == Some(id)) && s.meta.workspace != Some(workspace) {
+                    s.meta.workspace = Some(workspace);
+                    out.push(s.meta.clone());
+                }
+            }
+            st.dirty.extend(out.iter().map(|m| m.id));
+            out
+        };
+        for meta in moved {
+            self.broadcast(HubEvent::SessionMeta { meta });
+        }
+        Ok(())
     }
 
     // ------------------------------------------------------------------ persistence
@@ -490,6 +648,7 @@ impl Hub {
         let mut meta = SessionMeta::new(pm.agent, SessionKind::Chat, pm.project.clone(), pm.permission_mode);
         meta.title = title.unwrap_or_else(|| "Subagent".into());
         meta.parent = Some(parent);
+        meta.workspace = pm.workspace;
         meta.model = pm.model.clone();
         meta.status = SessionStatus::Working;
         meta.subagent = Some(SubagentInfo {
@@ -679,6 +838,7 @@ impl Hub {
         effort: Option<String>,
         context: Option<String>,
         prompt: Option<String>,
+        workspace: Option<WorkspaceId>,
     ) -> anyhow::Result<SessionId> {
         let general = project.as_os_str().is_empty() && kind == SessionKind::Chat;
         if general {
@@ -697,6 +857,10 @@ impl Hub {
         meta.effort = effort.filter(|e| !e.is_empty());
         meta.context_limit = context.filter(|c| !c.is_empty());
         meta.general = general;
+        meta.workspace = {
+            let st = self.state.read();
+            workspace.filter(|w| st.workspaces.iter().any(|x| x.id == *w)).or_else(|| st.default_workspace())
+        };
         let tx = self.spawn_driver(&meta, false)?;
         let id = meta.id;
         let state = SessionState::new(meta);
@@ -841,6 +1005,8 @@ impl Hub {
             pinned_projects: self.projects.pinned(),
             recent_projects: self.projects.recent(12),
             agent_models: st.models.clone(),
+            workspaces: st.workspaces.clone(),
+            active_workspace: st.default_workspace(),
         }
     }
 }
@@ -871,8 +1037,8 @@ impl HubApi for Hub {
 
     fn dispatch(&self, command: AppCommand) -> anyhow::Result<Option<SessionId>> {
         match command {
-            AppCommand::NewSession { agent, kind, project, mode, model, effort, context, prompt } => {
-                return self.create_session(agent, kind, project, mode, model, effort, context, prompt).map(Some);
+            AppCommand::NewSession { agent, kind, project, mode, model, effort, context, prompt, workspace } => {
+                return self.create_session(agent, kind, project, mode, model, effort, context, prompt, workspace).map(Some);
             }
             AppCommand::Session { id, command } => {
                 let sub = self.state.read().session(id).and_then(|s| Some((s.meta.parent?, s.meta.subagent.as_ref()?.tool_use_id.clone())));
@@ -961,6 +1127,12 @@ impl HubApi for Hub {
                 self.projects.set_pinned(&path, pinned);
                 self.broadcast_projects();
             }
+            AppCommand::CreateWorkspace { workspace } => self.create_workspace(workspace)?,
+            AppCommand::UpdateWorkspace { workspace } => self.update_workspace(workspace)?,
+            AppCommand::DeleteWorkspace { id } => self.delete_workspace(id)?,
+            AppCommand::MoveWorkspace { id, index } => self.move_workspace(id, index)?,
+            AppCommand::SetWorkspace { id, workspace } => self.set_workspace(id, workspace)?,
+            AppCommand::SelectWorkspace { id } => self.select_workspace(id)?,
             AppCommand::RefreshUsage => {
                 if let Some(h) = self.me.upgrade() {
                     self.rt.spawn(async move { h.refresh_usage().await });
@@ -1023,4 +1195,17 @@ fn clean_title(raw: &str) -> Option<String> {
 
 fn models_path() -> PathBuf {
     data_dir().join("models.json")
+}
+
+fn workspaces_path() -> PathBuf {
+    data_dir().join("workspaces.json")
+}
+
+/// `workspaces.json`.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct SavedWorkspaces {
+    #[serde(default)]
+    workspaces: Vec<Workspace>,
+    #[serde(default)]
+    active: Option<WorkspaceId>,
 }

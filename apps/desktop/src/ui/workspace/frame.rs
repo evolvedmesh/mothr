@@ -217,6 +217,7 @@ impl Workspace {
         let theme = cx.theme().clone();
         let pal = tokens::p(cx);
         let activity = self.activity(cx);
+        let dots = super::super::workspaces::dots(self.store.read(cx));
         let usage_open = self.usage_open;
         // macOS draws its window buttons over the top-left corner.
         let top_gap = if cfg!(target_os = "macos") && !right { 30. } else { 8. };
@@ -262,6 +263,31 @@ impl Workspace {
                     .window_control_area(WindowControlArea::Drag)
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move()),
             )
+            .when(dots.len() > 1, |d| {
+                // The workspaces, top to bottom; the open one is a longer pill.
+                let mut col = v_flex().pb(sz(6.)).gap(sz(1.)).items_center();
+                for dot in &dots {
+                    let id = dot.id;
+                    let tip = dot.tooltip();
+                    col = col.child(
+                        div()
+                            .id(ElementId::Name(format!("rail-ws-{id}").into()))
+                            .w(sz(22.))
+                            .min_h(sz(14.))
+                            .py(sz(3.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(sz(tokens::radius::SM))
+                            .cursor_pointer()
+                            .hover(|x| x.bg(pal.surface_hover))
+                            .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+                            .on_click(cx.listener(move |this, _, window, cx| this.switch_workspace(id, window, cx)))
+                            .child(super::super::workspaces::dot_mark(dot, &pal, true)),
+                    );
+                }
+                d.child(col)
+            })
             .when(!activity.is_empty(), |d| {
                 let color = if activity.needs.is_empty() { pal.brand } else { pal.warning };
                 let tip = format!("{}\n{}", activity.label(), activity.tooltip());

@@ -18,6 +18,10 @@ pub struct Store {
     pub project_count: Option<usize>,
     /// Hub's cached model lists per agent.
     pub agent_models: BTreeMap<AgentKind, Vec<ModelInfo>>,
+    /// In order; never empty once the hub has started.
+    pub workspaces: Vec<Workspace>,
+    /// The workspace on screen.
+    pub active_workspace: Option<WorkspaceId>,
     /// Limit windows we already warned about (provider, label, level).
     warned: HashSet<(Provider, String, UsageLevel)>,
     _task: Task<()>,
@@ -66,6 +70,8 @@ impl Store {
             project_count: None,
             warned: HashSet::new(),
             agent_models: BTreeMap::new(),
+            workspaces: vec![],
+            active_workspace: None,
             _task: task,
         };
         store.apply_snapshot(snap);
@@ -86,6 +92,8 @@ impl Store {
         self.pinned = snap.pinned_projects;
         self.recent = snap.recent_projects;
         self.agent_models = snap.agent_models;
+        self.workspaces = snap.workspaces;
+        self.active_workspace = snap.active_workspace;
     }
 
     fn resync(&mut self, cx: &mut Context<Self>) {
@@ -160,6 +168,11 @@ impl Store {
             }
             HubEvent::ProjectsIndexed { count } => self.project_count = Some(count),
             HubEvent::Toast { level, text } => cx.emit(StoreEvent::Toast(level, text)),
+            HubEvent::Workspaces { workspaces, active } => {
+                self.workspaces = workspaces;
+                self.active_workspace = active;
+                cx.emit(StoreEvent::Changed);
+            }
         }
         cx.notify();
     }
@@ -170,6 +183,35 @@ impl Store {
 
     pub fn session(&self, id: SessionId) -> Option<&SessionState> {
         self.sessions.iter().find(|s| s.meta.id == id)
+    }
+
+    /// The workspace on screen (the first one until the hub says otherwise).
+    pub fn active_workspace(&self) -> Option<&Workspace> {
+        self.active_workspace.and_then(|id| self.workspace(id)).or(self.workspaces.first())
+    }
+
+    pub fn active_workspace_id(&self) -> Option<WorkspaceId> {
+        self.active_workspace().map(|w| w.id)
+    }
+
+    pub fn workspace(&self, id: WorkspaceId) -> Option<&Workspace> {
+        self.workspaces.iter().find(|w| w.id == id)
+    }
+
+    /// The workspace a chat belongs to; one Mothr doesn't know (yet) counts as the first.
+    pub fn workspace_of(&self, meta: &SessionMeta) -> Option<WorkspaceId> {
+        meta.workspace.filter(|w| self.workspace(*w).is_some()).or_else(|| self.workspaces.first().map(|w| w.id))
+    }
+
+    /// Top-level chats (not designs, not subagents) of a workspace, most recent first.
+    pub fn workspace_chats(&self, id: WorkspaceId) -> Vec<&SessionState> {
+        let mut out: Vec<&SessionState> = self
+            .sessions
+            .iter()
+            .filter(|s| s.meta.parent.is_none() && s.meta.kind != SessionKind::Design && self.workspace_of(&s.meta) == Some(id))
+            .collect();
+        out.sort_by_key(|s| std::cmp::Reverse(s.meta.updated_at));
+        out
     }
 
     /// Subagent sessions spawned by an orchestrator chat, oldest first.

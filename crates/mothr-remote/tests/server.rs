@@ -324,6 +324,7 @@ async fn http_auth_and_api() {
         effort: None,
         context: None,
         prompt: Some("hi".into()),
+        workspace: None,
     };
     let res = http
         .post(format!("{base}api/command"))

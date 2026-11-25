@@ -67,6 +67,13 @@ with the app.
     back to its closest equivalent)
   - optionally, remember the last agent and model you used and start new chats with them
     (Settings → Defaults)
+- **Workspaces.** Groups of chats you switch between, like a browser's spaces. Each keeps its
+  own chat list and remembers the chat it had open. Up to ten, shown as dots at the foot of the
+  sidebar (the open one is a pill, one waiting on you turns amber):
+  - switch with `Ctrl+Alt+←/→` (`⌘⌥←/→` on macOS), jump with `Ctrl+1` … `Ctrl+0`, or click a dot
+  - the **Workspaces** page (`Ctrl+Shift+W`) shows every workspace and its chats; make, rename,
+    give an icon, reorder and delete them there (a deleted workspace's chats move to the first)
+  - right-click a chat to move it to another workspace; new chats start in the open one
 - **Smart grouping.** Chats are grouped as Pinned → Needs you → Working → your own groups → by
   recency. You can also group by project, agent or date. Unread dots, and toasts when a
   background chat needs you.
@@ -198,7 +205,7 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 ### Developer hooks
 
 - `MOTHR_HOME=<dir>`: isolated config and data.
-- `MOTHR_OPEN=settings|remote|picker|usage|latest|changes|designs|design|subagent|projects`: open
+- `MOTHR_OPEN=settings|remote|picker|usage|latest|changes|designs|design|subagent|projects|workspaces`: open
   a view at startup (`MOTHR_OPEN_DELAY_MS` delays it). `changes` opens the newest chat's Changes
   panel; `design` opens the newest design. `project:<path>[:<file>[:full]]` opens a project, a
   file in it, and full screen. `image:<path>` opens the image viewer.

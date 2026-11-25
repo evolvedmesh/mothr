@@ -2,6 +2,7 @@
 
 use super::kit::*;
 use super::tokens;
+use super::workspaces::{self as ws, KEYS_NEXT, KEYS_PREV};
 use crate::store::Store;
 use gpui_kit::component::{
     Sizable as _,
@@ -47,6 +48,10 @@ pub enum SidebarEvent {
     NewChatIn(ProjectRef),
     OpenDraft(u64),
     DiscardDraft(u64),
+    OpenWorkspaces,
+    SwitchWorkspace(WorkspaceId),
+    NewWorkspace,
+    RenameWorkspace(WorkspaceId),
 }
 
 /// An unsent new-chat box, listed until it is sent or discarded.
@@ -71,6 +76,11 @@ pub struct Sidebar {
     designs_active: bool,
     /// The Projects page is showing.
     projects_active: bool,
+    /// The Workspaces page is showing.
+    workspaces_active: bool,
+    /// The workspace whose chats were last drawn, and which way the list slides when it changes.
+    shown_workspace: Option<(WorkspaceId, usize)>,
+    slide: f32,
     drafts: Vec<DraftRow>,
     collapsed: std::collections::HashSet<String>,
     /// Orchestrator chats whose subagent list is folded.
@@ -90,13 +100,14 @@ impl Sidebar {
                 }
             }),
         ];
-        Self { store, search, query: String::new(), mode: GroupMode::Smart, active: None, designs_active: false, projects_active: false, drafts: vec![], collapsed: Default::default(), folded: Default::default(), _subs: subs }
+        Self { store, search, query: String::new(), mode: GroupMode::Smart, active: None, designs_active: false, projects_active: false, workspaces_active: false, shown_workspace: None, slide: 0., drafts: vec![], collapsed: Default::default(), folded: Default::default(), _subs: subs }
     }
 
-    pub fn set_active(&mut self, id: Option<SessionId>, designs: bool, projects: bool, cx: &mut Context<Self>) {
+    pub fn set_active(&mut self, id: Option<SessionId>, designs: bool, projects: bool, workspaces: bool, cx: &mut Context<Self>) {
         self.active = id;
         self.designs_active = designs;
         self.projects_active = projects;
+        self.workspaces_active = workspaces;
         cx.notify();
     }
 
@@ -223,12 +234,155 @@ impl Sidebar {
             .when_some(count, |d, n| d.child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(n.to_string())))
     }
 
-    fn groups(&self, sessions: &[SessionState]) -> Vec<(String, Vec<SessionMeta>)> {
+    /// The way into the Workspaces overview.
+    fn render_workspaces_nav(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pal = tokens::p(cx);
+        let active = self.workspaces_active;
+        let count = self.store.read(cx).workspaces.len();
+        h_flex()
+            .id("sb-workspaces")
+            .relative()
+            .h(sz(34.))
+            .px(sz(10.))
+            .gap(sz(10.))
+            .items_center()
+            .rounded(sz(tokens::radius::MD))
+            .cursor_pointer()
+            .when(active, |d| d.bg(pal.surface_hover))
+            .when(!active, |d| d.hover(|d| d.bg(pal.surface_hover.opacity(0.6))))
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::OpenWorkspaces)))
+            .when(active, |d| d.child(div().absolute().left(sz(0.)).top(sz(9.)).bottom(sz(9.)).w(sz(2.5)).rounded_full().bg(pal.brand)))
+            .child(icon("layers").size(sz(15.)).text_color(if active { pal.text } else { pal.text_muted }))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(sz(tokens::text::BASE))
+                    .text_color(if active { pal.text } else { pal.text.opacity(0.88) })
+                    .when(active, |d| d.font_weight(FontWeight::MEDIUM))
+                    .child("Workspaces"),
+            )
+            .child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(count.to_string()))
+    }
+
+    /// The workspace switcher along the bottom: the open workspace's name (opens the overview)
+    /// and one dot per workspace, Zen-style.
+    fn render_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pal = tokens::p(cx);
+        let store = self.store.read(cx);
+        let dots = ws::dots(store);
+        let current = store.active_workspace().cloned();
+        let full = store.workspaces.len() >= MAX_WORKSPACES;
+        let can_delete = store.workspaces.len() > 1;
+        let store_e = self.store.clone();
+        let mut row = h_flex().flex_none().gap(sz(1.)).items_center();
+        for d in dots {
+            let id = d.id;
+            let tip = d.tooltip();
+            let store = store_e.clone();
+            row = row.child(
+                div()
+                    .id(ElementId::Name(format!("ws-dot-{id}").into()))
+                    .h(sz(22.))
+                    .min_w(sz(14.))
+                    .px(sz(3.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(sz(tokens::radius::SM))
+                    .cursor_pointer()
+                    .hover(|x| x.bg(pal.surface_hover))
+                    .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::SwitchWorkspace(id))))
+                    .child(ws::dot_mark(&d, &pal, false))
+                    .context_menu({
+                        let weak = cx.entity().downgrade();
+                        move |menu, _, _| {
+                            let (w1, w2) = (weak.clone(), weak.clone());
+                            let store = store.clone();
+                            menu.item(PopupMenuItem::new("Rename").icon(icon("pencil")).on_click(move |_, _, cx| {
+                                if let Some(sb) = w1.upgrade() {
+                                    sb.update(cx, |_, cx| cx.emit(SidebarEvent::RenameWorkspace(id)));
+                                }
+                            }))
+                            .item(PopupMenuItem::new("All workspaces").icon(icon("layers")).on_click(move |_, _, cx| {
+                                if let Some(sb) = w2.upgrade() {
+                                    sb.update(cx, |_, cx| cx.emit(SidebarEvent::OpenWorkspaces));
+                                }
+                            }))
+                            .separator()
+                            .item(PopupMenuItem::new("Delete").icon(icon("trash")).disabled(!can_delete).on_click(move |_, window, cx| {
+                                store.update(cx, |s, cx| {
+                                    s.dispatch(AppCommand::DeleteWorkspace { id }, window, cx);
+                                });
+                            }))
+                        }
+                    }),
+            );
+        }
+        let name = current.as_ref().map(|w| w.name.clone()).unwrap_or_default();
+        let ws_icon = current.as_ref().map(ws::workspace_icon).unwrap_or("layers");
+        h_flex()
+            .flex_none()
+            .h(sz(38.))
+            .px(sz(10.))
+            .gap(sz(4.))
+            .items_center()
+            .border_t_1()
+            .border_color(pal.border)
+            .child(
+                h_flex()
+                    .id("ws-current")
+                    .flex_1()
+                    .min_w_0()
+                    .h(sz(26.))
+                    .px(sz(6.))
+                    .gap(sz(7.))
+                    .items_center()
+                    .rounded(sz(tokens::radius::SM))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(pal.surface_hover.opacity(0.6)))
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(format!("All workspaces  ({})", ws::KEYS_OVERVIEW)).build(window, cx)
+                    })
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::OpenWorkspaces)))
+                    .child(icon(ws_icon).size(sz(13.)).text_color(pal.text_muted))
+                    .child(div().min_w_0().truncate().text_size(sz(tokens::text::SM)).font_weight(FontWeight::MEDIUM).text_color(pal.text_muted).child(name)),
+            )
+            .child(
+                div()
+                    .id("ws-dots")
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(format!("Switch workspace  ({KEYS_PREV} / {KEYS_NEXT})")).build(window, cx)
+                    })
+                    .child(row),
+            )
+            .when(!full, |d| {
+                d.child(
+                    div()
+                        .id("ws-add")
+                        .size(sz(22.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(sz(tokens::radius::SM))
+                        .cursor_pointer()
+                        .hover(|x| x.bg(pal.surface_hover))
+                        .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("New workspace").build(window, cx))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::NewWorkspace)))
+                        .child(icon("plus").size(sz(13.)).text_color(pal.text_faint)),
+                )
+            })
+    }
+
+    fn groups(&self, store: &Store) -> Vec<(String, Vec<SessionMeta>)> {
         let q = self.query.to_lowercase();
-        let mut metas: Vec<SessionMeta> = sessions
+        let workspace = store.active_workspace_id();
+        let mut metas: Vec<SessionMeta> = store
+            .sessions
             .iter()
             .map(|s| s.meta.clone())
             .filter(|m| m.parent.is_none() && m.kind != SessionKind::Design)
+            .filter(|m| store.workspace_of(m) == workspace)
             .filter(|m| {
                 q.is_empty()
                     || m.title.to_lowercase().contains(&q)
@@ -309,7 +463,8 @@ impl Sidebar {
         out
     }
 
-    fn render_row(&self, m: &SessionMeta, counts: (usize, usize, usize), cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_row(&self, m: &SessionMeta, counts: (usize, usize, usize), others: &[Workspace], cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let others = others.to_vec();
         let pal = tokens::p(cx);
         let (sub_running, sub_total, sub_needs) = counts;
         let orchestrator = sub_total > 0;
@@ -415,10 +570,28 @@ impl Sidebar {
             })
             .when(m.unread && !active, |d| d.child(div().size(sz(6.)).rounded_full().bg(pal.brand)))
             .when(pinned, |d| d.child(icon("pin").size(sz(11.)).text_color(pal.text_faint)))
-            .context_menu(move |menu, _, _| {
+            .context_menu(move |menu, window, cx| {
                 let s1 = store.clone();
                 let s2 = store.clone();
                 let s3 = store.clone();
+                let s4 = store.clone();
+                let others = others.clone();
+                let menu = if others.is_empty() {
+                    menu
+                } else {
+                    menu.submenu_with_icon(Some(icon("layers")), "Move to workspace", window, cx, move |mut sub, _, _| {
+                        for w in &others {
+                            let store = s4.clone();
+                            let to = w.id;
+                            sub = sub.item(PopupMenuItem::new(w.name.clone()).icon(icon(ws::workspace_icon(w))).on_click(move |_, window, cx| {
+                                store.update(cx, |s, cx| {
+                                    s.dispatch(AppCommand::SetWorkspace { id, workspace: to }, window, cx);
+                                });
+                            }));
+                        }
+                        sub
+                    })
+                };
                 menu.item(
                     PopupMenuItem::new(if pinned { "Unpin" } else { "Pin" })
                         .icon(icon(if pinned { "pin-off" } else { "pin" }))
@@ -502,9 +675,21 @@ impl Render for Sidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pal = tokens::p(cx);
         let store = self.store.read(cx);
-        let groups = self.groups(&store.sessions);
+        let groups = self.groups(store);
+        let active_ws = store.active_workspace().map(|w| (w.id, store.workspaces.iter().position(|x| x.id == w.id).unwrap_or(0)));
+        let others: Vec<Workspace> = store.workspaces.iter().filter(|w| Some(w.id) != active_ws.map(|a| a.0)).cloned().collect();
+        let multi = store.workspaces.len() > 1;
         let pinned_projects = store.pinned.clone();
-        let total = store.sessions.iter().filter(|s| s.meta.kind != SessionKind::Design).count();
+        let total = store.sessions.iter().filter(|s| s.meta.kind != SessionKind::Design && s.meta.parent.is_none() && store.workspace_of(&s.meta) == active_ws.map(|a| a.0)).count();
+        // Switching workspaces slides the list in from the side you moved towards.
+        if active_ws != self.shown_workspace {
+            if let (Some((_, from)), Some((_, to))) = (self.shown_workspace, active_ws) {
+                self.slide = if to >= from { 1. } else { -1. };
+            }
+            self.shown_workspace = active_ws;
+        }
+        let slide = self.slide;
+        let list_key = active_ws.map(|a| a.0.to_string()).unwrap_or_default();
         let sessions = store.sessions.clone();
         let mode = self.mode;
         let weak = cx.entity().downgrade();
@@ -513,7 +698,7 @@ impl Render for Sidebar {
         if groups.is_empty() && self.drafts.is_empty() {
             list = list.child(empty_state(
                 "message-square-plus",
-                if total == 0 { "No chats yet" } else { "No matches" },
+                if total == 0 { if multi { "No chats in this workspace" } else { "No chats yet" } } else { "No matches" },
                 if total == 0 { "Start a chat with any installed agent." } else { "Try a different search." },
                 cx,
             ));
@@ -577,7 +762,7 @@ impl Render for Sidebar {
                         let kids: Vec<SessionMeta> = st.children(m.id).into_iter().map(|s| s.meta.clone()).collect();
                         (st.subagent_counts(m.id), kids)
                     };
-                    list = list.child(self.render_row(m, counts, cx));
+                    list = list.child(self.render_row(m, counts, &others, cx));
                     if !kids.is_empty() && !self.folded.contains(&m.id) {
                         for k in &kids {
                             list = list.child(self.render_child(k, cx));
@@ -589,6 +774,13 @@ impl Render for Sidebar {
 
         let design_nav = self.render_design_nav(&sessions, cx);
         let projects_nav = self.render_projects_nav(cx);
+        let workspaces_nav = self.render_workspaces_nav(cx);
+        let switcher = self.render_switcher(cx);
+        let list = div().child(list).with_animation(
+            ElementId::Name(format!("ws-list-{list_key}").into()),
+            Animation::new(std::time::Duration::from_millis(220)).with_easing(ease_out_quint()),
+            move |d, t| d.opacity(0.3 + 0.7 * t).ml(sz((1.0 - t) * 14.0 * slide)),
+        );
         v_flex()
             .size_full()
             .child(
@@ -638,7 +830,7 @@ impl Render for Sidebar {
                                     .child(icon("globe").size(sz(15.)).text_color(pal.text_muted)),
                             )
                     )
-                    .child(v_flex().gap(sz(2.)).child(design_nav).child(projects_nav))
+                    .child(v_flex().gap(sz(2.)).child(design_nav).child(projects_nav).child(workspaces_nav))
                     .child(
                         h_flex()
                             .gap(sz(4.))
@@ -718,6 +910,7 @@ impl Render for Sidebar {
                         .child(projects),
                 )
             })
+            .child(switcher)
     }
 }
 

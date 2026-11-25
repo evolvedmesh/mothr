@@ -7,6 +7,7 @@ pub mod files;
 pub mod hub;
 pub mod session;
 pub mod usage;
+pub mod workspace;
 
 pub use agent::*;
 pub use config::*;
@@ -15,3 +16,4 @@ pub use files::*;
 pub use hub::*;
 pub use session::*;
 pub use usage::*;
+pub use workspace::*;

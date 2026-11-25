@@ -3,6 +3,7 @@
 use crate::agent::{AgentInstall, AgentKind, PermissionMode};
 use crate::session::{ModelInfo, SessionCommand, SessionEvent, SessionId, SessionKind, SessionMeta, SessionState};
 use crate::usage::ProviderUsage;
+use crate::workspace::{Workspace, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -65,6 +66,9 @@ pub enum AppCommand {
         context: Option<String>,
         #[serde(default)]
         prompt: Option<String>,
+        /// Where the chat goes; None = the workspace open on the desktop.
+        #[serde(default)]
+        workspace: Option<WorkspaceId>,
     },
     Session {
         id: SessionId,
@@ -83,6 +87,18 @@ pub enum AppCommand {
     MarkRead { id: SessionId },
     Delete { id: SessionId },
     PinProject { path: PathBuf, pinned: bool },
+    /// Add a workspace (the caller picks its id). At most [`crate::MAX_WORKSPACES`].
+    CreateWorkspace { workspace: Workspace },
+    /// Rename a workspace or change its icon.
+    UpdateWorkspace { workspace: Workspace },
+    /// Remove a workspace; its chats move to the first one left. The last one can't go.
+    DeleteWorkspace { id: WorkspaceId },
+    /// Move a workspace to `index` in the order.
+    MoveWorkspace { id: WorkspaceId, index: usize },
+    /// Move a chat (and its subagents) to another workspace.
+    SetWorkspace { id: SessionId, workspace: WorkspaceId },
+    /// Remember which workspace the desktop shows; new chats without one go there.
+    SelectWorkspace { id: WorkspaceId },
     RefreshUsage,
     RescanAgents,
     RescanProjects,
@@ -104,6 +120,8 @@ pub enum HubEvent {
     /// Project index finished (re)scanning.
     ProjectsIndexed { count: usize },
     Toast { level: crate::session::NoticeLevel, text: String },
+    /// The workspaces changed (added, renamed, removed, reordered or selected).
+    Workspaces { workspaces: Vec<Workspace>, active: Option<WorkspaceId> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -116,6 +134,12 @@ pub struct HubSnapshot {
     /// Last known model list per agent, so pickers work before the first chat.
     #[serde(default)]
     pub agent_models: BTreeMap<AgentKind, Vec<ModelInfo>>,
+    /// In order; never empty once the hub has started.
+    #[serde(default)]
+    pub workspaces: Vec<Workspace>,
+    /// The workspace the desktop shows.
+    #[serde(default)]
+    pub active_workspace: Option<WorkspaceId>,
 }
 
 /// Implemented by the hub; consumed by the GPUI app and the remote server.

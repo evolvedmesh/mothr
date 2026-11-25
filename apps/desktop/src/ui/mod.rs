@@ -17,6 +17,7 @@ pub mod theme;
 pub mod tokens;
 pub mod usage;
 pub mod workspace;
+pub mod workspaces;
 
 pub fn init(cx: &mut gpui_kit::App) {
     picker::init(cx);
