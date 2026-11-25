@@ -656,13 +656,21 @@ impl ChatView {
                     .items_end()
                     .gap(sz(4.))
                     .child(
+                        // A row gives the bubble a definite width to wrap in: it takes what its
+                        // text needs, up to 82% of the transcript, and long lines wrap inside it
+                        // instead of pushing it out over the sidebar.
+                        h_flex().w_full().justify_end().child(
                         v_flex()
+                            .flex_shrink(1.)
+                            .min_w_0()
                             .max_w(relative(0.82))
                             .gap_1()
                             .items_end()
                             .child({
                                 let state = self.markdown_for(id, &user_markdown(text), cx);
                                 div()
+                                    .max_w_full()
+                                    .min_w_0()
                                     .px(sz(16.))
                                     .py(sz(10.))
                                     .rounded(sz(tokens::radius::XL))
@@ -682,6 +690,7 @@ impl ChatView {
                             .when(attachments.iter().any(|a| !is_image(&a.path)), |d| {
                                 d.child(h_flex().gap_1().flex_wrap().children(attachments.iter().filter(|a| !is_image(&a.path)).map(|a| file_chip(&a.path, cx))))
                             }),
+                        ),
                     )
                     .child(
                         h_flex()
