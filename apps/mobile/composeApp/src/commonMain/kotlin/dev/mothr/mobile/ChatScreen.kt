@@ -82,6 +82,7 @@ import dev.mothr.mobile.resources.ic_arrow_down
 import dev.mothr.mobile.resources.ic_arrow_left
 import dev.mothr.mobile.resources.ic_arrow_up
 import dev.mothr.mobile.resources.ic_book_open
+import dev.mothr.mobile.resources.ic_gauge
 import dev.mothr.mobile.resources.ic_bot
 import dev.mothr.mobile.resources.ic_brain
 import dev.mothr.mobile.resources.ic_check
@@ -154,20 +155,26 @@ private fun TopBar(model: AppModel, chat: ChatDetail?) {
                 }
             }
         }
-        chat.creditsLabel?.let {
-            Pill(it)
-            Spacer(Modifier.width(6.dp))
-        }
-        if (chat.contextLabel.isNotEmpty()) {
+        // Context and credits in one control; tapping opens this chat's usage and the account limits.
+        if (chat.contextLabel.isNotEmpty() || chat.creditsLabel != null) {
             Row(
-                Modifier.clip(Radius.full).background(pal.surfaceHover).padding(horizontal = 9.dp, vertical = 6.dp),
+                Modifier.clip(Radius.full).background(pal.surfaceHover).tap(shape = Radius.full) { model.showUsage = true }
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                val f = chat.contextFraction
-                Ring(f, if (f >= 0.9f) pal.danger else if (f >= 0.75f) pal.warning else pal.textMuted, size = 14.dp, stroke = 2.dp)
-                Text("${(f * 100).toInt()}%", style = type.caption)
+                if (chat.contextLabel.isNotEmpty()) {
+                    val f = chat.contextFraction
+                    Ring(f, if (f >= 0.9f) pal.danger else if (f >= 0.75f) pal.warning else pal.textMuted, size = 14.dp, stroke = 2.dp)
+                    Text("${(f * 100).toInt()}%", style = type.caption)
+                }
+                chat.creditsLabel?.let {
+                    if (chat.contextLabel.isNotEmpty()) Box(Modifier.size(width = 1.dp, height = 12.dp).background(pal.borderStrong))
+                    Text(it, style = type.caption)
+                }
             }
+        } else {
+            IconBtn(Res.drawable.ic_gauge, tint = pal.textMuted) { model.showUsage = true }
         }
     }
     Box(Modifier.fillMaxWidth().height(1.dp).background(pal.border))

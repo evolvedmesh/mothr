@@ -108,6 +108,14 @@ pub fn panel(store: &Store, current: Option<&SessionMeta>, on_refresh: impl Fn(&
                 .gap_2()
                 .child(section_label("THIS CHAT", cx))
                 .child(context_row(&c, cx))
+                .when_some(c.credits, |d, credits| {
+                    d.child(
+                        h_flex()
+                            .text_xs()
+                            .child(div().flex_1().font_weight(FontWeight::MEDIUM).child("AI credits used"))
+                            .child(div().text_color(theme.muted_foreground).child(format_credits(credits))),
+                    )
+                })
                 .when_some(c.cost_usd, |d, cost| {
                     d.child(div().text_xs().text_color(theme.muted_foreground).child(format!("Session cost ${cost:.2}")))
                 }),

@@ -303,12 +303,63 @@ fun UsageSheet(model: AppModel) {
     Sheet({ model.showUsage = false }) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Limits", style = type.title, modifier = Modifier.weight(1f))
+                Text("Usage & limits", style = type.title, modifier = Modifier.weight(1f))
                 IconBtn(Res.drawable.ic_refresh_cw) { model.act { refreshUsage() } }
             }
             Spacer(Modifier.height(8.dp))
+            // Opened from a chat: what this chat has used comes first.
+            val chat = model.openChat.takeIf { model.stack.isNotEmpty() }
+            if (chat != null) {
+                Spacer(Modifier.height(6.dp))
+                Text("THIS CHAT", style = type.caption.copy(color = pal.textFaint))
+                Spacer(Modifier.height(8.dp))
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                            AgentAvatar(chat.summary.agent, 30.dp)
+                            Column(Modifier.weight(1f)) {
+                                Text(chat.summary.title, style = type.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    chat.models.firstOrNull { it.id == chat.model }?.name ?: chat.model ?: chat.summary.agent.name,
+                                    style = type.caption.copy(color = pal.textFaint),
+                                )
+                            }
+                        }
+                        val f = chat.contextFraction
+                        val level = if (f >= 0.9f) "critical" else if (f >= 0.75f) "warn" else "ok"
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Context", style = type.body, modifier = Modifier.weight(1f))
+                                Text(
+                                    if (chat.contextLabel.isNotEmpty()) "${chat.contextLabel} · ${(f * 100).toInt()}%" else "—",
+                                    style = type.caption.copy(color = pal.textMuted),
+                                )
+                            }
+                            Meter(f, levelColor(level, pal), Modifier.fillMaxWidth())
+                        }
+                        chat.creditsLabel?.let {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("AI credits used", style = type.body)
+                                    Text("GitHub Copilot bills this chat in AIC", style = type.caption.copy(color = pal.textFaint))
+                                }
+                                Text(it, style = type.label)
+                            }
+                        }
+                        chat.costLabel?.let {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Session cost", style = type.body, modifier = Modifier.weight(1f))
+                                Text(it, style = type.label)
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("ACCOUNTS", style = type.caption.copy(color = pal.textFaint))
+            }
             if (model.usage.isEmpty()) Text("No limit data yet.", style = type.body.copy(color = pal.textMuted))
-            model.usage.forEach { u ->
+            // The chat's own agent first.
+            model.usage.sortedBy { if (chat != null && it.agent.id == chat.summary.agent.id) 0 else 1 }.forEach { u ->
                 Spacer(Modifier.height(14.dp))
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

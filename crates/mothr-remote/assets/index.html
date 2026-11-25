@@ -202,7 +202,8 @@ details[open]>summary .chev{transform:rotate(90deg)}
 .comp-meta{display:flex;align-items:center;gap:10px;margin-bottom:7px;font-size:12px;color:var(--mut)}
 .sel{appearance:none;-webkit-appearance:none;background:var(--card2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 7px center/12px;border:1px solid var(--line);border-radius:9px;padding:4px 24px 4px 9px;font-size:12.5px}
 .sel.danger{color:var(--crit)}
-.ctx{display:flex;align-items:center;gap:7px;margin-left:auto;white-space:nowrap}
+.ctx{display:flex;align-items:center;gap:7px;margin-left:auto;white-space:nowrap;cursor:pointer;border-radius:9px;padding:3px 6px}
+.ctx:hover{background:var(--card2)}
 .meter{width:64px;height:5px;border-radius:9px;background:var(--card2);overflow:hidden}
 .meter i{display:block;height:100%;background:var(--ok);border-radius:9px;transition:width .4s var(--ease)}
 .meter.warn i{background:var(--warn)}.meter.crit i{background:var(--crit)}
@@ -281,7 +282,7 @@ textarea.field{resize:vertical;min-height:84px}
       <div class="qdock" id="qdock"></div>
       <div class="comp-in">
         <div id="banner"></div>
-        <div class="comp-meta"><select class="sel" id="mode" aria-label="Permission mode"></select><div class="ctx" id="ctx"></div></div>
+        <div class="comp-meta"><select class="sel" id="mode" aria-label="Permission mode"></select><div class="ctx" id="ctx" data-act="usage" title="Usage &amp; limits"></div></div>
         <div class="comp-row">
           <textarea id="prompt" rows="1" placeholder="Message…" enterkeyhint="send"></textarea>
           <button class="round" id="stop" data-act="stop" title="Stop"><svg class="i" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg></button>
@@ -594,8 +595,26 @@ function renderUsage() {
     return `<button class="pill ${level(w.used_fraction)}" data-act="usage" title="${esc(a.short)} ${esc(w.label)}"><span class="dot" style="background:${a.color}"></span>${esc(a.short)} <b>${pct(w.used_fraction)}%</b></button>`;
   }).join('');
 }
+/** Like mothr_core::format_credits: "6.2 AIC", "0.04 AIC", "212 AIC". */
+function fmtCredits(c) {
+  const n = c >= 100 ? c.toFixed(0) : c >= 1 ? c.toFixed(1) : c.toFixed(2);
+  return `${n} AIC`;
+}
 function showUsage() {
-  const body = S.usage.map((u) => {
+  // From a chat, what it has used comes first, then the accounts (its own agent's on top).
+  const s = S.current && S.sessions.get(S.current);
+  let mine = '';
+  if (s) {
+    const c = s.meta.context || {}, f = c.window_tokens ? c.used_tokens / c.window_tokens : 0;
+    const ctx = c.window_tokens ? `${fmtTok(c.used_tokens)} / ${fmtTok(c.window_tokens)}` : c.used_tokens ? `${fmtTok(c.used_tokens)} tokens` : '—';
+    mine = `<div class="uprov"><div class="rowx">${badge(s.meta.agent, 's')}<div><b>This chat</b> <span style="color:var(--dim)">${esc(s.meta.model || '')}</span></div></div>
+      <div class="uwin"><span>Context</span><b>${ctx}</b><div class="meter ${level(f)}"><i style="width:${Math.min(100, pct(f))}%"></i></div></div>
+      ${c.credits != null ? `<div class="uwin"><span>AI credits used</span><b>${fmtCredits(c.credits)}</b></div>` : ''}
+      ${c.cost_usd != null ? `<div class="uwin"><span>Session cost</span><b>$${c.cost_usd.toFixed(2)}</b></div>` : ''}</div>`;
+  }
+  const own = s ? s.meta.agent : null;
+  const list = S.usage.slice().sort((x, y) => (PROVIDER_AGENT[y.provider] === own) - (PROVIDER_AGENT[x.provider] === own));
+  const body = mine + list.map((u) => {
     const a = agentOf(PROVIDER_AGENT[u.provider]);
     const wins = (u.windows || []).map((w) => {
       const abs = w.used != null && w.limit != null ? ` · ${Math.round(w.used)} / ${Math.round(w.limit)}` : '';
@@ -605,7 +624,7 @@ function showUsage() {
     return `<div class="uprov"><div class="rowx">${badge(PROVIDER_AGENT[u.provider], 's')}<div><b>${esc(a.short)}</b> <span style="color:var(--dim)">${esc(u.plan || '')}</span></div></div>
       ${u.error ? `<div class="notice warning" style="margin-top:8px">${esc(u.error)}</div>` : ''}${wins || (u.error ? '' : '<div style="color:var(--dim);font-size:13px;margin-top:6px">No limits reported</div>')}</div>`;
   }).join('') || '<p style="color:var(--mut)">No usage data yet.</p>';
-  openSheet(`<h2>Usage limits</h2>${body}<div class="opts" style="padding:14px 0 0"><button class="btn" data-act="refresh-usage">${ic('refresh', 'sm')} Refresh</button></div>`);
+  openSheet(`<h2>Usage &amp; limits</h2>${body}<div class="opts" style="padding:14px 0 0"><button class="btn" data-act="refresh-usage">${ic('refresh', 'sm')} Refresh</button></div>`);
 }
 
 /* ======================= session list ======================= */
@@ -710,7 +729,8 @@ function renderChrome() {
   sel.classList.toggle('danger', m.permission_mode === 'allow_all');
   const c = m.context || {}, f = c.window_tokens ? c.used_tokens / c.window_tokens : 0;
   $('#ctx').innerHTML = (c.window_tokens ? `<div class="meter ${level(f)}" title="Context window"><i style="width:${Math.min(100, pct(f))}%"></i></div><span>${fmtTok(c.used_tokens)} / ${fmtTok(c.window_tokens)}</span>` : c.used_tokens ? `<span>${fmtTok(c.used_tokens)} tokens</span>` : '')
-    + (c.cost_usd != null ? `<span>$${c.cost_usd.toFixed(2)}</span>` : '');
+    + (c.cost_usd != null ? `<span>$${c.cost_usd.toFixed(2)}</span>` : '')
+    + (c.credits != null ? `<span title="GitHub Copilot AI credits this chat has used">${fmtCredits(c.credits)}</span>` : '');
   const busy = st === 'working' || st === 'needs_input' || st === 'starting';
   $('#stop').classList.toggle('show', busy);
   $('#banner').innerHTML = st === 'ended' || st === 'error'
