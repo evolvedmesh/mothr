@@ -69,6 +69,13 @@ struct Driver {
     unbound: Vec<String>,
     /// Every subagent tool call seen (so each is announced once).
     spawned: std::collections::HashSet<String>,
+    /// Subagents started in background mode. Their tool call completes as soon as they are
+    /// launched; they keep working until Copilot logs `subagent.completed`.
+    background: std::collections::HashSet<String>,
+    /// Background subagents launched and not finished yet.
+    running_bg: std::collections::HashSet<String>,
+    /// How far the session log has been read for subagent completions.
+    bg_log_pos: u64,
     /// Message segment being streamed per subagent (agents interleave, so each needs its own).
     sub_segments: HashMap<String, (EntryId, bool)>,
     /// Tool call → the subagent it belongs to.
@@ -185,6 +192,9 @@ pub async fn run(
         unbound: vec![],
         spawned: Default::default(),
         sub_segments: HashMap::new(),
+        background: Default::default(),
+        running_bg: Default::default(),
+        bg_log_pos: 0,
         tool_targets: HashMap::new(),
         sub_stats: HashMap::new(),
         tools: HashMap::new(),
@@ -223,7 +233,12 @@ pub async fn run(
     credit_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
-            _ = credit_tick.tick(), if d.turn_active && d.spec.agent == AgentKind::Copilot => d.refresh_credits(false),
+            _ = credit_tick.tick(), if (d.turn_active || !d.running_bg.is_empty()) && d.spec.agent == AgentKind::Copilot => {
+                if d.turn_active {
+                    d.refresh_credits(false);
+                }
+                d.check_background();
+            }
             line = lines.next_line() => match line {
                 Ok(Some(l)) if !l.trim().is_empty() => match crate::claude::parse_traced(&l) {
                     Ok(v) => d.on_message(v).await,
@@ -1099,6 +1114,9 @@ impl Driver {
             && self.spawned.insert(id.clone())
         {
             self.unbound.push(id.clone());
+            if raw["mode"].as_str() == Some("background") {
+                self.background.insert(id.clone());
+            }
             self.em.emit(SessionEvent::SubagentStarted {
                 tool_use_id: id.clone(),
                 task_id: None,
@@ -1113,8 +1131,21 @@ impl Driver {
             self.out(&target, SessionEvent::Upsert { entry });
         }
         if self.spawned.contains(&id) && matches!(call.status, ToolStatus::Completed | ToolStatus::Failed) {
-            let status = if call.status == ToolStatus::Failed { "failed" } else { "completed" };
-            self.em.emit(SessionEvent::SubagentFinished { tool_use_id: id.clone(), status: status.to_string() });
+            let launched = call.output.as_deref().and_then(background_agent_id);
+            if call.status == ToolStatus::Completed && (self.background.contains(&id) || launched.is_some()) {
+                // Only launched: the subagent runs on until the session log says it's done.
+                if let Some(agent) = launched {
+                    self.unbound.retain(|u| *u != id);
+                    self.agents.insert(agent, id.clone());
+                }
+                if self.running_bg.is_empty() {
+                    self.bg_log_pos = self.session_log_len().saturating_sub(1 << 20);
+                }
+                self.running_bg.insert(id.clone());
+            } else {
+                let status = if call.status == ToolStatus::Failed { "failed" } else { "completed" };
+                self.em.emit(SessionEvent::SubagentFinished { tool_use_id: id.clone(), status: status.to_string() });
+            }
         }
         if !matches!(call.status, ToolStatus::Completed | ToolStatus::Failed) {
             self.tools.insert(id, call);
@@ -1122,6 +1153,32 @@ impl Driver {
         // The last running tool call finished: this is where a steering message cuts in.
         if self.steer_pending && self.tools.is_empty() {
             self.cancel_turn();
+        }
+    }
+
+    fn session_log(&self) -> Option<PathBuf> {
+        let sid = self.session_id.as_deref()?;
+        let home = std::env::var_os("COPILOT_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".copilot")))?;
+        Some(home.join("session-state").join(sid).join("events.jsonl"))
+    }
+
+    fn session_log_len(&self) -> u64 {
+        self.session_log().and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len()).unwrap_or(0)
+    }
+
+    /// Finish the background subagents Copilot has logged as done since the last look.
+    fn check_background(&mut self) {
+        if self.running_bg.is_empty() {
+            return;
+        }
+        let Some(path) = self.session_log() else { return };
+        let Some((done, pos)) = subagent_endings_since(&path, self.bg_log_pos) else { return };
+        self.bg_log_pos = pos;
+        for (tool, status) in done {
+            if self.running_bg.remove(&tool) {
+                self.end_segment_for(&Some(tool.clone()));
+                self.em.emit(SessionEvent::SubagentFinished { tool_use_id: tool, status });
+            }
         }
     }
 
@@ -1320,6 +1377,47 @@ fn content_text(c: &Value) -> String {
 }
 
 
+/// The agent id in Copilot's reply to a background `task` call
+/// ("Agent started in background with agent_id: <id>. …").
+fn background_agent_id(output: &str) -> Option<String> {
+    if !output.contains("started in background") {
+        return None;
+    }
+    let rest = &output[output.find("agent_id:")? + "agent_id:".len()..];
+    let id: String = rest.trim_start().chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    (!id.is_empty()).then_some(id)
+}
+
+/// Subagents that ended in a Copilot session log after byte `from`: (spawning tool call,
+/// "completed" | "failed"), and where the log was read up to (only whole lines).
+fn subagent_endings_since(path: &std::path::Path, from: u64) -> Option<(Vec<(String, String)>, u64)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let from = from.min(len);
+    f.seek(SeekFrom::Start(from)).ok()?;
+    let mut bytes = Vec::new();
+    f.take(len - from).read_to_end(&mut bytes).ok()?;
+    let whole = bytes.iter().rposition(|b| *b == b'\n').map(|i| i + 1).unwrap_or(0);
+    let mut out = vec![];
+    for line in String::from_utf8_lossy(&bytes[..whole]).lines() {
+        if !line.contains("\"subagent.") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let kind = v["type"].as_str().unwrap_or("");
+        let status = match kind {
+            "subagent.completed" => "completed",
+            k if k.starts_with("subagent.") && ["fail", "error", "cancel", "abort", "kill"].iter().any(|w| k.contains(w)) => "failed",
+            _ => continue,
+        };
+        if let Some(tool) = v["data"]["toolCallId"].as_str() {
+            out.push((tool.to_string(), status.to_string()));
+        }
+    }
+    Some((out, from + whole as u64))
+}
+
 /// The tool call that spawned a Copilot subagent, from its session log (`subagent.started`).
 fn copilot_subagent_tool(session_id: &str, agent_id: &str) -> Option<String> {
     let home = std::env::var_os("COPILOT_HOME").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join(".copilot")))?;
@@ -1399,6 +1497,31 @@ mod tests {
         assert_eq!(subagent_tool_in(&home, "s1", "agent-2").as_deref(), Some("toolu_b"));
         assert_eq!(subagent_tool_in(&home, "s1", "agent-9"), None);
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn a_background_subagent_ends_when_the_log_says_so() {
+        let out = "Agent started in background with agent_id: 9372-dc75_a. You'll be notified when it completes.";
+        assert_eq!(background_agent_id(out).as_deref(), Some("9372-dc75_a"));
+        assert_eq!(background_agent_id("3 lines"), None);
+        let dir = std::env::temp_dir().join(format!("mothr-copilot-bg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("events.jsonl");
+        let started = r#"{"type":"subagent.started","data":{"toolCallId":"toolu_a"},"agentId":"a"}"#;
+        std::fs::write(&path, format!("{started}\n")).unwrap();
+        let (done, pos) = subagent_endings_since(&path, 0).unwrap();
+        assert!(done.is_empty());
+        // A half-written line waits for the next look.
+        let more = [
+            r#"{"type":"subagent.completed","data":{"toolCallId":"toolu_a"},"agentId":"a"}"#,
+            r#"{"type":"subagent.failed","data":{"toolCallId":"toolu_b"},"agentId":"b"}"#,
+        ];
+        std::fs::write(&path, format!("{started}\n{}\n{}\n{{\"type\":\"subagent.comp", more[0], more[1])).unwrap();
+        let (done, pos2) = subagent_endings_since(&path, pos).unwrap();
+        assert_eq!(done, vec![("toolu_a".into(), "completed".into()), ("toolu_b".into(), "failed".into())]);
+        let (done, _) = subagent_endings_since(&path, pos2).unwrap();
+        assert!(done.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
