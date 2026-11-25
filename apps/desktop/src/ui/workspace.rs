@@ -10,6 +10,7 @@ use super::picker::{PickerEvent, ProjectPicker};
 use super::projects::{Location, ProjectsEvent, ProjectsPage};
 use super::settings::SettingsView;
 use super::sidebar::{DraftRow, Sidebar, SidebarEvent};
+use super::skills::SkillsPage;
 use super::usage;
 use super::workspaces::{WorkspacesEvent, WorkspacesPage};
 use super::{theme, tokens};
@@ -45,6 +46,7 @@ pub enum Route {
     Designs,
     Projects,
     Workspaces,
+    Skills,
     Settings,
 }
 
@@ -59,6 +61,7 @@ enum Place {
     /// The list, or a folder or file of one project.
     Projects(Option<(PathBuf, Location)>),
     Workspaces,
+    Skills,
 }
 
 /// Back/forward through the places visited, like a browser.
@@ -96,6 +99,7 @@ pub struct Workspace {
     designs: Entity<DesignsPage>,
     projects: Entity<ProjectsPage>,
     workspaces: Entity<WorkspacesPage>,
+    skills: Entity<SkillsPage>,
     /// The chat each workspace had open, to come back to it when you switch back.
     workspace_chats: HashMap<WorkspaceId, SessionId>,
     chats: HashMap<SessionId, Entity<ChatView>>,
@@ -122,6 +126,7 @@ impl Workspace {
         let designs = cx.new(|cx| DesignsPage::new(store.clone(), window, cx));
         let projects = cx.new(|cx| ProjectsPage::new(store.clone(), window, cx));
         let workspaces = cx.new(|cx| WorkspacesPage::new(store.clone(), window, cx));
+        let skills = cx.new(|cx| SkillsPage::new(store.clone(), window, cx));
         let mut subs = vec![];
         subs.push(cx.subscribe_in(&sidebar, window, |this, _, ev: &SidebarEvent, window, cx| match ev {
             SidebarEvent::Open(id) => this.open_session(*id, window, cx),
@@ -134,6 +139,7 @@ impl Workspace {
             SidebarEvent::OpenDraft(id) => this.open_draft(*id, window, cx),
             SidebarEvent::DiscardDraft(id) => this.discard_draft(*id, window, cx),
             SidebarEvent::OpenWorkspaces => this.open_workspaces(window, cx),
+            SidebarEvent::OpenSkills => this.open_skills(window, cx),
             SidebarEvent::SwitchWorkspace(id) => this.switch_workspace(*id, window, cx),
             SidebarEvent::NewWorkspace => {
                 this.open_workspaces(window, cx);
@@ -217,6 +223,7 @@ impl Workspace {
             designs,
             projects,
             workspaces,
+            skills,
             workspace_chats: HashMap::new(),
             chats: HashMap::new(),
             settings_view: None,
@@ -343,6 +350,7 @@ impl Workspace {
             Route::Designs => Place::Designs(self.designs.read(cx).place(cx)),
             Route::Projects => Place::Projects(self.projects.read(cx).place(cx)),
             Route::Workspaces => Place::Workspaces,
+            Route::Skills => Place::Skills,
         }
     }
 
@@ -393,6 +401,7 @@ impl Workspace {
                 self.projects.update(cx, |pr, cx| pr.restore(p, window, cx));
             }
             Place::Workspaces => self.open_workspaces(window, cx),
+            Place::Skills => self.open_skills(window, cx),
         }
     }
 
@@ -421,7 +430,8 @@ impl Workspace {
         let designs = route == Route::Designs;
         let projects = route == Route::Projects;
         let workspaces = route == Route::Workspaces;
-        self.sidebar.update(cx, |s, cx| s.set_active(active, designs, projects, workspaces, cx));
+        let skills = route == Route::Skills;
+        self.sidebar.update(cx, |s, cx| s.set_active(active, designs, projects, workspaces, skills, cx));
         self.refresh_drafts(cx);
         cx.notify();
     }
@@ -447,6 +457,15 @@ impl Workspace {
     fn open_workspaces(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.navigate(Route::Workspaces, window, cx);
         self.workspaces.update(cx, |w, cx| w.focus(window, cx));
+    }
+
+    /// The skill library and discovery.
+    fn open_skills(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate(Route::Skills, window, cx);
+        self.skills.update(cx, |s, cx| {
+            s.refresh(cx);
+            s.focus(window, cx);
+        });
     }
 
     /// Make `id` the workspace on screen. A chat from another workspace gives way to the one
@@ -634,6 +653,14 @@ impl Workspace {
             Some("designs") => this.open_designs(window, cx),
             Some("projects") => this.open_projects(window, cx),
             Some("workspaces") => this.open_workspaces(window, cx),
+            Some("skills") => this.open_skills(window, cx),
+            // MOTHR_OPEN=skills:discover[:<owner/repo>] opens Discover (browsing a popular repo);
+            // skills:search:<query> searches.
+            Some(p) if p.starts_with("skills:discover") || p.starts_with("skills:search:") => {
+                this.open_skills(window, cx);
+                let repo = p.strip_prefix("skills:discover:").or(p.strip_prefix("skills:")).filter(|r| *r != "discover").map(str::to_string);
+                this.skills.update(cx, |s, cx| s.open_discover(repo.as_deref(), window, cx));
+            }
             // MOTHR_OPEN=image:<path> opens the image viewer (for screenshots).
             Some(p) if p.starts_with("image:") => {
                 let path = PathBuf::from(&p["image:".len()..]);
@@ -816,6 +843,7 @@ impl Render for Workspace {
             Route::Designs => self.designs.clone().into_any_element(),
             Route::Projects => self.projects.clone().into_any_element(),
             Route::Workspaces => self.workspaces.clone().into_any_element(),
+            Route::Skills => self.skills.clone().into_any_element(),
             Route::Settings => match &self.settings_view {
                 Some(s) => s.clone().into_any_element(),
                 None => div().into_any_element(),
@@ -828,6 +856,7 @@ impl Render for Workspace {
             Route::Designs => "designs".into(),
             Route::Projects => "projects".into(),
             Route::Workspaces => "workspaces".into(),
+            Route::Skills => "skills".into(),
             Route::Settings => "settings".into(),
         };
         let sidebar_right = tokens::appearance().sidebar_side == Side::Right;
@@ -880,6 +909,7 @@ impl Render for Workspace {
                 Route::Designs => this.designs.update(cx, |d, cx| d.focus(window, cx)),
                 Route::Projects => this.projects.update(cx, |p, cx| p.focus(window, cx)),
                 Route::Workspaces => this.workspaces.update(cx, |w, cx| w.focus(window, cx)),
+                Route::Skills => this.skills.update(cx, |s, cx| s.focus(window, cx)),
                 _ => this.home.update(cx, |h, cx| h.focus(window, cx)),
             }))
             // bottom leaves a strip to hold them and to drag the window by.

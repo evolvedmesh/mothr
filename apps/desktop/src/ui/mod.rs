@@ -13,6 +13,7 @@ pub mod picker;
 pub mod projects;
 pub mod settings;
 pub mod sidebar;
+pub mod skills;
 pub mod theme;
 pub mod tokens;
 pub mod usage;

@@ -400,12 +400,3 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| this.navigate(Route::Settings, window, cx)))
     }
 }
-
-/// A softly pulsing status dot.
-fn pulse_dot(id: &'static str, color: Hsla) -> impl IntoElement {
-    div().flex_none().size(sz(7.)).rounded_full().bg(color).with_animation(
-        id,
-        Animation::new(Duration::from_millis(1400)).repeat().with_easing(pulsating_between(0.35, 1.0)),
-        |d, t| d.opacity(t),
-    )
-}

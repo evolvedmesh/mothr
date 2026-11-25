@@ -50,7 +50,24 @@ with the app.
     next step.
   - **Send now:** stops the current turn and sends immediately.
 - **Slash commands.** Type `/` to list the agent's own commands, with descriptions and argument
-  hints: Claude Code's commands and skills, and ACP agents' `available_commands`.
+  hints: Claude Code's commands and skills, and ACP agents' `available_commands`, plus every
+  skill in Mothr's library (tagged *skill*).
+- **Skills for every agent.** Mothr keeps one skill library (folders with a `SKILL.md`, in
+  `<data>/skills`) and gives it to every agent, including ones without skill support of their
+  own:
+  - `/name` in any chat runs a skill: Mothr sends its instructions with what you typed after
+    the name (`$ARGUMENTS` is filled in). An agent's own command of the same name wins.
+  - With *Let agents pick a skill on their own* on (the default), new chats list the enabled
+    skills in their instructions, so the agent reads one when a request fits it.
+  - The **Skills** page lists what's installed (turn skills off, update them from their source,
+    remove them) and adds more from a GitHub repo (`owner/repo`, `owner/repo@skill`, or a
+    link to a folder), any git URL, a link to a `SKILL.md`, or a folder.
+  - **Discover** searches the open skills index ([skills.sh](https://skills.sh)), browses
+    popular collections (Anthropic, Vercel, Superpowers, OpenAI, Hugging Face, Microsoft,
+    Awesome Copilot, Awesome Claude Skills), and lists skills your other agents keep on this
+    computer (`~/.claude/skills`, `~/.agents/skills`, `~/.codex/skills`, `~/.copilot/skills`,
+    OpenCode's) so you can share them with the rest. GitHub's API is used anonymously unless
+    `GITHUB_TOKEN`/`GH_TOKEN` is set or the GitHub CLI is signed in.
 - **Chats across several repos.** A chat runs in one primary repo and can work in more:
   add them under the new-chat box (any of them can be made primary there) or later from the
   `+N repos` button in the chat's header. Claude Code gets them as `--add-dir` folders (a
@@ -160,6 +177,7 @@ crates/
   mothr-projects   project discovery, fuzzy search, pins/recents
   mothr-usage      account limits for Claude / Codex / Copilot / Hermes
   mothr-design     Design-mode document model, loader, file watcher, exporters, agent instructions
+  mothr-skills     skill library: installs from GitHub, git, links and folders; skills.sh search
   mothr-remote     axum server + embedded web client, tunnels, QR
   mothr-client     remote-API client shared with the mobile app (UniFFI)
 mothr-design/      Mothr's own design system, written in its Design format
@@ -210,10 +228,11 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 ### Developer hooks
 
 - `MOTHR_HOME=<dir>`: isolated config and data.
-- `MOTHR_OPEN=settings|remote|picker|usage|latest|changes|designs|design|subagent|projects|workspaces`: open
-  a view at startup (`MOTHR_OPEN_DELAY_MS` delays it). `changes` opens the newest chat's Changes
+- `MOTHR_OPEN=settings|remote|picker|usage|latest|changes|designs|design|subagent|projects|workspaces|skills`:
+  open a view at startup (`MOTHR_OPEN_DELAY_MS` delays it). `changes` opens the newest chat's Changes
   panel; `design` opens the newest design. `project:<path>[:<file>[:full]]` opens a repo, a
-  file in it, and full screen. `image:<path>` opens the image viewer.
+  file in it, and full screen. `image:<path>` opens the image viewer. `skills:discover[:<owner/repo>]`
+  opens Discover on the Skills page, browsing a popular repo; `skills:search:<query>` searches.
 - `MOTHR_DESIGN_PAGE=overview|color|type|space|elevation|component:<n>|screen:<n>`: the page a
   design opens on. `MOTHR_DESIGN_EXPORT=menu|html|storybook` opens the export menu or exports.
 - `MOTHR_DEV_REVIEW=accept|reject`: answer the first waiting edits from the Changes panel.
@@ -228,6 +247,8 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 - `cargo run -p mothr-agents --example drive -- <agent_id> <cwd> "<prompt>" [model]`: headless
   driver smoke test.
 - `cargo run -p mothr-remote --example demo`: the remote web client against a fake hub.
+- `cargo run -p mothr-skills --example skills -- search|browse|add|local [arg]`: the skill library
+  from the shell (use a throwaway `MOTHR_HOME`).
 
 ## Known gaps
 

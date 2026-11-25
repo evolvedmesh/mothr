@@ -298,7 +298,8 @@ impl ChatView {
             return vec![];
         }
         let Some(session) = self.store.read(cx).session(self.id) else { return vec![] };
-        let commands = if session.commands.is_empty() {
+        // Until the agent reports its own commands, use the ones it had last time.
+        let commands = if !session.commands.iter().any(|c| !c.skill) {
             self.store.read(cx).known_commands(session.meta.agent)
         } else {
             session.commands.clone()
@@ -1610,6 +1611,7 @@ impl ChatView {
                         }))
                         .child(div().flex_none().text_size(sz(tokens::text::BASE)).font_family(tokens::FONT_MONO).text_color(pal.text).child(format!("/{}", c.name)))
                         .when_some(c.hint.clone(), |d, h| d.child(div().flex_none().text_size(sz(tokens::text::SM)).text_color(pal.text_faint).child(h)))
+                        .when(c.skill, |d| d.child(skill_tag(&pal)))
                         .child(div().flex_1().min_w_0().truncate().text_size(sz(tokens::text::SM)).text_color(pal.text_muted).child(c.description.clone().unwrap_or_default())),
                 );
             }

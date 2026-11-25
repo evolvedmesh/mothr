@@ -43,6 +43,11 @@ pub struct SessionSpec {
     /// More project folders the agent may work in besides `cwd`.
     pub extra_dirs: Vec<PathBuf>,
     pub title: String,
+    /// Mothr's skill library: `/name` for one of these (that the agent doesn't have itself)
+    /// sends the skill's instructions.
+    pub skills: Vec<mothr_core::Skill>,
+    /// The enabled skills, listed for the agent to pick from on its own (None: don't).
+    pub skills_note: Option<String>,
 }
 
 /// Output of a driver.

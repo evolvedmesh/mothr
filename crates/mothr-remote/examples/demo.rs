@@ -456,6 +456,7 @@ fn demo_sessions() -> Vec<SessionState> {
                 name: p.next().unwrap_or_default().into(),
                 description: p.next().map(String::from),
                 hint: p.next().filter(|h| !h.is_empty()).map(String::from),
+                skill: false,
             }
         })
         .collect();

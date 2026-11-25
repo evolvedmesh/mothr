@@ -242,6 +242,31 @@ pub fn segment(id: impl Into<ElementId>, label: impl Into<SharedString>, active:
         .child(label.into())
 }
 
+/// A softly pulsing status dot.
+pub fn pulse_dot(id: &'static str, color: Hsla) -> impl IntoElement {
+    div().flex_none().size(sz(7.)).rounded_full().bg(color).with_animation(
+        id,
+        Animation::new(std::time::Duration::from_millis(1400)).repeat().with_easing(pulsating_between(0.35, 1.0)),
+        |d, t| d.opacity(t),
+    )
+}
+
+/// The small "skill" tag on slash commands that come from Mothr's skill library.
+pub fn skill_tag(pal: &super::tokens::Palette) -> Div {
+    div()
+        .flex_none()
+        .px(sz(5.))
+        .h(sz(16.))
+        .flex()
+        .items_center()
+        .rounded(sz(super::tokens::radius::XS))
+        .border_1()
+        .border_color(pal.border_strong)
+        .text_size(sz(10.5))
+        .text_color(pal.text_faint)
+        .child("skill")
+}
+
 /// Slash commands matching `query`: prefix matches first, then substring matches.
 pub fn rank_commands(commands: &[CommandInfo], query: &str) -> Vec<CommandInfo> {
     let q = query.to_ascii_lowercase();

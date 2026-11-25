@@ -49,6 +49,7 @@ pub enum SidebarEvent {
     OpenDraft(u64),
     DiscardDraft(u64),
     OpenWorkspaces,
+    OpenSkills,
     SwitchWorkspace(WorkspaceId),
     NewWorkspace,
     RenameWorkspace(WorkspaceId),
@@ -78,6 +79,8 @@ pub struct Sidebar {
     projects_active: bool,
     /// The Workspaces page is showing.
     workspaces_active: bool,
+    /// The Skills page is showing.
+    skills_active: bool,
     /// The workspace whose chats were last drawn, and which way the list slides when it changes.
     shown_workspace: Option<(WorkspaceId, usize)>,
     slide: f32,
@@ -100,14 +103,15 @@ impl Sidebar {
                 }
             }),
         ];
-        Self { store, search, query: String::new(), mode: GroupMode::Smart, active: None, designs_active: false, projects_active: false, workspaces_active: false, shown_workspace: None, slide: 0., drafts: vec![], collapsed: Default::default(), folded: Default::default(), _subs: subs }
+        Self { store, search, query: String::new(), mode: GroupMode::Smart, active: None, designs_active: false, projects_active: false, workspaces_active: false, skills_active: false, shown_workspace: None, slide: 0., drafts: vec![], collapsed: Default::default(), folded: Default::default(), _subs: subs }
     }
 
-    pub fn set_active(&mut self, id: Option<SessionId>, designs: bool, projects: bool, workspaces: bool, cx: &mut Context<Self>) {
+    pub fn set_active(&mut self, id: Option<SessionId>, designs: bool, projects: bool, workspaces: bool, skills: bool, cx: &mut Context<Self>) {
         self.active = id;
         self.designs_active = designs;
         self.projects_active = projects;
         self.workspaces_active = workspaces;
+        self.skills_active = skills;
         cx.notify();
     }
 
@@ -262,6 +266,39 @@ impl Sidebar {
                     .child("Workspaces"),
             )
             .child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(count.to_string()))
+    }
+
+    /// The way into the Skills page.
+    fn render_skills_nav(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pal = tokens::p(cx);
+        let active = self.skills_active;
+        let store = self.store.read(cx);
+        let count = store.skills.iter().filter(|s| s.enabled).count();
+        let installing = !store.skills_installing.is_empty();
+        h_flex()
+            .id("sb-skills")
+            .relative()
+            .h(sz(34.))
+            .px(sz(10.))
+            .gap(sz(10.))
+            .items_center()
+            .rounded(sz(tokens::radius::MD))
+            .cursor_pointer()
+            .when(active, |d| d.bg(pal.surface_hover))
+            .when(!active, |d| d.hover(|d| d.bg(pal.surface_hover.opacity(0.6))))
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::OpenSkills)))
+            .when(active, |d| d.child(div().absolute().left(sz(0.)).top(sz(9.)).bottom(sz(9.)).w(sz(2.5)).rounded_full().bg(pal.brand)))
+            .child(icon("puzzle").size(sz(15.)).text_color(if active { pal.text } else { pal.text_muted }))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(sz(tokens::text::BASE))
+                    .text_color(if active { pal.text } else { pal.text.opacity(0.88) })
+                    .when(active, |d| d.font_weight(FontWeight::MEDIUM))
+                    .child("Skills"),
+            )
+            .when(installing, |d| d.child(pulse_dot("sb-skills-dot", pal.brand)))
+            .when(count > 0, |d| d.child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(count.to_string())))
     }
 
     /// The workspace switcher along the bottom: the open workspace's name (opens the overview)
@@ -775,6 +812,7 @@ impl Render for Sidebar {
         let design_nav = self.render_design_nav(&sessions, cx);
         let projects_nav = self.render_projects_nav(cx);
         let workspaces_nav = self.render_workspaces_nav(cx);
+        let skills_nav = self.render_skills_nav(cx);
         let switcher = self.render_switcher(cx);
         let list = div().child(list).with_animation(
             ElementId::Name(format!("ws-list-{list_key}").into()),
@@ -830,7 +868,7 @@ impl Render for Sidebar {
                                     .child(icon("globe").size(sz(15.)).text_color(pal.text_muted)),
                             )
                     )
-                    .child(v_flex().gap(sz(2.)).child(design_nav).child(projects_nav).child(workspaces_nav))
+                    .child(v_flex().gap(sz(2.)).child(design_nav).child(projects_nav).child(workspaces_nav).child(skills_nav))
                     .child(
                         h_flex()
                             .gap(sz(4.))

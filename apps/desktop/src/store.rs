@@ -22,6 +22,10 @@ pub struct Store {
     pub workspaces: Vec<Workspace>,
     /// The workspace on screen.
     pub active_workspace: Option<WorkspaceId>,
+    /// Mothr's skill library.
+    pub skills: Vec<Skill>,
+    /// Skill installs running now.
+    pub skills_installing: Vec<SkillSource>,
     /// Limit windows we already warned about (provider, label, level).
     warned: HashSet<(Provider, String, UsageLevel)>,
     _task: Task<()>,
@@ -72,6 +76,8 @@ impl Store {
             agent_models: BTreeMap::new(),
             workspaces: vec![],
             active_workspace: None,
+            skills: vec![],
+            skills_installing: vec![],
             _task: task,
         };
         store.apply_snapshot(snap);
@@ -94,6 +100,8 @@ impl Store {
         self.agent_models = snap.agent_models;
         self.workspaces = snap.workspaces;
         self.active_workspace = snap.active_workspace;
+        self.skills = snap.skills;
+        self.skills_installing = snap.skills_installing;
     }
 
     fn resync(&mut self, cx: &mut Context<Self>) {
@@ -173,6 +181,11 @@ impl Store {
                 self.active_workspace = active;
                 cx.emit(StoreEvent::Changed);
             }
+            HubEvent::Skills { skills, installing } => {
+                self.skills = skills;
+                self.skills_installing = installing;
+                cx.emit(StoreEvent::Changed);
+            }
         }
         cx.notify();
     }
@@ -239,14 +252,21 @@ impl Store {
             .unwrap_or_default()
     }
 
-    /// Slash commands an agent reported in its most recent chat.
+    /// Slash commands an agent reported in its most recent chat, with the skill library's.
     pub fn known_commands(&self, agent: AgentKind) -> Vec<CommandInfo> {
-        self.sessions
+        let own = self
+            .sessions
             .iter()
             .rev()
-            .find(|s| s.meta.agent == agent && !s.commands.is_empty())
+            .find(|s| s.meta.agent == agent && s.commands.iter().any(|c| !c.skill))
             .map(|s| s.commands.clone())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        merge_skill_commands(&own, &self.skills)
+    }
+
+    /// Whether `source` is being installed right now.
+    pub fn installing(&self, source: &SkillSource) -> bool {
+        self.skills_installing.contains(source)
     }
 
     /// Persist the agent/model the user just chose, if "remember" is on.

@@ -95,12 +95,26 @@ pub fn designs_dir() -> PathBuf {
     data_dir().join("designs")
 }
 
+/// Mothr's skill library: one folder per skill, each holding a `SKILL.md`.
+pub fn skills_dir() -> PathBuf {
+    data_dir().join("skills")
+}
+
 pub fn settings_path() -> PathBuf {
     config_dir().join("settings.toml")
 }
 
 pub fn home_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// Expand a leading `~` to the home directory.
+pub fn expand_tilde(path: &str) -> PathBuf {
+    match path.strip_prefix('~') {
+        Some("") => home_dir(),
+        Some(rest) if rest.starts_with(['/', '\\']) => home_dir().join(&rest[1..]),
+        _ => PathBuf::from(path),
+    }
 }
 
 /// Replace the home prefix with `~` for display.
@@ -352,6 +366,9 @@ pub struct Settings {
     pub sidebar_open: bool,
     /// Accent, tone and layout.
     pub appearance: Appearance,
+    /// List the enabled skills in every chat's instructions, so agents can pick one on their
+    /// own. Off, skills only run when typed as `/name`.
+    pub skills_auto: bool,
 }
 
 impl Default for Settings {
@@ -388,6 +405,7 @@ impl Default for Settings {
             last_contexts: BTreeMap::new(),
             sidebar_open: true,
             appearance: Appearance::default(),
+            skills_auto: true,
         }
     }
 }

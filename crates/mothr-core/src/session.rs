@@ -199,7 +199,7 @@ pub struct QueuedPrompt {
 }
 
 /// A slash command an agent offers.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct CommandInfo {
     pub name: String,
     #[serde(default)]
@@ -207,6 +207,10 @@ pub struct CommandInfo {
     /// Argument hint, e.g. "<file>".
     #[serde(default)]
     pub hint: Option<String>,
+    /// A skill from Mothr's library rather than the agent's own command; Mothr expands it
+    /// into the prompt, so it works with every agent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skill: bool,
 }
 
 /// How a prompt sent while the agent is busy should be delivered.
@@ -866,6 +870,8 @@ pub enum SessionCommand {
     /// The projects the chat covers besides its working directory changed (sent by the hub to
     /// drivers that can take them without a restart).
     SetExtraProjects { projects: Vec<PathBuf> },
+    /// Mothr's skill library changed (sent by the hub): `/name` expands with these from now on.
+    SetSkills { skills: Vec<crate::Skill> },
     Shutdown,
 }
 
@@ -1016,7 +1022,7 @@ mod tests {
     #[test]
     fn commands_and_queue_roundtrip() {
         let mut s = state();
-        s.apply(&SessionEvent::Commands { commands: vec![CommandInfo { name: "compact".into(), description: None, hint: None }] });
+        s.apply(&SessionEvent::Commands { commands: vec![CommandInfo { name: "compact".into(), ..Default::default() }] });
         assert_eq!(s.commands.len(), 1);
         s.meta.queue.push(QueuedPrompt { id: "q".into(), text: "later".into(), attachments: vec![] });
         let back: SessionState = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();

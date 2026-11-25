@@ -108,6 +108,16 @@ pub enum AppCommand {
     RefreshUsage,
     RescanAgents,
     RescanProjects,
+    /// Add skills to Mothr's library (all the skills `source` holds, or the one it names).
+    /// Runs in the background; the library comes back as [`HubEvent::Skills`].
+    InstallSkills { source: crate::SkillSource },
+    /// Fetch a skill again from where it was installed from.
+    UpdateSkill { name: String },
+    RemoveSkill { name: String },
+    /// Offer a skill to agents or not, without removing it.
+    SetSkillEnabled { name: String, enabled: bool },
+    /// Re-read the library folder (after editing skills by hand).
+    RescanSkills,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -128,6 +138,8 @@ pub enum HubEvent {
     Toast { level: crate::session::NoticeLevel, text: String },
     /// The workspaces changed (added, renamed, removed, reordered or selected).
     Workspaces { workspaces: Vec<Workspace>, active: Option<WorkspaceId> },
+    /// Mothr's skill library changed, or installs started or finished.
+    Skills { skills: Vec<crate::Skill>, installing: Vec<crate::SkillSource> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -146,6 +158,12 @@ pub struct HubSnapshot {
     /// The workspace the desktop shows.
     #[serde(default)]
     pub active_workspace: Option<WorkspaceId>,
+    /// Mothr's skill library, offered to every agent.
+    #[serde(default)]
+    pub skills: Vec<crate::Skill>,
+    /// Skill installs running now.
+    #[serde(default)]
+    pub skills_installing: Vec<crate::SkillSource>,
 }
 
 /// Implemented by the hub; consumed by the GPUI app and the remote server.

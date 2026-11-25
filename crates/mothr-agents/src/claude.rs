@@ -3,7 +3,7 @@
 use crate::{edits, summarize_input, CommandTx, Emitter, OutputTx, SessionSpec};
 use serde_json::{json, Value};
 use mothr_core::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Instant;
@@ -94,6 +94,8 @@ struct Driver {
     usage: ContextUsage,
     mode: PermissionMode,
     working: bool,
+    /// The CLI's own commands and skills; a library skill of the same name gives way to them.
+    native: HashSet<String>,
 }
 
 pub async fn run(program: PathBuf, spec: SessionSpec, mut commands: mpsc::UnboundedReceiver<SessionCommand>, out: OutputTx) {
@@ -130,8 +132,9 @@ pub async fn run(program: PathBuf, spec: SessionSpec, mut commands: mpsc::Unboun
             cmd.args(["--resume-session-at", at, "--fork-session"]);
         }
     }
-    if let Some(sp) = &spec.system_prompt {
-        cmd.args(["--append-system-prompt", sp]);
+    let system_prompt = [spec.system_prompt.as_deref(), spec.skills_note.as_deref()].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
+    if !system_prompt.is_empty() {
+        cmd.args(["--append-system-prompt", &system_prompt]);
     }
     // The chat's other projects: Claude Code may read and edit files in them too.
     for dir in &spec.extra_dirs {
@@ -207,6 +210,7 @@ pub async fn run(program: PathBuf, spec: SessionSpec, mut commands: mpsc::Unboun
         last_context: 0,
         usage: ContextUsage::default(),
         working: false,
+        native: HashSet::new(),
     };
     d.control(json!({"subtype": "initialize", "hooks": null}), Pending::Init);
 
@@ -299,7 +303,9 @@ impl Driver {
     fn on_command(&mut self, c: SessionCommand) {
         match c {
             SessionCommand::Prompt { text, attachments, delivery } => {
-                let mut content = vec![json!({"type": "text", "text": text})];
+                // `/name` for a library skill sends the skill itself; the chat shows what was typed.
+                let sent = expand_prompt(&text, &self.spec.skills, &self.native).unwrap_or_else(|| text.clone());
+                let mut content = vec![json!({"type": "text", "text": sent})];
                 for a in &attachments {
                     if let Some(img) = image_block(&a.path) {
                         content.push(img);
@@ -311,7 +317,7 @@ impl Driver {
                 self.em.emit(SessionEvent::Upsert {
                     entry: Entry::User { id: entry_id.clone(), text: text.clone(), attachments, at: chrono::Utc::now(), agent_ref: None, prev_ref: None },
                 });
-                self.pending_user.push_back((entry_id, text));
+                self.pending_user.push_back((entry_id, sent));
                 if delivery == Delivery::Interrupt && self.working {
                     // Stop the running turn first; the CLI processes our message right after.
                     self.control(json!({"subtype": "interrupt"}), Pending::Other);
@@ -387,6 +393,7 @@ impl Driver {
             }
             // Folders are given when Claude Code starts; the hub restarts the chat to change them.
             SessionCommand::SetExtraProjects { .. } => {}
+            SessionCommand::SetSkills { skills } => self.spec.skills = skills,
             SessionCommand::Shutdown => {}
         }
     }
@@ -503,12 +510,14 @@ impl Driver {
                                     name: c["name"].as_str()?.trim_start_matches('/').to_string(),
                                     description: c["description"].as_str().map(str::to_string),
                                     hint: c["argumentHint"].as_str().filter(|h| !h.is_empty()).map(str::to_string),
+                                    skill: false,
                                 })
                             })
                             .collect()
                     })
                     .unwrap_or_default();
                 if !commands.is_empty() {
+                    self.native = commands.iter().map(|c| c.name.clone()).collect();
                     self.em.emit(SessionEvent::Commands { commands });
                 }
             }

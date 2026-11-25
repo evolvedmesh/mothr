@@ -16,6 +16,10 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::{broadcast, mpsc};
 
+mod skills;
+
+pub use mothr_skills::{POPULAR as POPULAR_SKILLS, SkillCatalog};
+
 #[derive(Default)]
 struct State {
     /// Insertion-ordered sessions.
@@ -34,6 +38,10 @@ struct State {
     workspaces: Vec<Workspace>,
     /// The workspace the desktop shows; new chats without one go there.
     active_workspace: Option<WorkspaceId>,
+    /// Mothr's skill library, offered to every agent.
+    skills: Vec<Skill>,
+    /// Skill installs running now.
+    skills_installing: Vec<SkillSource>,
 }
 
 impl State {
@@ -59,6 +67,7 @@ pub struct Hub {
     projects: Arc<ProjectIndex>,
     usage: UsageFetcher,
     settings: RwLock<Settings>,
+    skills: mothr_skills::Library,
 }
 
 impl Hub {
@@ -75,10 +84,12 @@ impl Hub {
             projects: Arc::new(ProjectIndex::new()),
             usage: UsageFetcher::new(),
             settings: RwLock::new(settings),
+            skills: mothr_skills::Library::default(),
         });
         hub.load_sessions();
         hub.load_models();
         hub.load_workspaces();
+        hub.state.write().skills = hub.skills.load();
         let h = hub.clone();
         rt.spawn(async move { h.pump(driver_rx).await });
         let h = hub.clone();
@@ -234,6 +245,8 @@ impl Hub {
                     system_prompt: None,
                     extra_dirs: vec![],
                     title: "model probe".into(),
+                    skills: vec![],
+                    skills_note: None,
                 };
                 let (tx, mut rx) = mpsc::unbounded_channel();
                 let Ok(cmd) = mothr_agents::spawn(&transport, spec, tx) else { return };
@@ -549,6 +562,11 @@ impl Hub {
 
     fn on_session_event(&self, id: SessionId, event: SessionEvent) {
         let mut st = self.state.write();
+        // The library's skills join every agent's own commands in the `/` menu.
+        let event = match event {
+            SessionEvent::Commands { commands } => SessionEvent::Commands { commands: merge_skill_commands(&commands, &st.skills) },
+            e => e,
+        };
         let Some(s) = st.session_mut(id) else { return };
         let before = s.meta.status.clone();
         s.apply(&event);
@@ -810,7 +828,12 @@ impl Hub {
         if meta.kind == SessionKind::Design {
             mothr_design::ensure_scaffold(&meta.project, &meta.project_name())?;
         }
-        let default_model = self.settings.read().agents.get(&meta.agent).and_then(|o| o.default_model.clone());
+        let (default_model, skills_auto) = {
+            let s = self.settings.read();
+            (s.agents.get(&meta.agent).and_then(|o| o.default_model.clone()), s.skills_auto)
+        };
+        let skills = self.state.read().skills.clone();
+        let skills_note = if skills_auto { catalog_note(&skills) } else { None };
         let spec = SessionSpec {
             id: meta.id,
             agent: meta.agent,
@@ -825,6 +848,8 @@ impl Hub {
             system_prompt,
             extra_dirs: if meta.kind == SessionKind::Chat { meta.extra_projects.clone() } else { vec![] },
             title: meta.title.clone(),
+            skills,
+            skills_note,
         };
         let _guard = self.rt.enter();
         mothr_agents::spawn(&transport, spec, self.driver_tx.clone())
@@ -871,7 +896,9 @@ impl Hub {
         let tx = self.spawn_driver(&meta, false)?;
         let id = meta.id;
         let extra = meta.extra_projects.clone();
-        let state = SessionState::new(meta);
+        let mut state = SessionState::new(meta);
+        // Skills are in the `/` menu before the agent reports its own commands.
+        state.commands = merge_skill_commands(&[], &self.state.read().skills);
         {
             let mut st = self.state.write();
             st.sessions.push(state.clone());
@@ -1058,6 +1085,8 @@ impl Hub {
             agent_models: st.models.clone(),
             workspaces: st.workspaces.clone(),
             active_workspace: st.default_workspace(),
+            skills: st.skills.clone(),
+            skills_installing: st.skills_installing.clone(),
         }
     }
 }
@@ -1200,6 +1229,24 @@ impl HubApi for Hub {
                     h.rescan_projects();
                 }
             }
+            AppCommand::InstallSkills { source } => self.install_skills(source)?,
+            AppCommand::UpdateSkill { name } => {
+                let source = self.state.read().skills.iter().find(|s| s.name == name).map(|s| s.source.clone());
+                match source {
+                    None => anyhow::bail!("No skill named {name}"),
+                    Some(None) => anyhow::bail!("/{name} was added by hand, so there's nowhere to update it from"),
+                    Some(Some(source)) => self.install_skills(source)?,
+                }
+            }
+            AppCommand::RemoveSkill { name } => {
+                self.skills.remove(&name)?;
+                self.reload_skills();
+            }
+            AppCommand::SetSkillEnabled { name, enabled } => {
+                self.skills.set_enabled(&name, enabled)?;
+                self.reload_skills();
+            }
+            AppCommand::RescanSkills => self.reload_skills(),
         }
         Ok(None)
     }

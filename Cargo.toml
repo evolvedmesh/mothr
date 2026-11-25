@@ -17,6 +17,7 @@ mothr-usage = { path = "crates/mothr-usage" }
 mothr-design = { path = "crates/mothr-design" }
 mothr-remote = { path = "crates/mothr-remote" }
 mothr-hub = { path = "crates/mothr-hub" }
+mothr-skills = { path = "crates/mothr-skills" }
 
 gpui-kit = "0.10"
 anyhow = "1"

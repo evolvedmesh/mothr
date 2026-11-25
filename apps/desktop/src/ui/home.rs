@@ -642,6 +642,7 @@ impl Render for Home {
                             });
                         }))
                         .child(div().flex_none().text_size(sz(tokens::text::BASE)).font_family(tokens::FONT_MONO).child(format!("/{}", c.name)))
+                        .when(c.skill, |d| d.child(skill_tag(&pal)))
                         .child(div().flex_1().min_w_0().truncate().text_size(sz(tokens::text::SM)).text_color(pal.text_muted).child(c.description.clone().unwrap_or_default())),
                 );
             }

@@ -8,7 +8,7 @@ use crate::policy::{self, AutoDecision};
 use crate::{Emitter, OutputTx, SessionSpec};
 use serde_json::{json, Value};
 use mothr_core::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Instant;
@@ -40,6 +40,11 @@ struct Driver {
     /// The chat's other projects haven't been mentioned to the agent yet. ACP has no way to
     /// add folders to a session, so the next prompt carries a note naming them.
     projects_note: bool,
+    /// The skill catalog hasn't been sent yet. ACP has no system prompt, so the first prompt of
+    /// each run carries it.
+    skills_note: bool,
+    /// The agent's own commands; a library skill of the same name gives way to them.
+    native: HashSet<String>,
     writer: mpsc::UnboundedSender<String>,
     next_id: u64,
     calls: HashMap<u64, Call>,
@@ -174,6 +179,8 @@ pub async fn run(
         em: em.clone(),
         mode: spec.mode,
         projects_note: !spec.extra_dirs.is_empty(),
+        skills_note: spec.skills_note.is_some(),
+        native: HashSet::new(),
         spec,
         writer: wtx,
         next_id: 0,
@@ -400,7 +407,14 @@ impl Driver {
                 {
                     prompt.push(json!({"type": "text", "text": note}));
                 }
-                prompt.push(json!({"type": "text", "text": text}));
+                if std::mem::take(&mut self.skills_note)
+                    && let Some(note) = &self.spec.skills_note
+                {
+                    prompt.push(json!({"type": "text", "text": note}));
+                }
+                // `/name` for a library skill sends the skill itself; the chat shows what was typed.
+                let sent = expand_prompt(&text, &self.spec.skills, &self.native).unwrap_or(text);
+                prompt.push(json!({"type": "text", "text": sent}));
                 for a in attachments {
                     let uri = format!("file://{}", a.path.display());
                     let name = a.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -505,6 +519,7 @@ impl Driver {
                 self.projects_note = !projects.is_empty();
                 self.spec.extra_dirs = projects;
             }
+            SessionCommand::SetSkills { skills } => self.spec.skills = skills,
             SessionCommand::Shutdown => {}
         }
     }
@@ -918,15 +933,19 @@ impl Driver {
                                     name: c["name"].as_str()?.trim_start_matches('/').to_string(),
                                     description: c["description"].as_str().map(str::to_string),
                                     hint: c["input"]["hint"].as_str().map(str::to_string),
+                                    skill: false,
                                 })
                             })
                             .collect()
                     })
                     .unwrap_or_default();
+                self.native = commands.iter().map(|c| c.name.clone()).collect();
                 self.em.emit(SessionEvent::Commands { commands });
             }
             "session_info_update" => {
-                if let Some(t) = u["title"].as_str().filter(|t| !t.is_empty()) {
+                // An agent titling the chat from its first prompt would name it after the notes
+                // Mothr puts ahead of what you typed.
+                if let Some(t) = u["title"].as_str().filter(|t| !t.is_empty() && !t.starts_with("[Mothr]")) {
                     self.em.emit(SessionEvent::Title { title: t.to_string() });
                 }
             }

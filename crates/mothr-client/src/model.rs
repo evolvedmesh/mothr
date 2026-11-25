@@ -121,7 +121,7 @@ impl Store {
                 self.agent_models.insert(agent, models);
                 None
             }
-            HubEvent::ProjectsIndexed { .. } | HubEvent::Workspaces { .. } => None,
+            HubEvent::ProjectsIndexed { .. } | HubEvent::Workspaces { .. } | HubEvent::Skills { .. } => None,
             HubEvent::Toast { level, text } => {
                 self.toasts.push(Toast { level: level_name(level).into(), text });
                 if self.toasts.len() > 20 {

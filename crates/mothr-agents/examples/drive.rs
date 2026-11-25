@@ -12,10 +12,13 @@ async fn main() {
     let transport = install.transport.expect("not available");
     let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel();
     let meta = SessionMeta::new(kind, SessionKind::Chat, args[2].clone().into(), PermissionMode::Ask);
+    // The skill library (point MOTHR_HOME at a test profile to try `/name`).
+    let skills: Vec<Skill> = std::fs::read_dir(skills_dir()).into_iter().flatten().flatten().filter_map(|e| read_skill_dir(&e.path())).collect();
     // DRIVE_ATTACH=<image path> attaches an image to the prompt.
     let spec = SessionSpec {
         id: meta.id, agent: kind, kind: SessionKind::Chat, cwd: args[2].clone().into(), mode: PermissionMode::Ask,
         model: args.get(4).cloned(), effort: std::env::var("DRIVE_EFFORT").ok(), context: std::env::var("DRIVE_CONTEXT").ok(), resume: None, resume_at: None, system_prompt: None, extra_dirs: vec![], title: "smoke".into(),
+        skills: skills.clone(), skills_note: catalog_note(&skills),
     };
     let mut state = SessionState::new(meta);
     let cmd = spawn(&transport, spec, out_tx).unwrap();

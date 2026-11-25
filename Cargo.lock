@@ -4035,6 +4035,7 @@ dependencies = [
  "mothr-core",
  "mothr-design",
  "mothr-projects",
+ "mothr-skills",
  "mothr-usage",
  "parking_lot",
  "serde",
@@ -4079,6 +4080,24 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.28.0",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "mothr-skills"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures",
+ "mothr-core",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "tracing",
  "uuid",
 ]
