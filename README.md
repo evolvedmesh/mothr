@@ -56,10 +56,12 @@ with the app.
   Start one with the globe button, the "General" chip, the first row of the project finder, or
   `Ctrl+Shift+G`.
 - **Make it yours.** Pick an accent (eight presets or any hex color) and a surface tone
-  (Graphite, Slate, Warm, or pure Black), put the sidebar on either side, move the bar to the top
-  or bottom, and choose which bar items show and in what order: in Settings, or by
-  right-clicking the bar. The bar shows where you are, a live count of chats working or waiting
-  on you, and your limits. The phone app has its own theme, accent and tone.
+  (Graphite, Slate, Warm, or pure Black), and put the sidebar on either side. The phone app has
+  its own theme, accent and tone.
+- **No title bar.** The sidebar is the window's frame: its header finds projects and goes
+  back/forward, a live row counts chats working or waiting on you, and its footer holds your
+  limits, Mothr Remote, light/dark and Settings. Collapsed (Ctrl+B) it's a rail of the same
+  controls.
 - **Saved preferences**:
   - one app-wide default permission mode for every agent (an agent that lacks that mode falls
     back to its closest equivalent)
@@ -79,7 +81,7 @@ with the app.
   - Hermes, via `hermes usage --json`
   - context-window usage and cost per chat
   - warnings at a threshold you configure
-  - all of it lives behind one title-bar button: a sparkle plus a progress ring per agent
+  - all of it lives behind one button at the foot of the sidebar: a progress ring per agent
     account (with the agent's logo, turning amber/red near a limit). Hover it for a card with
     every account's windows and reset times; click to pin the card open.
 - **Claude Remote Control.** A per-chat toggle that hands the session to claude.ai / the Claude

@@ -41,7 +41,7 @@ pub struct Palette {
     pub dark: bool,
     /// Window background (main content area).
     pub bg: Hsla,
-    /// Chrome: sidebar and title bar.
+    /// Chrome: the sidebar, which is also the window frame.
     pub chrome: Hsla,
     /// Cards, composer, tool cards.
     pub surface: Hsla,

@@ -39,7 +39,7 @@ Mothr's design system lives in three places that stay in step:
 | Token | Dark | Light | Use |
 | --- | --- | --- | --- |
 | `bg` | `#0B0C0F` | `#FCFCFD` | Main content area |
-| `chrome` | `#0F1014` | `#F5F5F8` | Sidebar, title bar |
+| `chrome` | `#0F1014` | `#F5F5F8` | Sidebar (the window's frame) |
 | `surface` | `#14151A` | `#FFFFFF` | Cards, composer, tool cards |
 | `surface_hover` | `#1A1B21` | `#F1F1F5` | Hover, quiet fills, user bubbles |
 | `raised` | `#17181E` | `#FFFFFF` | Menus, popovers, dialogs |
@@ -67,8 +67,7 @@ The user can recolor and rearrange Mothr (Settings → Colors and layout; on the
   by the accent's luminance) follow from it.
 - **Tone**: Graphite (default), Slate (cool), Warm, or Black (pure black in dark mode). A tone
   swaps the surface ramp (`bg` … `border_strong`, `code_bg`); text and semantic colors stay.
-- **Layout**: the sidebar on the left or right, the bar at the top or bottom, and which bar
-  items show in which order.
+- **Layout**: the sidebar (and with it the window's controls) on the left or right.
 
 The presets live in `mothr_core::{Accent, Tone}` and are mirrored in the phone app's
 `Theme.kt`; change both together.
@@ -135,8 +134,8 @@ window's rem size, so text, buttons, menus and spacing grow together.
 | Composer | Raised surface. On focus its border turns violet and it glows. Shows agent, model, project and mode pickers; Enter sends. |
 | Subagent strip | Below an orchestrator's header: one chip per subagent with live status and tool and token counts. |
 | Usage meter | 5 px track, colored by usage level, with a reset countdown. |
-| Bar | The window's title / status bar, at the top or the bottom. Start: sidebar toggle, logo, back/forward. Middle: the location pill (status dot or place icon, title, project, the palette shortcut) that opens the project finder. End: a live activity pill (pulsing; violet while chats work, amber when one needs you), the limits rings, Mothr Remote, and the plain icon buttons grouped in one hairline island. Which items show, and their order within each zone, is the user's (Settings or right-click). |
-| Limits button | In the bar: one 20 px progress ring per agent account with its logo inside. Rings use the agent's tint until 75%, then amber/red. Hover shows the limits card (it opens upwards from a bottom bar); click pins it. |
+| Sidebar frame | There is no separate title bar; the sidebar is the window's frame. Header (drag to move, double-click to maximize, window buttons when Mothr draws them): the Mothr mark, then find a project, back/forward and collapse. Above the footer, while any chat works or waits on you, a live activity row (pulsing; violet working, amber needs you) that opens the first. Footer: the limits rings, Mothr Remote while it's on, and light/dark and Settings in one hairline island. Collapsed, it becomes a 52 px rail of the same controls. |
+| Limits button | At the foot of the sidebar: one 20 px progress ring per agent account with its logo inside. Rings use the agent's tint until 75%, then amber/red. Hover shows the limits card, opening upwards; click pins it beside the sidebar. |
 | Home | A time-of-day greeting over a typed headline that cycles short phrases ("Fix a bug", "Ship it"), its caret in the accent and blinking while a phrase rests; the agent and project under it; the composer docked at the bottom with the project picker below. |
 | Agent avatar | The agent's real logo on a soft tile of its brand tint (logos in `apps/desktop/assets/logos`). |
 

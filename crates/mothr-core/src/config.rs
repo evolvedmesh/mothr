@@ -275,124 +275,6 @@ pub enum Side {
     Right,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum BarPosition {
-    #[default]
-    Top,
-    Bottom,
-}
-
-/// Where an item sits in the bar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BarZone {
-    Start,
-    Center,
-    End,
-}
-
-/// Something the bar can show. The bar lists the items you keep, in your order, each in its zone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BarItem {
-    SidebarToggle,
-    Brand,
-    Navigation,
-    /// Where you are (project and chat); click to jump anywhere.
-    Location,
-    /// Chats working or waiting on you right now.
-    Activity,
-    NewChat,
-    Search,
-    Usage,
-    Remote,
-    Theme,
-    Settings,
-}
-
-impl BarItem {
-    pub const ALL: [BarItem; 11] = [
-        BarItem::SidebarToggle,
-        BarItem::Brand,
-        BarItem::Navigation,
-        BarItem::Location,
-        BarItem::Activity,
-        BarItem::NewChat,
-        BarItem::Search,
-        BarItem::Usage,
-        BarItem::Remote,
-        BarItem::Theme,
-        BarItem::Settings,
-    ];
-
-    pub fn default_items() -> Vec<BarItem> {
-        vec![
-            BarItem::SidebarToggle,
-            BarItem::Brand,
-            BarItem::Location,
-            BarItem::Activity,
-            BarItem::Usage,
-            BarItem::Remote,
-            BarItem::Theme,
-            BarItem::Settings,
-        ]
-    }
-
-    pub fn zone(self) -> BarZone {
-        match self {
-            BarItem::SidebarToggle | BarItem::Brand | BarItem::Navigation => BarZone::Start,
-            BarItem::Location => BarZone::Center,
-            _ => BarZone::End,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            BarItem::SidebarToggle => "Sidebar toggle",
-            BarItem::Brand => "Mothr logo",
-            BarItem::Navigation => "Back and forward",
-            BarItem::Location => "Location",
-            BarItem::Activity => "Live activity",
-            BarItem::NewChat => "New chat",
-            BarItem::Search => "Search",
-            BarItem::Usage => "Usage & limits",
-            BarItem::Remote => "Mothr Remote",
-            BarItem::Theme => "Light / dark",
-            BarItem::Settings => "Settings",
-        }
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            BarItem::SidebarToggle => "Show or hide the sidebar",
-            BarItem::Brand => "The Mothr mark and name",
-            BarItem::Navigation => "Go back and forward through places you visited",
-            BarItem::Location => "The project and chat you are in; click to jump anywhere",
-            BarItem::Activity => "Chats working or waiting on you, live",
-            BarItem::NewChat => "Start a new chat",
-            BarItem::Search => "Find a project or chat (Ctrl+P)",
-            BarItem::Usage => "Account limits and this chat's usage",
-            BarItem::Remote => "Shown while Mothr Remote is on",
-            BarItem::Theme => "Switch between light and dark",
-            BarItem::Settings => "Open Settings",
-        }
-    }
-}
-
-/// Unknown bar items (from a newer version) are skipped instead of failing the whole file.
-fn lenient_bar_items<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<BarItem>, D::Error> {
-    let raw: Vec<toml::Value> = Vec::deserialize(d)?;
-    let mut out = vec![];
-    for v in raw {
-        if let Ok(item) = v.try_into::<BarItem>()
-            && !out.contains(&item)
-        {
-            out.push(item);
-        }
-    }
-    Ok(out)
-}
-
 /// How Mothr looks and where things sit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -402,10 +284,6 @@ pub struct Appearance {
     pub custom_accent: Option<String>,
     pub tone: Tone,
     pub sidebar_side: Side,
-    pub bar_position: BarPosition,
-    /// The bar's items, in order; anything not listed is hidden.
-    #[serde(deserialize_with = "lenient_bar_items")]
-    pub bar_items: Vec<BarItem>,
 }
 
 impl Default for Appearance {
@@ -415,8 +293,6 @@ impl Default for Appearance {
             custom_accent: None,
             tone: Tone::Graphite,
             sidebar_side: Side::Left,
-            bar_position: BarPosition::Top,
-            bar_items: BarItem::default_items(),
         }
     }
 }
@@ -428,32 +304,6 @@ impl Appearance {
             Accent::Custom => self.custom_accent.as_deref().and_then(parse_hex_color).unwrap_or(Accent::Violet.hex(dark).unwrap_or(0x8B7CF6)),
             a => a.hex(dark).unwrap_or(0x8B7CF6),
         }
-    }
-
-    pub fn shows(&self, item: BarItem) -> bool {
-        self.bar_items.contains(&item)
-    }
-
-    /// Show or hide an item. A shown item goes back to where it sits by default.
-    pub fn set_shown(&mut self, item: BarItem, shown: bool) {
-        self.bar_items.retain(|i| *i != item);
-        if shown {
-            let rank = |i: &BarItem| BarItem::ALL.iter().position(|x| x == i).unwrap_or(usize::MAX);
-            let at = self.bar_items.iter().position(|i| rank(i) > rank(&item)).unwrap_or(self.bar_items.len());
-            self.bar_items.insert(at, item);
-        }
-    }
-
-    /// Move a shown item one place earlier (`-1`) or later (`1`) among the items of its zone.
-    pub fn move_item(&mut self, item: BarItem, by: i32) {
-        let zone = item.zone();
-        let same: Vec<usize> = self.bar_items.iter().enumerate().filter(|(_, i)| i.zone() == zone).map(|(n, _)| n).collect();
-        let Some(k) = same.iter().position(|&n| self.bar_items[n] == item) else { return };
-        let j = k as i32 + by;
-        if j < 0 || j as usize >= same.len() {
-            return;
-        }
-        self.bar_items.swap(same[k], same[j as usize]);
     }
 }
 
@@ -658,40 +508,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn appearance_round_trips_and_skips_unknown_bar_items() {
+    fn appearance_round_trips_and_old_bar_settings_are_ignored() {
         let mut s = Settings::default();
         s.appearance.accent = Accent::Custom;
         s.appearance.custom_accent = Some("#12ab34".into());
         s.appearance.sidebar_side = Side::Right;
-        s.appearance.bar_position = BarPosition::Bottom;
         let text = toml::to_string(&s).unwrap();
         let back: Settings = toml::from_str(&text).unwrap();
         assert_eq!(back.appearance, s.appearance);
         assert_eq!(back.appearance.accent_hex(true), 0x12AB34);
-        // A bar item from a newer version doesn't lose the rest of the settings.
-        let text = text.replace("bar_items = [", "bar_items = [\"hologram\", ");
-        let back: Settings = toml::from_str(&text).unwrap();
-        assert_eq!(back.appearance.bar_items, BarItem::default_items());
+        // Settings from the version with a separate bar still load.
+        let old = text.replace("[appearance]", "[appearance]\nbar_position = \"bottom\"\nbar_items = [\"brand\"]");
+        let back: Settings = toml::from_str(&old).unwrap();
+        assert_eq!(back.appearance, s.appearance);
         // Older files without the section get the defaults.
         let old: Settings = toml::from_str("theme = \"dark\"").unwrap();
         assert_eq!(old.appearance, Appearance::default());
-    }
-
-    #[test]
-    fn bar_items_show_hide_and_move_within_their_zone() {
-        let mut a = Appearance::default();
-        a.set_shown(BarItem::Theme, false);
-        assert!(!a.shows(BarItem::Theme));
-        a.set_shown(BarItem::NewChat, true);
-        // A shown item lands where it sits by default: after Activity, before Usage.
-        let at = |a: &Appearance, i| a.bar_items.iter().position(|x| *x == i).unwrap();
-        assert!(at(&a, BarItem::Activity) < at(&a, BarItem::NewChat) && at(&a, BarItem::NewChat) < at(&a, BarItem::Usage));
-        a.move_item(BarItem::NewChat, -1);
-        assert!(at(&a, BarItem::NewChat) < at(&a, BarItem::Activity));
-        // Location is alone in the center; it can't move into another zone.
-        let before = a.bar_items.clone();
-        a.move_item(BarItem::Location, 1);
-        assert_eq!(a.bar_items, before);
         assert_eq!(parse_hex_color("#87f"), Some(0x8877FF));
         assert_eq!(parse_hex_color("nope"), None);
     }

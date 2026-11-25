@@ -1,4 +1,5 @@
-//! The root view: title bar, sidebar, routed main area and overlays.
+//! The root view: the sidebar (which is also the window's frame), the routed main area and
+//! overlays.
 
 use super::chat::{ChatEvent, ChatView};
 use super::design::{DesignPage, DesignsEvent, DesignsPage};
@@ -31,7 +32,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-mod bar;
+mod frame;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Route {
@@ -89,7 +90,7 @@ pub struct Workspace {
     picker: Option<Entity<ProjectPicker>>,
     picker_for: PickerFor,
     usage_open: bool,
-    /// The image viewer, over everything below the title bar.
+    /// The image viewer, over the main area.
     lightbox: Option<Entity<Lightbox>>,
     /// Where focus was before the viewer opened, to put it back.
     lightbox_return: Option<FocusHandle>,
@@ -675,26 +676,18 @@ impl Render for Workspace {
             Route::Projects => "projects".into(),
             Route::Settings => "settings".into(),
         };
-        let mut bar = Some(self.render_bar(cx));
-        let appearance = tokens::appearance();
-        let bar_bottom = appearance.bar_position == BarPosition::Bottom;
-        let sidebar_right = appearance.sidebar_side == Side::Right;
+        let sidebar_right = tokens::appearance().sidebar_side == Side::Right;
         let project_fullscreen = self.route == Route::Projects && self.projects.read(cx).fullscreen(cx);
-        let mut sidebar = (self.sidebar_open && !project_fullscreen).then(|| {
-            div()
-                .h_full()
-                .w(sz(286.))
-                .flex_none()
-                .map(|d| if sidebar_right { d.border_l_1() } else { d.border_r_1() })
-                .border_color(theme.sidebar_border)
-                .bg(theme.sidebar)
-                .child(self.sidebar.clone())
-                .with_animation(
-                    "sidebar-in",
-                    Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()),
-                    |d, t| d.opacity(t),
-                )
-        });
+        // The sidebar is the window's frame: open it's the full panel, collapsed (or while a
+        // project is full screen) a rail of the same controls.
+        let panel = self.sidebar_open && !project_fullscreen;
+        let side_w = if panel { frame::SIDEBAR_W } else { frame::RAIL_W };
+        let mut sidebar = Some(if panel { self.render_sidebar_panel(sidebar_right, cx) } else { self.render_rail(sidebar_right, cx) });
+        // A thin strip across the top only where the window needs one: macOS draws its buttons
+        // top-left (over the content when the sidebar is on the right), and a window that draws
+        // its own buttons keeps them in the sidebar header, which a rail doesn't have.
+        let client_drawn = matches!(window.window_decorations(), Decorations::Client { .. });
+        let strip = if cfg!(target_os = "macos") { sidebar_right } else { client_drawn && !panel };
 
         v_flex()
             .id("workspace")
@@ -730,10 +723,8 @@ impl Render for Workspace {
                 Route::Projects => this.projects.update(cx, |p, cx| p.focus(window, cx)),
                 _ => this.home.update(cx, |h, cx| h.focus(window, cx)),
             }))
-            // macOS draws its window buttons at the top whatever happens, so a bar moved to the
             // bottom leaves a strip to hold them and to drag the window by.
-            .when(bar_bottom && cfg!(target_os = "macos"), |d| d.child(TitleBar::new()))
-            .when(!bar_bottom, |d| d.children(bar.take()))
+            .when(strip, |d| d.child(TitleBar::new()))
             .child(
                 h_flex()
                     .flex_1()
@@ -773,8 +764,9 @@ impl Render for Workspace {
                         .child(
                             div()
                                 .absolute()
-                                .map(|d| if bar_bottom { d.bottom(sz(6.)) } else { d.top(sz(6.)) })
-                                .right(sz(10.))
+                                // By the limits button at the foot of the sidebar.
+                                .bottom(sz(8.))
+                                .map(|d| if sidebar_right { d.right(sz(side_w + 8.)) } else { d.left(sz(side_w + 8.)) })
                                 .occlude()
                                 .child(usage::panel(
                                     store,
@@ -818,7 +810,6 @@ impl Render for Workspace {
                     })
                     .when_some(self.lightbox.clone(), |el, lightbox| el.child(div().absolute().inset_0().child(lightbox))),
             )
-            .when(bar_bottom, |d| d.children(bar.take()))
     }
 }
 

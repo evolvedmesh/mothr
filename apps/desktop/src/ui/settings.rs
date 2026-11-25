@@ -7,7 +7,7 @@ use super::theme::{apply_preference, card};
 use crate::remote::{RemoteController, TunnelAvailability, detect_tunnels, generate_token, qr_matrix};
 use crate::store::Store;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Sizable as _,
+    ActiveTheme as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -57,7 +57,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Accent, tone, where the sidebar and the bar sit, and what the bar shows.
+    /// Accent, tone and which side the sidebar sits on.
     fn render_look(&mut self, s: &Settings, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let pal = tokens::p(cx);
         let a = s.appearance.clone();
@@ -172,85 +172,6 @@ impl SettingsView {
         let sides = segment_track(&pal)
             .child(side("Left", a.sidebar_side == Side::Left, Side::Left, cx))
             .child(side("Right", a.sidebar_side == Side::Right, Side::Right, cx));
-        let pos = |label: &'static str, active: bool, set: BarPosition, cx: &mut Context<Self>| {
-            segment(SharedString::from(format!("bar-{label}")), label, active, &pal)
-                .on_click(cx.listener(move |this, _, _, cx| this.edit_appearance(cx, |a| a.bar_position = set)))
-        };
-        let positions = segment_track(&pal)
-            .child(pos("Top", a.bar_position == BarPosition::Top, BarPosition::Top, cx))
-            .child(pos("Bottom", a.bar_position == BarPosition::Bottom, BarPosition::Bottom, cx));
-
-        // The bar's items: shown ones in their order (grouped by where they sit), then the rest.
-        let mut items: Vec<BarItem> = vec![];
-        for zone in [BarZone::Start, BarZone::Center, BarZone::End] {
-            items.extend(a.bar_items.iter().copied().filter(|i| i.zone() == zone));
-        }
-        items.extend(BarItem::ALL.iter().copied().filter(|i| !a.shows(*i)));
-        let mut list = v_flex().rounded(sz(tokens::radius::LG)).border_1().border_color(pal.border).overflow_hidden();
-        for (n, item) in items.iter().copied().enumerate() {
-            let shown = a.shows(item);
-            let zone_items: Vec<BarItem> = a.bar_items.iter().copied().filter(|i| i.zone() == item.zone()).collect();
-            let k = zone_items.iter().position(|i| *i == item);
-            let (can_up, can_down) = match k {
-                Some(k) => (k > 0, k + 1 < zone_items.len()),
-                None => (false, false),
-            };
-            let zone = match item.zone() {
-                BarZone::Start => "Start",
-                BarZone::Center => "Middle",
-                BarZone::End => "End",
-            };
-            list = list.child(
-                h_flex()
-                    .gap_3()
-                    .px(sz(12.))
-                    .py(sz(8.))
-                    .items_center()
-                    .when(n > 0, |d| d.border_t_1().border_color(pal.border))
-                    .when(!shown, |d| d.bg(pal.surface_hover.opacity(0.35)))
-                    .child(
-                        Switch::new(SharedString::from(format!("bar-show-{n}")))
-                            .checked(shown)
-                            .small()
-                            .on_click(cx.listener(move |this, on: &bool, _, cx| {
-                                let on = *on;
-                                this.edit_appearance(cx, |a| a.set_shown(item, on));
-                            })),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(div().text_size(sz(tokens::text::BASE)).text_color(if shown { pal.text } else { pal.text_muted }).child(item.label()))
-                            .child(div().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).truncate().child(item.description())),
-                    )
-                    .child(div().flex_none().text_size(sz(tokens::text::XS)).text_color(pal.text_faint).child(zone))
-                    .child(
-                        h_flex()
-                            .flex_none()
-                            .gap(sz(2.))
-                            .child(
-                                Button::new(SharedString::from(format!("bar-up-{n}")))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(icon("arrow-up"))
-                                    .disabled(!can_up)
-                                    .tooltip("Move earlier")
-                                    .on_click(cx.listener(move |this, _, _, cx| this.edit_appearance(cx, |a| a.move_item(item, -1)))),
-                            )
-                            .child(
-                                Button::new(SharedString::from(format!("bar-down-{n}")))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(icon("arrow-down"))
-                                    .disabled(!can_down)
-                                    .tooltip("Move later")
-                                    .on_click(cx.listener(move |this, _, _, cx| this.edit_appearance(cx, |a| a.move_item(item, 1)))),
-                            ),
-                    ),
-            );
-        }
-
         let row = |label: &'static str, body: AnyElement| {
             h_flex()
                 .gap_3()
@@ -263,18 +184,6 @@ impl SettingsView {
             .child(row("Accent", accents.into_any_element()))
             .child(h_flex().gap_3().items_start().child(div().w(sz(160.)).flex_none().pt(sz(18.)).text_size(sz(tokens::text::BASE)).child("Tone")).child(tones))
             .child(row("Sidebar", sides.into_any_element()))
-            .child(row("Bar", positions.into_any_element()))
-            .child(
-                v_flex()
-                    .gap_2()
-                    .pt_2()
-                    .child(
-                        v_flex()
-                            .child(div().text_size(sz(tokens::text::BASE)).font_weight(FontWeight::MEDIUM).child("In the bar"))
-                            .child(div().text_size(sz(tokens::text::SM)).text_color(pal.text_muted).child("Pick what the bar shows and in which order. Right-click the bar to change it there.")),
-                    )
-                    .child(list),
-            )
     }
 
     pub fn scroll_to_bottom(&self) {
@@ -722,7 +631,7 @@ impl Render for SettingsView {
                         ),
                     cx,
                 ))
-                .child(group("Colors and layout", "Make Mothr yours: its accent, its tone, and where things sit.", look, cx))
+                .child(group("Colors and layout", "Make Mothr yours: its accent, its tone, and where the sidebar sits.", look, cx))
                 .child(group(
                     "Agents",
                     "Mothr talks to each agent over its native protocol — no terminal UI involved.",

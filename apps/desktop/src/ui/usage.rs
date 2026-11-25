@@ -1,4 +1,4 @@
-//! Account limits & context usage: title-bar pills and the detail panel.
+//! Account limits & context usage: the sidebar's limits rings and the detail panel.
 
 use super::kit::*;
 use super::tokens;
@@ -17,15 +17,15 @@ use mothr_core::*;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// The title-bar limits button: one ring per agent account showing its most-used
+/// The limits button at the foot of the sidebar: one ring per agent account showing its most-used
 /// limit. Hovering shows every account's details (like VS Code's Copilot status); clicking pins
 /// the panel open.
 pub fn limits_button(
     store: Entity<Store>,
     current: Option<SessionId>,
     pinned: bool,
-    // The bar is at the bottom: the card opens upwards.
-    above: bool,
+    // Where the hover card attaches to the button.
+    anchor: Anchor,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> AnyElement {
@@ -69,7 +69,7 @@ pub fn limits_button(
         return trigger.into_any_element();
     }
     HoverCard::new("ai-limits-card")
-        .anchor(if above { Anchor::BottomRight } else { Anchor::TopRight })
+        .anchor(anchor)
         .appearance(false)
         .open_delay(std::time::Duration::from_millis(250))
         .close_delay(std::time::Duration::from_millis(200))
@@ -79,7 +79,7 @@ pub fn limits_button(
             let st = store.read(cx);
             let meta = current.and_then(|id| st.session(id)).map(|s| s.meta.clone());
             let refresh = store.clone();
-            div().map(|d| if above { d.mb(sz(6.)) } else { d.mt(sz(6.)) }).child(panel(
+            div().mb(sz(6.)).child(panel(
                 st,
                 meta.as_ref(),
                 move |_, window, cx| {
