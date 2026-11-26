@@ -385,6 +385,44 @@ impl MothrClient {
     pub fn refresh_usage(&self) -> Result<(), ClientError> {
         self.command(&AppCommand::RefreshUsage).map(|_| ())
     }
+
+    // ---------------------------------------------------------------------------------------
+    // Terminal beside a chat (the user's shell on the computer, in the chat's primary repo)
+
+    /// The chat's terminal screen, once it's open.
+    pub fn terminal(&self, chat_id: String) -> Option<TerminalView> {
+        let id = SessionId::parse_str(&chat_id).ok()?;
+        self.shared.store.lock().terminal(id)
+    }
+
+    /// Start the chat's terminal (an open one is left as it is; an exited one starts again).
+    pub fn open_terminal(&self, chat_id: String) -> Result<(), ClientError> {
+        let id = parse_id(&chat_id)?;
+        self.command(&AppCommand::TerminalOpen { id, cwd: None }).map(|_| ())
+    }
+
+    /// Type into the terminal: text, or the escape sequences keys send ("\u{1b}[A" for ↑).
+    pub fn terminal_input(&self, chat_id: String, data: String) -> Result<(), ClientError> {
+        let id = parse_id(&chat_id)?;
+        self.command(&AppCommand::TerminalInput { id, data }).map(|_| ())
+    }
+
+    /// Fit the shell to the phone's screen (it follows whoever typed or resized last).
+    pub fn resize_terminal(&self, chat_id: String, cols: u16, rows: u16) -> Result<(), ClientError> {
+        let id = parse_id(&chat_id)?;
+        self.command(&AppCommand::TerminalResize { id, cols, rows }).map(|_| ())
+    }
+
+    pub fn restart_terminal(&self, chat_id: String) -> Result<(), ClientError> {
+        let id = parse_id(&chat_id)?;
+        self.command(&AppCommand::TerminalRestart { id }).map(|_| ())
+    }
+
+    /// End the shell.
+    pub fn close_terminal(&self, chat_id: String) -> Result<(), ClientError> {
+        let id = parse_id(&chat_id)?;
+        self.command(&AppCommand::TerminalClose { id }).map(|_| ())
+    }
 }
 
 impl MothrClient {

@@ -172,6 +172,13 @@ impl SettingsView {
         let sides = segment_track(&pal)
             .child(side("Left", a.sidebar_side == Side::Left, Side::Left, cx))
             .child(side("Right", a.sidebar_side == Side::Right, Side::Right, cx));
+        let mut docks = segment_track(&pal);
+        for d in Dock::ALL {
+            docks = docks.child(
+                segment(SharedString::from(format!("dock-{}", d.label())), d.label(), a.terminal_dock == d, &pal)
+                    .on_click(cx.listener(move |this, _, _, cx| this.edit_appearance(cx, |a| a.terminal_dock = d))),
+            );
+        }
         let row = |label: &'static str, body: AnyElement| {
             h_flex()
                 .gap_3()
@@ -184,6 +191,7 @@ impl SettingsView {
             .child(row("Accent", accents.into_any_element()))
             .child(h_flex().gap_3().items_start().child(div().w(sz(160.)).flex_none().pt(sz(18.)).text_size(sz(tokens::text::BASE)).child("Tone")).child(tones))
             .child(row("Sidebar", sides.into_any_element()))
+            .child(row("Terminal", docks.into_any_element()))
     }
 
     pub fn scroll_to_bottom(&self) {

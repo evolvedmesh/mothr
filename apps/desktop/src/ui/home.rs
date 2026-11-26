@@ -3,6 +3,7 @@
 use super::chat::{file_chip, image_view, is_image, mime_for};
 use super::kit::*;
 use super::options::{Pick, RunSettings, run_settings, settings_for};
+use super::terminal::{TerminalEvent, TerminalView, docked};
 use super::{clip, tokens};
 use crate::store::Store;
 use std::path::PathBuf;
@@ -29,6 +30,8 @@ pub enum HomeEvent {
     AddProject,
     /// The text or attachments of the draft changed.
     Changed,
+    /// Pick a past chat to resume instead.
+    Resume,
 }
 
 impl EventEmitter<HomeEvent> for Home {}
@@ -54,6 +57,9 @@ pub struct Home {
     slash_sel: usize,
     /// The headline being typed out.
     headline: Typewriter,
+    /// A terminal in the primary repo, beside the box (it moves to the chat once started).
+    terminal: Option<(Entity<TerminalView>, Subscription)>,
+    terminal_open: bool,
     _subs: Vec<Subscription>,
     _typing: Task<()>,
 }
@@ -176,6 +182,8 @@ impl Home {
             context: None,
             slash_sel: 0,
             headline: Typewriter::default(),
+            terminal: None,
+            terminal_open: false,
             _subs: subs,
             _typing: typing,
         };
@@ -234,6 +242,55 @@ impl Home {
         }
         let name = self.project.as_ref().map(|p| p.name.clone()).unwrap_or_default();
         if self.extra.is_empty() || name.is_empty() { name } else { format!("{name} +{}", self.extra.len()) }
+    }
+
+    /// Where a terminal for this draft runs: the primary repo, or home for a general chat.
+    fn terminal_dir(&self) -> PathBuf {
+        match &self.project {
+            Some(p) if !self.general => p.path.clone(),
+            _ => std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+        }
+    }
+
+    pub fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.terminal_open = !self.terminal_open;
+        if self.terminal_open {
+            self.sync_terminal(window, cx);
+            if let Some((t, _)) = &self.terminal {
+                t.update(cx, |t, cx| t.focus(window, cx));
+            }
+        } else {
+            self.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Keep the terminal in the primary repo: picking another one starts it again there.
+    fn sync_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let dir = self.terminal_dir();
+        if self.terminal.as_ref().is_some_and(|(t, _)| t.read(cx).cwd() != dir) {
+            self.terminal = None;
+        }
+        if self.terminal.is_none() && self.terminal_open {
+            let store = self.store.clone();
+            // A draft has no chat id yet; the terminal is filed under the chat once it starts.
+            let view = cx.new(|cx| TerminalView::new(store, TerminalId::new_v4(), dir, true, window, cx));
+            let sub = cx.subscribe_in(&view, window, |this, _, ev: &TerminalEvent, window, cx| match ev {
+                TerminalEvent::Hide => {
+                    this.terminal_open = false;
+                    this.focus(window, cx);
+                    cx.notify();
+                }
+            });
+            self.terminal = Some((view, sub));
+        }
+    }
+
+    /// Hand the terminal to the chat this draft became, and whether it was showing.
+    pub fn take_terminal(&mut self, cx: &mut Context<Self>) -> Option<(Entity<TerminalView>, bool)> {
+        let open = std::mem::take(&mut self.terminal_open);
+        cx.notify();
+        self.terminal.take().map(|(t, _)| (t, open))
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -591,6 +648,10 @@ pub fn mode_icon(m: PermissionMode) -> &'static str {
 
 impl Render for Home {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_terminal(window, cx);
+        let terminal = self.terminal.as_ref().filter(|_| self.terminal_open).map(|(t, _)| t.clone());
+        let terminal_open = self.terminal_open;
+        let terminal_dir = self.terminal_dir();
         let pal = tokens::p(cx);
         let run_chip = self.run_settings_chip(cx);
         let attachments = self.attachments.clone();
@@ -798,7 +859,7 @@ impl Render for Home {
                 |d, t| d.opacity(t).mt(sz((1.0 - t) * 8.0)),
             );
 
-        v_flex()
+        let page = v_flex()
             .size_full()
             .child(
                 // The headline sits in the open space above the box.
@@ -870,8 +931,33 @@ impl Render for Home {
                                         .tooltip("Work across another repo too; the agent can read and edit it")
                                         .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::AddProject))),
                                 )
-                            }),
+                            })
+                            .child(div().flex_1())
+                            .child(
+                                Button::new("home-terminal")
+                                    .ghost()
+                                    .small()
+                                    .text_color(if terminal_open { pal.text } else { pal.text_faint })
+                                    .icon(icon("square-terminal"))
+                                    .label("Terminal")
+                                    .tooltip(format!("A terminal in {}  (Ctrl+`)", tildify(&terminal_dir)))
+                                    .on_click(cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx))),
+                            )
+                            .child(
+                                Button::new("home-resume")
+                                    .ghost()
+                                    .small()
+                                    .text_color(pal.text_faint)
+                                    .icon(icon("rotate-ccw-clock"))
+                                    .label("Resume a chat")
+                                    .tooltip("Pick up a conversation from Claude Code, Codex, Copilot, OpenCode or Hermes  (Ctrl+Shift+R)")
+                                    .on_click(cx.listener(|_, _, _, cx| cx.emit(HomeEvent::Resume))),
+                            ),
                     ),
-            )
+            );
+        match terminal {
+            Some(t) => docked(&format!("home-terminal-{}", self.id), page.into_any_element(), t.into_any_element(), window),
+            None => page.into_any_element(),
+        }
     }
 }

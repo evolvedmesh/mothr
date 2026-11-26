@@ -289,6 +289,35 @@ pub enum Side {
     Right,
 }
 
+/// Where the terminal sits next to a chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Dock {
+    Top,
+    Right,
+    #[default]
+    Bottom,
+    Left,
+}
+
+impl Dock {
+    pub const ALL: [Dock; 4] = [Dock::Top, Dock::Right, Dock::Bottom, Dock::Left];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Dock::Top => "Top",
+            Dock::Right => "Right",
+            Dock::Bottom => "Bottom",
+            Dock::Left => "Left",
+        }
+    }
+
+    /// Beside the chat rather than above or below it.
+    pub fn is_side(self) -> bool {
+        matches!(self, Dock::Left | Dock::Right)
+    }
+}
+
 /// How Mothr looks and where things sit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -298,6 +327,8 @@ pub struct Appearance {
     pub custom_accent: Option<String>,
     pub tone: Tone,
     pub sidebar_side: Side,
+    /// Where a chat's terminal sits.
+    pub terminal_dock: Dock,
 }
 
 impl Default for Appearance {
@@ -307,6 +338,7 @@ impl Default for Appearance {
             custom_accent: None,
             tone: Tone::Graphite,
             sidebar_side: Side::Left,
+            terminal_dock: Dock::Bottom,
         }
     }
 }

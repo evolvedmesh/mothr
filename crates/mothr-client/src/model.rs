@@ -48,6 +48,8 @@ pub struct Store {
     pub loaded: bool,
     /// The name the desktop goes by.
     pub computer: Option<String>,
+    /// The terminals open beside chats, by chat.
+    pub terminals: HashMap<SessionId, mothr_core::TerminalScreen>,
 }
 
 impl Store {
@@ -58,6 +60,7 @@ impl Store {
         self.pinned_projects = snap.pinned_projects;
         self.recent_projects = snap.recent_projects;
         self.agent_models = snap.agent_models;
+        self.terminals = snap.terminals.into_iter().map(|t| (t.id, t)).collect();
         self.loaded = true;
     }
 
@@ -122,6 +125,15 @@ impl Store {
                 None
             }
             HubEvent::ProjectsIndexed { .. } | HubEvent::Workspaces { .. } | HubEvent::Skills { .. } => None,
+            HubEvent::Terminal { screen } => {
+                let id = screen.id;
+                self.terminals.insert(id, *screen);
+                Some(id)
+            }
+            HubEvent::TerminalClosed { id } => {
+                self.terminals.remove(&id);
+                Some(id)
+            }
             HubEvent::Toast { level, text } => {
                 self.toasts.push(Toast { level: level_name(level).into(), text });
                 if self.toasts.len() > 20 {
@@ -134,6 +146,41 @@ impl Store {
 
     // -----------------------------------------------------------------------------------------
     // Views
+
+    /// The terminal beside a chat, as the phone shows it.
+    pub fn terminal(&self, id: SessionId) -> Option<TerminalView> {
+        let t = self.terminals.get(&id)?;
+        Some(TerminalView {
+            chat_id: id.to_string(),
+            cwd: mothr_core::tildify(&t.cwd),
+            title: t.title.clone(),
+            cols: t.cols,
+            rows: t.rows,
+            lines: t
+                .lines
+                .iter()
+                .map(|l| TermLineView {
+                    spans: l
+                        .iter()
+                        .map(|s| TermSpanView {
+                            text: s.text.clone(),
+                            fg: s.fg,
+                            bg: s.bg,
+                            bold: s.bold,
+                            italic: s.italic,
+                            underline: s.underline,
+                            dim: s.dim,
+                            inverse: s.inverse,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            cursor_row: t.cursor.map(|c| c[0]),
+            cursor_col: t.cursor.map(|c| c[1]),
+            exited: t.exited.clone(),
+            app_cursor: t.app_cursor,
+        })
+    }
 
     fn summary(&self, s: &SessionState) -> ChatSummary {
         let m = &s.meta;

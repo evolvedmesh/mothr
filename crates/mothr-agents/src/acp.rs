@@ -51,8 +51,11 @@ struct Driver {
     session_id: Option<String>,
     load_session: bool,
     image_prompts: bool,
-    /// Replaying history during session/load — suppress duplicate transcript entries.
+    /// Replaying history during session/load — suppress duplicate transcript entries (unless
+    /// `spec.replay`: the chat has no transcript of it yet).
     replaying: bool,
+    /// The user message being replayed, and its text so far.
+    replay_user: Option<(EntryId, String)>,
     modes: Vec<ModeInfo>,
     current_mode_id: Option<String>,
     mode_config_id: Option<String>,
@@ -189,6 +192,7 @@ pub async fn run(
         load_session: false,
         image_prompts: false,
         replaying: false,
+        replay_user: None,
         modes: vec![],
         current_mode_id: None,
         mode_config_id: None,
@@ -562,6 +566,44 @@ impl Driver {
         }
     }
 
+    // ------------------------------------------------------------------ replay
+
+    /// A piece of a user message the agent replays from history.
+    fn replay_user_chunk(&mut self, u: &Value) {
+        let text = content_text(&u["content"]);
+        // Mothr's own notes went out ahead of what was typed; they aren't part of the message.
+        if text.trim().is_empty() || text.starts_with("[Mothr]") {
+            return;
+        }
+        let (id, mut full) = match self.replay_user.take() {
+            Some(open) => open,
+            None => {
+                self.end_segment();
+                self.turn += 1;
+                (new_entry_id(), String::new())
+            }
+        };
+        full.push_str(&text);
+        self.em.emit(SessionEvent::Upsert {
+            entry: Entry::User { id: id.clone(), text: full.clone(), attachments: vec![], at: chrono::Utc::now(), agent_ref: None, prev_ref: None },
+        });
+        self.replay_user = Some((id, full));
+    }
+
+    /// The history is in: nothing from it is still running.
+    fn finish_replay(&mut self) {
+        self.replay_user = None;
+        self.end_segment();
+        let open: Vec<ToolCall> = self.tools.drain().map(|(_, t)| t).collect();
+        for mut t in open {
+            if matches!(t.status, ToolStatus::Pending | ToolStatus::Running) {
+                t.status = ToolStatus::Completed;
+                let target = self.tool_targets.get(&t.id).cloned();
+                self.out(&target, SessionEvent::Upsert { entry: Entry::Tool(t) });
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ inbound
 
     async fn on_message(&mut self, v: Value) {
@@ -613,7 +655,9 @@ impl Driver {
                 }
             }
             Call::NewSession | Call::LoadSession => {
-                self.replaying = false;
+                if std::mem::take(&mut self.replaying) && self.spec.replay {
+                    self.finish_replay();
+                }
                 if let Some(e) = err_msg {
                     let is_load = matches!(kind, Call::LoadSession);
                     if is_load {
@@ -852,8 +896,15 @@ impl Driver {
         let u = &v["params"]["update"];
         let kind = u["sessionUpdate"].as_str().unwrap_or("");
         let target = self.target_of(v);
-        if self.replaying && !matches!(kind, "current_mode_update" | "usage_update" | "available_commands_update") {
+        if self.replaying && !self.spec.replay && !matches!(kind, "current_mode_update" | "usage_update" | "available_commands_update") {
             return;
+        }
+        if self.replaying {
+            if kind == "user_message_chunk" {
+                self.replay_user_chunk(u);
+                return;
+            }
+            self.replay_user = None;
         }
         match kind {
             "agent_message_chunk" | "agent_thought_chunk" => {

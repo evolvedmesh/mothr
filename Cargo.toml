@@ -18,6 +18,7 @@ mothr-design = { path = "crates/mothr-design" }
 mothr-remote = { path = "crates/mothr-remote" }
 mothr-hub = { path = "crates/mothr-hub" }
 mothr-skills = { path = "crates/mothr-skills" }
+mothr-terminal = { path = "crates/mothr-terminal" }
 
 gpui-kit = "0.10"
 anyhow = "1"
@@ -45,6 +46,7 @@ qrcode = { version = "0.14", default-features = false }
 rand = "0.9"
 base64 = "0.22"
 similar = "2"
+alacritty_terminal = "0.26"
 agent-client-protocol-schema = "1.18"
 
 [profile.dev]

@@ -68,6 +68,10 @@ pub struct Hub {
     usage: UsageFetcher,
     settings: RwLock<Settings>,
     skills: mothr_skills::Library,
+    /// The terminals beside chats, shared by the desktop and remote clients.
+    terminals: Arc<mothr_terminal::Terminals>,
+    /// Terminals with a new screen to send, and the wake-up for the task that sends them.
+    terminals_dirty: Arc<(parking_lot::Mutex<HashSet<TerminalId>>, tokio::sync::Notify)>,
 }
 
 impl Hub {
@@ -75,6 +79,12 @@ impl Hub {
     pub fn start(rt: Handle, settings: Settings) -> Arc<Hub> {
         let (events, _) = broadcast::channel(4096);
         let (driver_tx, driver_rx) = mpsc::unbounded_channel();
+        let terminals_dirty: Arc<(parking_lot::Mutex<HashSet<TerminalId>>, tokio::sync::Notify)> = Arc::default();
+        let dirty = terminals_dirty.clone();
+        let terminals = Arc::new(mothr_terminal::Terminals::new(move |id| {
+            dirty.0.lock().insert(id);
+            dirty.1.notify_one();
+        }));
         let hub = Arc::new_cyclic(|me| Hub {
             me: me.clone(),
             rt: rt.clone(),
@@ -85,6 +95,8 @@ impl Hub {
             usage: UsageFetcher::new(),
             settings: RwLock::new(settings),
             skills: mothr_skills::Library::default(),
+            terminals,
+            terminals_dirty,
         });
         hub.load_sessions();
         hub.load_models();
@@ -96,6 +108,8 @@ impl Hub {
         rt.spawn(async move { h.persist_loop().await });
         let h = hub.clone();
         rt.spawn(async move { h.usage_loop().await });
+        let h = hub.clone();
+        rt.spawn(async move { h.terminal_loop().await });
         hub.rescan_agents();
         hub.rescan_projects();
         hub
@@ -103,6 +117,41 @@ impl Hub {
 
     pub fn settings(&self) -> Settings {
         self.settings.read().clone()
+    }
+
+    /// The terminals beside chats (the desktop paints them from here).
+    pub fn terminals(&self) -> &Arc<mothr_terminal::Terminals> {
+        &self.terminals
+    }
+
+    /// File a new-chat draft's terminal under the chat it became.
+    pub fn rekey_terminal(&self, draft: TerminalId, chat: SessionId) {
+        if self.terminals.rekey(draft, chat).is_some() {
+            self.broadcast(HubEvent::TerminalClosed { id: draft });
+        }
+    }
+
+    /// Send the screens of terminals that changed, at most every 80 ms each: a busy shell
+    /// would otherwise flood remote clients.
+    async fn terminal_loop(self: Arc<Self>) {
+        loop {
+            self.terminals_dirty.1.notified().await;
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            let ids: Vec<TerminalId> = self.terminals_dirty.0.lock().drain().collect();
+            for id in ids {
+                if let Some(t) = self.terminals.get(id) {
+                    self.broadcast(HubEvent::Terminal { screen: Box::new(t.screen()) });
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+    }
+
+    /// Where a chat's terminal starts: its primary repo (home for a general chat).
+    fn terminal_cwd(&self, id: TerminalId, cwd: Option<PathBuf>) -> PathBuf {
+        cwd.filter(|c| c.is_dir())
+            .or_else(|| self.state.read().session(id).map(|s| s.meta.project.clone()).filter(|p| p.is_dir()))
+            .unwrap_or_else(home_dir)
     }
 
     /// Replace settings, persist them, and re-run detection if agent overrides changed.
@@ -242,6 +291,7 @@ impl Hub {
                     context: None,
                     resume: None,
                     resume_at: None,
+                    replay: false,
                     system_prompt: None,
                     extra_dirs: vec![],
                     title: "model probe".into(),
@@ -514,6 +564,7 @@ impl Hub {
             st.dirty.extend(all);
         }
         self.flush(&sessions_dir());
+        self.terminals.close_all();
     }
 
     // ------------------------------------------------------------------ drivers
@@ -832,7 +883,10 @@ impl Hub {
             let s = self.settings.read();
             (s.agents.get(&meta.agent).and_then(|o| o.default_model.clone()), s.skills_auto)
         };
-        let skills = self.state.read().skills.clone();
+        let (skills, empty) = {
+            let st = self.state.read();
+            (st.skills.clone(), st.session(meta.id).is_none_or(|s| s.entries.is_empty()))
+        };
         let skills_note = if skills_auto { catalog_note(&skills) } else { None };
         let spec = SessionSpec {
             id: meta.id,
@@ -845,6 +899,7 @@ impl Hub {
             context: meta.context_limit.clone(),
             resume: if resume { meta.agent_session_id.clone() } else { None },
             resume_at,
+            replay: resume && empty,
             system_prompt,
             extra_dirs: if meta.kind == SessionKind::Chat { meta.extra_projects.clone() } else { vec![] },
             title: meta.title.clone(),
@@ -1043,6 +1098,55 @@ impl Hub {
         });
     }
 
+    /// Pick up a conversation the agent keeps on its own as a Mothr chat, and resume it.
+    fn resume_past(&self, agent: AgentKind, agent_session_id: String, project: PathBuf, title: Option<String>, workspace: Option<WorkspaceId>) -> anyhow::Result<SessionId> {
+        // A chat that already carries the conversation is opened again instead.
+        let existing = self.state.read().sessions.iter().find(|s| s.meta.agent == agent && s.meta.agent_session_id.as_deref() == Some(agent_session_id.as_str())).map(|s| (s.meta.id, s.meta.archived));
+        if let Some((id, archived)) = existing {
+            if archived {
+                self.update_meta(id, |m| m.archived = false)?;
+                if let Some(state) = self.session(id) {
+                    self.broadcast(HubEvent::SessionCreated { state: Box::new(state) });
+                }
+            }
+            self.resume(id)?;
+            return Ok(id);
+        }
+        anyhow::ensure!(project.is_dir(), "{} is no longer there", project.display());
+        let mode = self.settings.read().default_mode.for_agent(agent);
+        let mut meta = SessionMeta::new(agent, SessionKind::Chat, project.clone(), mode);
+        meta.agent_session_id = Some(agent_session_id.clone());
+        meta.general = project == home_dir();
+        if let Some(t) = title.filter(|t| !t.trim().is_empty() && t != "Untitled chat") {
+            meta.title = t;
+            meta.titled = true;
+        }
+        meta.status = SessionStatus::Ended;
+        meta.workspace = {
+            let st = self.state.read();
+            workspace.filter(|w| st.workspaces.iter().any(|x| x.id == *w)).or_else(|| st.default_workspace())
+        };
+        let id = meta.id;
+        let mut state = SessionState::new(meta);
+        // Claude Code doesn't replay a resumed conversation; its transcript file has it.
+        if agent == AgentKind::ClaudeCode {
+            state.entries = mothr_agents::history::claude_history(&agent_session_id, &project);
+        }
+        state.commands = merge_skill_commands(&[], &self.state.read().skills);
+        {
+            let mut st = self.state.write();
+            st.sessions.push(state.clone());
+            st.dirty.insert(id);
+        }
+        self.broadcast(HubEvent::SessionCreated { state: Box::new(state) });
+        if project != home_dir() {
+            self.projects.touch_recent(&project);
+            self.broadcast_projects();
+        }
+        self.resume(id)?;
+        Ok(id)
+    }
+
     fn resume(&self, id: SessionId) -> anyhow::Result<CommandTx> {
         if let Some(tx) = self.state.read().drivers.get(&id) {
             return Ok(tx.clone());
@@ -1087,6 +1191,7 @@ impl Hub {
             active_workspace: st.default_workspace(),
             skills: st.skills.clone(),
             skills_installing: st.skills_installing.clone(),
+            terminals: self.terminals.screens(),
         }
     }
 }
@@ -1107,6 +1212,22 @@ impl HubApi for Hub {
 
     fn session(&self, id: SessionId) -> Option<SessionState> {
         self.state.read().session(id).cloned()
+    }
+
+    fn past_chats(&self, agent: AgentKind) -> anyhow::Result<Vec<PastChat>> {
+        let transport = self.transport_for(agent)?;
+        let mut chats = mothr_agents::history::past_chats(&transport, agent)?;
+        let st = self.state.read();
+        let known: HashMap<&str, SessionId> = st
+            .sessions
+            .iter()
+            .filter(|s| s.meta.agent == agent && !s.meta.is_subagent())
+            .filter_map(|s| Some((s.meta.agent_session_id.as_deref()?, s.meta.id)))
+            .collect();
+        for c in &mut chats {
+            c.chat = known.get(c.id.as_str()).copied();
+        }
+        Ok(chats)
     }
 
     fn subscribe(&self) -> broadcast::Receiver<HubEvent> {
@@ -1164,6 +1285,34 @@ impl HubApi for Hub {
             AppCommand::Resume { id } => {
                 self.resume(id)?;
             }
+            AppCommand::ResumePast { agent, agent_session_id, project, title, workspace } => {
+                return self.resume_past(agent, agent_session_id, project, title, workspace).map(Some);
+            }
+            AppCommand::TerminalOpen { id, cwd } => {
+                let cwd = self.terminal_cwd(id, cwd);
+                let t = self.terminals.open(id, cwd);
+                // An exited shell starts again when someone opens it.
+                if t.exited().is_some() {
+                    t.restart();
+                }
+            }
+            AppCommand::TerminalInput { id, data } => {
+                let t = self.terminals.get(id).ok_or_else(|| anyhow::anyhow!("no terminal is open there"))?;
+                t.write(data.into_bytes());
+            }
+            AppCommand::TerminalResize { id, cols, rows } => {
+                let t = self.terminals.get(id).ok_or_else(|| anyhow::anyhow!("no terminal is open there"))?;
+                t.resize(cols, rows, None);
+            }
+            AppCommand::TerminalRestart { id } => {
+                let t = self.terminals.get(id).ok_or_else(|| anyhow::anyhow!("no terminal is open there"))?;
+                t.restart();
+            }
+            AppCommand::TerminalClose { id } => {
+                if self.terminals.close(id) {
+                    self.broadcast(HubEvent::TerminalClosed { id });
+                }
+            }
             AppCommand::Rename { id, title } => self.update_meta(id, |m| {
                 m.title = title;
                 m.titled = true;
@@ -1202,6 +1351,9 @@ impl HubApi for Hub {
                     let _ = tx.send(SessionCommand::Shutdown);
                 }
                 let _ = std::fs::remove_file(sessions_dir().join(format!("{id}.json")));
+                if self.terminals.close(id) {
+                    self.broadcast(HubEvent::TerminalClosed { id });
+                }
                 self.broadcast(HubEvent::SessionRemoved { id });
             }
             AppCommand::PinProject { path, pinned } => {

@@ -256,6 +256,53 @@ textarea.field{resize:vertical;min-height:84px}
 #toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));z-index:30;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;width:min(92vw,460px)}
 .toast{pointer-events:auto;padding:10px 16px;border-radius:12px;background:var(--card2);border:1px solid var(--line);box-shadow:var(--shadow);font-size:14px;animation:fadein .25s var(--ease)}
 .toast.error{border-color:var(--crit);color:var(--crit)}.toast.warning{border-color:var(--warn)}
+/* ---------- terminal ---------- */
+:root{--t0:#1e2229;--t1:#e5646a;--t2:#5fc98f;--t3:#e5b45a;--t4:#6ea3f2;--t5:#b48cf2;--t6:#56c2c9;--t7:#c9ccd2;--t8:#5b616c;--t9:#f08a8f;--t10:#7fdcaa;--t11:#f0c87a;--t12:#8db8f7;--t13:#c9a8f7;--t14:#7dd6dc;--t15:#f2f1ee}
+@media (prefers-color-scheme:light){:root{--t0:#24292f;--t1:#cf222e;--t2:#116329;--t3:#8a5a00;--t4:#0969da;--t5:#8250df;--t6:#1b7c83;--t7:#6e7781;--t8:#57606a;--t9:#a40e26;--t10:#1a7f37;--t11:#9a6700;--t12:#218bff;--t13:#a475f9;--t14:#3192aa;--t15:#8c959f}}
+.iconbtn.on{color:var(--acc)}
+.iconbtn.live{position:relative}
+.iconbtn.live::after{content:"";position:absolute;right:7px;top:7px;width:6px;height:6px;border-radius:50%;background:var(--acc)}
+.term{--tfg:var(--fg);--tbg:var(--bg);display:none;flex-direction:column;flex:none;min-height:0;background:var(--tbg)}
+.term.open{display:flex;position:fixed;left:0;right:0;top:var(--vvt,0px);height:var(--vvh,100%);z-index:8;animation:termin .26s var(--ease)}
+.term-drag{display:none}
+.term-h{display:flex;align-items:center;gap:6px;padding:calc(6px + env(safe-area-inset-top)) 6px 6px 12px;border-bottom:1px solid var(--line);background:var(--pane)}
+.term-h>.i{color:var(--dim)}
+.term-t{flex:1;min-width:0;display:flex;align-items:baseline;gap:8px;font-size:13px;white-space:nowrap;overflow:hidden}
+.term-t b{font-weight:600;flex:none;max-width:60%;overflow:hidden;text-overflow:ellipsis}
+.term-t span{color:var(--dim);font-family:var(--mono);font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tbtn{flex:none;padding:4px 10px;border-radius:8px;font-size:12.5px;color:var(--mut);border:1px solid var(--line);background:var(--card2);transition:color .15s,background .15s}
+.tbtn:hover:not(:disabled){color:var(--fg)}
+.tbtn.danger:hover:not(:disabled){color:var(--crit)}
+.term-body{position:relative;flex:1;min-height:0;overflow:auto;padding:6px 10px;cursor:text;overscroll-behavior:contain}
+.term-grid{position:relative;width:max-content;min-width:100%;font-family:var(--mono);font-size:12px;line-height:16px;color:var(--tfg);font-variant-ligatures:none}
+.tl{height:var(--ch,16px);white-space:pre}
+.tl span{display:inline-block;height:100%;vertical-align:top}
+.tl .tb{font-weight:700}.tl .ti{font-style:italic}.tl .tu{text-decoration:underline}.tl .td{opacity:.55}
+.term-m{position:absolute;left:0;top:0;visibility:hidden;pointer-events:none}
+.tcur{position:absolute;left:0;top:0;width:var(--cw,7px);height:var(--ch,16px);white-space:pre;pointer-events:none;box-shadow:inset 0 0 0 1px var(--mut);border-radius:1px}
+.term.focused .tcur{background:var(--tfg);color:var(--tbg);box-shadow:none}
+.tcur[hidden]{display:none}
+.term-in{position:absolute;left:0;top:0;width:2px;height:var(--ch,16px);padding:0;border:0;margin:0;resize:none;overflow:hidden;opacity:0;font-size:16px;color:transparent;background:transparent;caret-color:transparent;outline:none;pointer-events:none;white-space:pre}
+.term-empty[hidden]{display:none}
+.term-empty{position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:10px;color:var(--dim);font-size:13px;cursor:default}
+.term-exit{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;border-top:1px solid var(--line);background:var(--card);font-size:13px;color:var(--mut)}
+.term-exit[hidden]{display:none}
+.term-keys{display:none;gap:6px;padding:6px 8px calc(6px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--pane);overflow-x:auto;scrollbar-width:none}
+.term-keys::-webkit-scrollbar{display:none}
+.term-keys button{flex:1 0 auto;min-width:36px;height:36px;padding:0 6px;border-radius:9px;background:var(--card2);border:1px solid var(--line);font-family:var(--mono);font-size:13px;transition:color .15s,border-color .15s}
+.term-keys button:active{background:var(--line)}
+.term-keys button.on{border-color:var(--acc);color:var(--acc)}
+@media (pointer:coarse){.term-keys{display:flex}}
+@media (max-width:759px){.term-t span.dup{display:none}}
+@media (min-width:760px) and (min-height:520px){
+  .term.open{position:relative;top:auto;height:var(--th,300px);max-height:calc(100% - 200px);min-height:120px;z-index:auto;animation:none;border-top:1px solid var(--line)}
+  .term-drag{display:block;position:absolute;left:0;right:0;top:-5px;height:9px;cursor:row-resize;z-index:2;touch-action:none}
+  .term-drag::after{content:"";position:absolute;left:0;right:0;top:4px;height:1px;background:transparent;transition:background .15s}
+  .term-drag:hover::after,.term.dragging .term-drag::after{background:var(--acc)}
+  .term-h{padding-top:6px}
+  .term-grid{font-size:13px;line-height:17px}
+}
+@keyframes termin{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @keyframes blink{50%{opacity:0}}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -290,6 +337,29 @@ textarea.field{resize:vertical;min-height:84px}
         </div>
       </div>
     </footer>
+    <section class="term" id="term" aria-label="Terminal">
+      <div class="term-drag" id="term-drag" title="Drag to resize"></div>
+      <header class="term-h">
+        <svg class="i sm" viewBox="0 0 24 24"><path d="M4 6l6 6-6 6M12 18h8"/></svg>
+        <div class="term-t"><b id="term-title">Terminal</b><span id="term-cwd"></span></div>
+        <button class="tbtn" id="term-restart" data-act="t-restart" title="Start the shell again">Restart</button>
+        <button class="tbtn danger" id="term-end" data-act="t-close" title="End the shell">End</button>
+        <button class="iconbtn" data-act="t-hide" aria-label="Hide terminal" title="Hide terminal"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </header>
+      <div class="term-body" id="term-body">
+        <div class="term-grid" id="term-grid">
+          <div id="term-rows"></div>
+          <div class="tcur" id="term-cur" hidden></div>
+          <textarea class="term-in" id="term-in" rows="1" aria-label="Terminal input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="enter"></textarea>
+          <div class="tl term-m" id="term-m" aria-hidden="true">MMMMMMMMMM</div>
+        </div>
+        <div class="term-empty" id="term-empty" hidden></div>
+      </div>
+      <div class="term-exit" id="term-exit" hidden></div>
+      <div class="term-keys" id="term-keys">
+        <button data-act="t-key" data-k="esc">Esc</button><button data-act="t-key" data-k="tab">Tab</button><button data-act="t-key" data-k="ctrl" id="term-ctrl">Ctrl</button><button data-act="t-key" data-k="up" aria-label="Up">↑</button><button data-act="t-key" data-k="down" aria-label="Down">↓</button><button data-act="t-key" data-k="left" aria-label="Left">←</button><button data-act="t-key" data-k="right" aria-label="Right">→</button><button data-act="t-key" data-k="intr" aria-label="Control C">^C</button>
+      </div>
+    </section>
   </main>
 </div>
 <div class="sheet-wrap" id="sheet-wrap"><div class="sheet" id="sheet"></div></div>
@@ -368,6 +438,7 @@ const S = {
   open: new Map(),      // "<entryId>:<part>" -> bool  (details expanded state)
   qs: new Map(),        // question entryId -> { sel: Set[], other: string[], otherOn: bool[] }
   drafts: new Map(), els: new Map(), markRead: null, loaded: false,
+  terms: new Map(),     // chat id -> TerminalScreen (kept apart from the session reducer)
 };
 
 /* ===== reducer: JS port of mothr_core::SessionState::apply (keep identical semantics) ===== */
@@ -490,7 +561,7 @@ function reconnectNow() {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) reconnectNow(); });
 window.addEventListener('online', reconnectNow);
-function send(command) {
+function send(command, quiet = false) {
   return new Promise((resolve) => {
     if (C.ws && C.ws.readyState === 1) {
       const id = ++C.seq;
@@ -501,7 +572,7 @@ function send(command) {
       fetch('/api/command', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(command) })
         .then((r) => r.json()).then(resolve, (e) => resolve({ ok: false, error: 'Offline: ' + e.message }));
     }
-  }).then((r) => { if (!r.ok) toast(r.error || 'Command failed', 'error'); return r; });
+  }).then((r) => { if (!r.ok && !quiet) toast(r.error || 'Command failed', 'error'); return r; });
 }
 const sessionCmd = (id, command) => send({ type: 'session', id, command });
 
@@ -517,9 +588,10 @@ function loadSnapshot(snap) {
   S.sessions = new Map(snap.sessions.map((s) => [s.meta.id, s]));
   S.agents = snap.agents || []; S.usage = snap.usage || [];
   S.pinned = snap.pinned_projects || []; S.recent = snap.recent_projects || [];
+  S.terms = new Map((snap.terminals || []).map((t) => [t.id, t]));
   S.loaded = true;
   if (S.current && !S.sessions.has(S.current)) goList();
-  mark({ list: true, usage: true, chrome: true, all: true });
+  mark({ list: true, usage: true, chrome: true, all: true, term: true });
 }
 function onHubEvent(ev) {
   switch (ev.kind) {
@@ -558,12 +630,24 @@ function onHubEvent(ev) {
     case 'agents': S.agents = ev.agents; break;
     case 'projects': S.pinned = ev.pinned; S.recent = ev.recent; break;
     case 'toast': toast(ev.text, ev.level); break;
+    case 'terminal': {
+      const sc = ev.screen, old = S.terms.get(sc.id);
+      S.terms.set(sc.id, sc);
+      T.starting.delete(sc.id);
+      if (S.current === sc.id) mark({ term: true, chrome: !old || !old.exited !== !sc.exited });
+      break;
+    }
+    case 'terminal_closed':
+      S.terms.delete(ev.id);
+      T.shown.delete(ev.id);
+      if (S.current === ev.id) mark({ term: true, chrome: true });
+      break;
     default: break;
   }
 }
 
 /* ======================= render scheduling ======================= */
-const D = { list: false, usage: false, chrome: false, all: false, entries: new Set() };
+const D = { list: false, usage: false, chrome: false, all: false, term: false, entries: new Set() };
 let rafId = 0;
 function mark(flags) { Object.assign(D, Object.fromEntries(Object.entries(flags).filter(([, v]) => v))); if (!rafId) rafId = requestAnimationFrame(flush); }
 function flush() {
@@ -581,7 +665,8 @@ function flush() {
     updateJump();
     maybeMarkRead();
   }
-  D.list = D.usage = D.chrome = D.all = false;
+  if (D.term) renderTerm();
+  D.list = D.usage = D.chrome = D.all = D.term = false;
   D.entries.clear();
 }
 setInterval(() => mark({ list: true }), 30000);
@@ -702,7 +787,9 @@ function route() {
   if (!m) S.navFromList = false;
   if (id === S.current) return;
   saveDraft();
+  termFlush();
   S.current = id;
+  mark({ term: true });
   document.body.classList.toggle('in-session', !!id);
   if (id) {
     const ta = $('#prompt');
@@ -721,7 +808,7 @@ function renderChrome() {
   const statusTxt = st === 'error' ? `Error${m.status.message ? ': ' + m.status.message : ''}` : STATUS[st] || st;
   $('#shead').innerHTML = `<button class="iconbtn back" data-act="back" aria-label="Back">${ic('back')}</button>${badge(m.agent, 's', st)}
     <div class="t" data-act="m-rename" data-sid="${m.id}"><div class="t1">${esc(m.title)}</div><div class="t2">${esc(projectName(m.project))}${m.model ? ' · ' + esc(m.model) : ''} · <span class="st-label ${st}">${esc(statusTxt)}</span></div></div>
-    <button class="iconbtn" data-act="menu" data-sid="${m.id}" aria-label="Actions">${ic('more')}</button>`;
+    ${termButton(m.id)}<button class="iconbtn" data-act="menu" data-sid="${m.id}" aria-label="Actions">${ic('more')}</button>`;
   const sel = $('#mode'), modes = a.modes.includes(m.permission_mode) ? a.modes : a.modes.concat([m.permission_mode]);
   const opts = modes.map((x) => `<option value="${x}"${x === m.permission_mode ? ' selected' : ''}>${esc(MODES[x] || x)}</option>`).join('');
   if (sel.dataset.html !== opts) { sel.innerHTML = opts; sel.dataset.html = opts; }
@@ -1106,6 +1193,285 @@ $('#scroller').addEventListener('scroll', () => { if (!rafId) updateJump(); }, {
 // <details> "toggle" doesn't bubble; capture it to remember expanded state across re-renders.
 $('#transcript').addEventListener('toggle', (e) => { const k = e.target.dataset && e.target.dataset.k; if (k) S.open.set(k, e.target.open); }, true);
 
+/* ======================= terminal ======================= */
+// Each chat can have a terminal: the user's shell on the computer running Mothr. The hub sends
+// its screen (TerminalScreen) and we send back the bytes a terminal would.
+const T = {
+  shown: new Set(),     // chats whose terminal panel is open here
+  starting: new Set(),  // chats whose terminal we asked for and haven't seen yet
+  buf: '', bufId: null, timer: 0, busy: false, errAt: 0,
+  prev: '', composing: false, focused: false, ctrl: false,
+  fit: null, sentKey: '', rt: 0, h: 300, shownId: null,
+};
+const TSENT = ' ';    // keeps a character in the input so phone keyboards can always backspace
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+try { const h = parseInt(localStorage.getItem('mothr.terminalHeight'), 10); if (h > 0) T.h = h; } catch (_) { /* storage off */ }
+$('#term').style.setProperty('--th', T.h + 'px');
+function termButton(id) {
+  const sc = S.terms.get(id), on = T.shown.has(id), live = sc && !sc.exited;
+  return `<button class="iconbtn${on ? ' on' : ''}${live && !on ? ' live' : ''}" data-act="term" aria-label="Terminal" title="${live ? 'Terminal (running)' : 'Terminal'}">${ic('execute')}</button>`;
+}
+/** xterm 256-color table (0–15 from the theme) or a true color (bit 24 set). */
+function tcolor(n) {
+  if (n >= 0x1000000) return '#' + (n & 0xffffff).toString(16).padStart(6, '0');
+  if (n < 16) return `var(--t${n})`;
+  if (n < 232) { const v = [0, 95, 135, 175, 215, 255], k = n - 16; return `rgb(${v[Math.floor(k / 36)]},${v[Math.floor(k / 6) % 6]},${v[k % 6]})`; }
+  const g = 8 + (n - 232) * 10;
+  return `rgb(${g},${g},${g})`;
+}
+function spanHTML(s) {
+  let fg = s.fg != null ? tcolor(s.fg) : null, bg = s.bg != null ? tcolor(s.bg) : null;
+  if (s.inverse) { const f = fg; fg = bg || 'var(--tbg)'; bg = f || 'var(--tfg)'; }
+  const cls = (s.bold ? ' tb' : '') + (s.italic ? ' ti' : '') + (s.underline ? ' tu' : '') + (s.dim ? ' td' : '');
+  const st = (fg ? `color:${fg};` : '') + (bg ? `background:${bg};` : '');
+  if (!cls && !st) return esc(s.text);
+  return `<span${cls ? ` class="${cls.trim()}"` : ''}${st ? ` style="${st}"` : ''}>${esc(s.text)}</span>`;
+}
+/** The character under the cursor, and the span it's in (for an inverted cursor block). */
+function cellAt(line, col) {
+  let x = 0;
+  for (const s of line || []) {
+    for (const ch of Array.from(s.text)) { if (x === col) return { ch, s }; x++; }
+  }
+  return { ch: ' ', s: null };
+}
+function renderTerm() {
+  const id = S.current, el = $('#term'), show = !!(id && T.shown.has(id));
+  el.classList.toggle('open', show);
+  if (!show) {
+    if (T.shownId && document.activeElement === $('#term-in')) $('#term-in').blur();
+    T.shownId = null;
+    return;
+  }
+  const sc = S.terms.get(id);
+  $('#term-title').textContent = (sc && sc.title) || 'Terminal';
+  $('#term-cwd').textContent = sc ? sc.cwd : '';
+  $('#term-cwd').title = sc ? sc.cwd : '';
+  $('#term-cwd').classList.toggle('dup', !!(sc && sc.title));
+  $('#term-restart').disabled = !sc;
+  $('#term-end').disabled = !sc;
+  const empty = $('#term-empty');
+  if (!sc) {
+    $('#term-rows').innerHTML = '';
+    $('#term-cur').hidden = true;
+    const html = T.starting.has(id) ? 'Starting the shell…' : `<span>No shell is running.</span><button class="btn" data-act="t-open">${ic('play', 'sm')} Start</button>`;
+    if (empty.dataset.html !== html) { empty.innerHTML = html; empty.dataset.html = html; }
+    empty.hidden = false;
+    $('#term-exit').hidden = true;
+  } else {
+    empty.hidden = true;
+    $('#term-rows').innerHTML = sc.lines.map((l) => `<div class="tl">${l.map(spanHTML).join('')}</div>`).join('');
+    const cur = $('#term-cur'), ta = $('#term-in');
+    if (sc.cursor && !sc.exited) {
+      const [row, col] = sc.cursor, { ch, s } = cellAt(sc.lines[row], col);
+      cur.textContent = ch;
+      cur.style.transform = `translate(calc(${col} * var(--cw, 7px)), calc(${row} * var(--ch, 16px)))`;
+      // Keep the hidden input at the cursor so IME popups show up there.
+      ta.style.transform = cur.style.transform;
+      cur.style.color = s && s.fg != null && !T.focused ? tcolor(s.fg) : '';
+      cur.hidden = false;
+    } else cur.hidden = true;
+    const ex = $('#term-exit');
+    if (sc.exited) {
+      const html = `<span>${esc(sc.exited)}</span><button class="btn" data-act="t-restart">${ic('refresh', 'sm')} Restart</button>`;
+      if (ex.dataset.html !== html) { ex.innerHTML = html; ex.dataset.html = html; }
+    }
+    ex.hidden = !sc.exited;
+  }
+  if (T.shownId !== id) {
+    // Just opened, or another chat's terminal: fit it to this panel.
+    T.shownId = id;
+    T.sentKey = '';
+    requestAnimationFrame(() => termFit());
+  }
+}
+/** The size of one character cell, from a hidden run of "M"s in the terminal's font. */
+function termCell() {
+  const r = $('#term-m').getBoundingClientRect();
+  return { w: r.width / 10 || 7, h: r.height || 16 };
+}
+/** Fit the shell to the panel: send the columns and rows that fit, when they changed. */
+function termFit(force) {
+  const id = S.current;
+  if (!id || !T.shown.has(id)) return;
+  const body = $('#term-body'), grid = $('#term-grid'), c = termCell(), cs = getComputedStyle(body);
+  // The border box, so a scrollbar coming and going doesn't change the fit.
+  const r = body.getBoundingClientRect();
+  const w = r.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const h = r.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  grid.style.setProperty('--cw', c.w + 'px');
+  grid.style.setProperty('--ch', c.h + 'px');
+  if (w < c.w * 2 || h < c.h) return;
+  const cols = Math.max(2, Math.floor(w / c.w)), rows = Math.max(1, Math.floor(h / c.h));
+  T.fit = { cols, rows };
+  const key = `${id}:${cols}x${rows}`;
+  if (!force && key === T.sentKey) return;
+  T.sentKey = key;
+  send({ type: 'terminal_resize', id, cols, rows }, true);
+}
+new ResizeObserver(() => { clearTimeout(T.rt); T.rt = setTimeout(() => termFit(), 100); }).observe($('#term-body'));
+function termOpen() {
+  const id = S.current;
+  if (!id) return;
+  T.shown.add(id);
+  if (!S.terms.has(id)) T.starting.add(id);
+  mark({ term: true, chrome: true });
+  send({ type: 'terminal_open', id }).then((r) => {
+    if (!r.ok) { T.starting.delete(id); mark({ term: true }); return; }
+    if (S.current === id) termFit(true);
+  });
+  if (!isTouch) requestAnimationFrame(() => termFocus());
+}
+function termHide() {
+  if (!S.current) return;
+  T.shown.delete(S.current);
+  mark({ term: true, chrome: true });
+}
+function termFocus() {
+  const ta = $('#term-in');
+  if (!$('#term').classList.contains('open')) return;
+  if (document.activeElement !== ta) ta.focus({ preventScroll: true });
+}
+/** Queue bytes for the shell; they go out in small batches, one request at a time and in order. */
+function termSend(data) {
+  const id = S.current;
+  if (!data || !id) return;
+  if (T.bufId && T.bufId !== id) termFlush();
+  T.bufId = id;
+  T.buf += data;
+  if (!T.timer && !T.busy) T.timer = setTimeout(termFlush, 20);
+}
+function termFlush() {
+  clearTimeout(T.timer);
+  T.timer = 0;
+  const id = T.bufId, data = T.buf;
+  if (!id || !data || T.busy) return;
+  T.buf = '';
+  // The shell follows whoever typed last: take it back to this panel's size first.
+  const sc = S.terms.get(id);
+  if (id === S.current && T.fit && sc && (sc.cols !== T.fit.cols || sc.rows !== T.fit.rows)) send({ type: 'terminal_resize', id, cols: T.fit.cols, rows: T.fit.rows }, true);
+  T.busy = true;
+  send({ type: 'terminal_input', id, data }, true).then((r) => {
+    T.busy = false;
+    if (!r.ok && Date.now() - T.errAt > 5000) { T.errAt = Date.now(); toast(r.error || "Couldn't reach the terminal", 'error'); }
+    if (T.buf) termFlush();
+  });
+}
+/** Ctrl+key as a control code (null: no such code). */
+function ctrlChar(k) {
+  if (/^[a-z]$/i.test(k)) return String.fromCharCode(k.toLowerCase().charCodeAt(0) - 96);
+  return { '@': '\x00', ' ': '\x00', '2': '\x00', '[': '\x1b', '3': '\x1b', '\\': '\x1c', '4': '\x1c', ']': '\x1d', '5': '\x1d', '^': '\x1e', '6': '\x1e', '_': '\x1f', '-': '\x1f', '7': '\x1f', '?': '\x7f', '8': '\x7f' }[k] ?? null;
+}
+const CSI_KEYS = { ArrowUp: 'A', ArrowDown: 'B', ArrowRight: 'C', ArrowLeft: 'D', Home: 'H', End: 'F' };
+const TILDE_KEYS = { Insert: 2, Delete: 3, PageUp: 5, PageDown: 6, F5: 15, F6: 17, F7: 18, F8: 19, F9: 20, F10: 21, F11: 23, F12: 24 };
+const SS3_KEYS = { F1: 'P', F2: 'Q', F3: 'R', F4: 'S' };
+/** An unmodified arrow/Home/End key: "\x1bOA" in application cursor mode (vim, less …), else "\x1b[A". */
+function cursorKey(letter) {
+  const sc = S.current && S.terms.get(S.current);
+  return (sc && sc.app_cursor ? '\x1bO' : '\x1b[') + letter;
+}
+/** The bytes a key press sends, or null to leave it to the browser (text goes through `input`). */
+function keyBytes(e) {
+  const k = e.key;
+  if (e.getModifierState && e.getModifierState('AltGraph')) return null;
+  const ctrl = e.ctrlKey || T.ctrl, alt = e.altKey && !isMac, shift = e.shiftKey;
+  const mod = 1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0), meta = alt ? '\x1b' : '';
+  if (e.metaKey) return null;
+  if (k === 'Enter') return meta + '\r';
+  if (k === 'Backspace') return meta + (ctrl ? '\x08' : '\x7f');
+  if (k === 'Tab') return shift ? '\x1b[Z' : '\t';
+  if (k === 'Escape') return '\x1b';
+  if (CSI_KEYS[k]) return mod > 1 ? `\x1b[1;${mod}${CSI_KEYS[k]}` : cursorKey(CSI_KEYS[k]);
+  if (TILDE_KEYS[k]) return `\x1b[${TILDE_KEYS[k]}${mod > 1 ? ';' + mod : ''}~`;
+  if (SS3_KEYS[k]) return mod > 1 ? `\x1b[1;${mod}${SS3_KEYS[k]}` : `\x1bO${SS3_KEYS[k]}`;
+  if (Array.from(k).length !== 1) return null;
+  if (e.ctrlKey && e.altKey) return null; // AltGr on Windows
+  if (ctrl) {
+    if (e.ctrlKey && shift && /^[cv]$/i.test(k)) return null; // the browser's copy and paste
+    const c = ctrlChar(k);
+    return c == null ? null : meta + c;
+  }
+  return alt ? '\x1b' + k : null;
+}
+function termCtrl(on) { T.ctrl = on; $('#term-ctrl').classList.toggle('on', on); }
+function termReset() { const ta = $('#term-in'); ta.value = TSENT; T.prev = TSENT; ta.setSelectionRange(TSENT.length, TSENT.length); }
+(() => {
+  const ta = $('#term-in'), body = $('#term-body');
+  termReset();
+  ta.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    const b = keyBytes(e);
+    if (b == null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (T.ctrl) termCtrl(false);
+    termSend(b);
+    termReset();
+  });
+  // Typed text, from hardware and phone keyboards alike: send what changed in the hidden input
+  // (phone keyboards and IMEs rewrite words as you type, so diff rather than trust `data`).
+  ta.addEventListener('input', () => {
+    const v = ta.value, prev = T.prev;
+    let p = 0;
+    while (p < v.length && p < prev.length && v[p] === prev[p]) p++;
+    if (p > 0 && /[\ud800-\udbff]/.test(prev[p - 1])) p--;
+    let out = '\x7f'.repeat(Array.from(prev.slice(p)).length), add = v.slice(p).replace(/\r?\n/g, '\r');
+    T.prev = v;
+    if (add && T.ctrl && Array.from(add).length === 1) { const c = ctrlChar(add); if (c != null) add = c; termCtrl(false); }
+    termSend(out + add);
+    if (!T.composing && (v.length < TSENT.length || v.length > 64 || v.includes('\n'))) termReset();
+  });
+  ta.addEventListener('compositionstart', () => { T.composing = true; });
+  ta.addEventListener('compositionend', () => { T.composing = false; setTimeout(() => { if (!T.composing && T.prev.length > 64) termReset(); }, 0); });
+  ta.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text');
+    termSend(String(text || '').replace(/\r?\n/g, '\r'));
+  });
+  ta.addEventListener('focus', () => { T.focused = true; $('#term').classList.add('focused'); mark({ term: true }); });
+  ta.addEventListener('blur', () => { T.focused = false; $('#term').classList.remove('focused'); mark({ term: true }); });
+  // Tap or click the screen to type; selecting text to copy it still works.
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('button')) return;
+    const sel = window.getSelection();
+    if (sel && String(sel).length) return;
+    termFocus();
+  });
+  // Soft keys and header buttons mustn't take focus from the input (it would close the keyboard).
+  $('#term-keys').addEventListener('mousedown', (e) => e.preventDefault());
+  // Docked: drag the top edge to resize; the height is remembered.
+  const drag = $('#term-drag');
+  drag.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    drag.setPointerCapture(e.pointerId);
+    $('#term').classList.add('dragging');
+    const move = (ev) => {
+      const pane = $('#session-pane').getBoundingClientRect();
+      T.h = Math.round(Math.max(120, Math.min(pane.height - 200, pane.bottom - ev.clientY)));
+      $('#term').style.setProperty('--th', T.h + 'px');
+    };
+    const up = () => {
+      drag.removeEventListener('pointermove', move);
+      drag.removeEventListener('pointerup', up);
+      drag.removeEventListener('pointercancel', up);
+      $('#term').classList.remove('dragging');
+      try { localStorage.setItem('mothr.terminalHeight', String(T.h)); } catch (_) { /* storage off */ }
+    };
+    drag.addEventListener('pointermove', move);
+    drag.addEventListener('pointerup', up);
+    drag.addEventListener('pointercancel', up);
+  });
+  // As a full-height sheet, follow the visible viewport so the on-screen keyboard doesn't cover it.
+  const vv = window.visualViewport;
+  if (vv) {
+    const fit = () => { const el = $('#term'); el.style.setProperty('--vvh', vv.height + 'px'); el.style.setProperty('--vvt', vv.offsetTop + 'px'); };
+    vv.addEventListener('resize', fit);
+    vv.addEventListener('scroll', fit);
+    fit();
+  }
+})();
+const SOFT_KEYS = { esc: () => '\x1b', tab: () => '\t', up: () => cursorKey('A'), down: () => cursorKey('B'), left: () => cursorKey('D'), right: () => cursorKey('C'), intr: () => '\x03' };
+
 /* ======================= actions ======================= */
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); }
@@ -1185,6 +1551,31 @@ const ACTIONS = {
   'nc-pick': (d) => { const r = NC.rows[+d.i]; if (r) { NC.project = { path: r.p.path, name: r.p.name }; renderNCProject(); } },
   'nc-clear': () => { NC.project = null; NC.q = ''; NC.hits = null; renderNCProject(); const q = $('#nc-q'); if (q) q.focus(); },
   'nc-start': () => startNewChat(),
+  term: () => { if (S.current && T.shown.has(S.current)) termHide(); else termOpen(); },
+  't-open': () => termOpen(),
+  't-hide': () => termHide(),
+  't-restart': () => {
+    const id = S.current;
+    if (!id) return;
+    send({ type: 'terminal_restart', id }).then((r) => { if (r.ok && S.current === id) termFit(true); });
+    if (!isTouch) termFocus();
+  },
+  't-close': () => {
+    const id = S.current;
+    if (!id) return;
+    T.shown.delete(id);
+    mark({ term: true, chrome: true });
+    send({ type: 'terminal_close', id });
+  },
+  't-key': (d) => {
+    if (d.k === 'ctrl') termCtrl(!T.ctrl);
+    else {
+      const arrow = { up: 'A', down: 'B', right: 'C', left: 'D' }[d.k];
+      const bytes = T.ctrl && arrow ? `\x1b[1;5${arrow}` : SOFT_KEYS[d.k] ? SOFT_KEYS[d.k]() : '';
+      if (T.ctrl) termCtrl(false);
+      termSend(bytes);
+    }
+  },
 };
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');

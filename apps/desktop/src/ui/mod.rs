@@ -11,9 +11,11 @@ pub mod lightbox;
 pub mod options;
 pub mod picker;
 pub mod projects;
+pub mod resume;
 pub mod settings;
 pub mod sidebar;
 pub mod skills;
+pub mod terminal;
 pub mod theme;
 pub mod tokens;
 pub mod usage;
@@ -22,5 +24,6 @@ pub mod workspaces;
 
 pub fn init(cx: &mut gpui_kit::App) {
     picker::init(cx);
+    resume::init(cx);
     projects::init(cx);
 }

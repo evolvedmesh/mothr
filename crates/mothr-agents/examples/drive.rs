@@ -14,10 +14,11 @@ async fn main() {
     let meta = SessionMeta::new(kind, SessionKind::Chat, args[2].clone().into(), PermissionMode::Ask);
     // The skill library (point MOTHR_HOME at a test profile to try `/name`).
     let skills: Vec<Skill> = std::fs::read_dir(skills_dir()).into_iter().flatten().flatten().filter_map(|e| read_skill_dir(&e.path())).collect();
-    // DRIVE_ATTACH=<image path> attaches an image to the prompt.
+    // DRIVE_ATTACH=<image path> attaches an image to the prompt. DRIVE_RESUME=<agent session id>
+    // resumes that conversation, showing its history.
     let spec = SessionSpec {
         id: meta.id, agent: kind, kind: SessionKind::Chat, cwd: args[2].clone().into(), mode: PermissionMode::Ask,
-        model: args.get(4).cloned(), effort: std::env::var("DRIVE_EFFORT").ok(), context: std::env::var("DRIVE_CONTEXT").ok(), resume: None, resume_at: None, system_prompt: None, extra_dirs: vec![], title: "smoke".into(),
+        model: args.get(4).cloned(), effort: std::env::var("DRIVE_EFFORT").ok(), context: std::env::var("DRIVE_CONTEXT").ok(), resume: std::env::var("DRIVE_RESUME").ok(), resume_at: None, replay: std::env::var("DRIVE_RESUME").is_ok(), system_prompt: None, extra_dirs: vec![], title: "smoke".into(),
         skills: skills.clone(), skills_note: catalog_note(&skills),
     };
     let mut state = SessionState::new(meta);

@@ -33,6 +33,23 @@ impl ProjectRef {
     }
 }
 
+/// A conversation an agent keeps on its own (started in its CLI, another app, or a Mothr chat
+/// since deleted) that Mothr can pick up and resume.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PastChat {
+    pub agent: AgentKind,
+    /// The agent's own session id.
+    pub id: String,
+    /// The folder the conversation ran in.
+    pub cwd: PathBuf,
+    pub title: String,
+    #[serde(default)]
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The Mothr chat that already carries this conversation, if any.
+    #[serde(default)]
+    pub chat: Option<SessionId>,
+}
+
 /// A fuzzy search hit with the matched character indices into `project.name`/path for highlighting.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectHit {
@@ -83,6 +100,19 @@ pub enum AppCommand {
     Dequeue { id: SessionId, queue_id: String },
     /// Re-spawn an ended session, resuming the agent's conversation if possible.
     Resume { id: SessionId },
+    /// Pick up a conversation the agent keeps on its own (see [`HubApi::past_chats`]) as a Mothr
+    /// chat and resume it. A chat that already carries it is resumed instead. Returns the chat.
+    ResumePast {
+        agent: AgentKind,
+        /// The agent's own session id.
+        agent_session_id: String,
+        project: PathBuf,
+        #[serde(default)]
+        title: Option<String>,
+        /// Where the chat goes; None = the workspace open on the desktop.
+        #[serde(default)]
+        workspace: Option<WorkspaceId>,
+    },
     Rename { id: SessionId, title: String },
     /// Replace the projects a chat works across besides its primary one. A running chat picks
     /// them up from its next message (Claude Code restarts, resuming the conversation).
@@ -118,6 +148,21 @@ pub enum AppCommand {
     SetSkillEnabled { name: String, enabled: bool },
     /// Re-read the library folder (after editing skills by hand).
     RescanSkills,
+    /// Start the terminal of a chat (`id` is the chat), in `cwd` or else the chat's primary repo.
+    /// A terminal already running is left as it is. Its screen comes as [`HubEvent::Terminal`].
+    TerminalOpen {
+        id: crate::TerminalId,
+        #[serde(default)]
+        cwd: Option<PathBuf>,
+    },
+    /// Type into a terminal: text and the escape sequences keys send.
+    TerminalInput { id: crate::TerminalId, data: String },
+    /// The size the viewer has room for; the shell follows the last one who typed or resized.
+    TerminalResize { id: crate::TerminalId, cols: u16, rows: u16 },
+    /// Start the shell again (after it exited, or to start over).
+    TerminalRestart { id: crate::TerminalId },
+    /// End the shell and forget the terminal.
+    TerminalClose { id: crate::TerminalId },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -140,6 +185,10 @@ pub enum HubEvent {
     Workspaces { workspaces: Vec<Workspace>, active: Option<WorkspaceId> },
     /// Mothr's skill library changed, or installs started or finished.
     Skills { skills: Vec<crate::Skill>, installing: Vec<crate::SkillSource> },
+    /// A terminal's screen changed (sent at most a few times a second per terminal).
+    Terminal { screen: Box<crate::TerminalScreen> },
+    /// A terminal was closed.
+    TerminalClosed { id: crate::TerminalId },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -164,6 +213,9 @@ pub struct HubSnapshot {
     /// Skill installs running now.
     #[serde(default)]
     pub skills_installing: Vec<crate::SkillSource>,
+    /// The terminals open now.
+    #[serde(default)]
+    pub terminals: Vec<crate::TerminalScreen>,
 }
 
 /// Implemented by the hub; consumed by the GPUI app and the remote server.
@@ -179,6 +231,12 @@ pub trait HubApi: Send + Sync + 'static {
     /// Execute a command. `NewSession` returns the new id.
     fn dispatch(&self, command: AppCommand) -> anyhow::Result<Option<SessionId>>;
     fn search_projects(&self, query: &str, limit: usize) -> Vec<ProjectHit>;
+    /// The conversations `agent` keeps on its own, newest first. Blocking: it may start the
+    /// agent to ask it, so call it off the UI thread.
+    fn past_chats(&self, agent: AgentKind) -> anyhow::Result<Vec<PastChat>> {
+        let _ = agent;
+        anyhow::bail!("resuming agent chats isn't available here")
+    }
     /// List a folder of a known project (`dir` is relative, `""` for the root).
     fn list_dir(&self, project: &std::path::Path, dir: &str) -> anyhow::Result<crate::DirListing> {
         let _ = (project, dir);

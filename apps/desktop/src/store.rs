@@ -186,6 +186,9 @@ impl Store {
                 self.skills_installing = installing;
                 cx.emit(StoreEvent::Changed);
             }
+            // Terminal views watch their terminal in the hub directly; these are for remote
+            // clients. Don't re-render the whole app for every burst of shell output.
+            HubEvent::Terminal { .. } | HubEvent::TerminalClosed { .. } => return,
         }
         cx.notify();
     }

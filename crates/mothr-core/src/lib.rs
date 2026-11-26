@@ -7,6 +7,7 @@ pub mod files;
 pub mod hub;
 pub mod session;
 pub mod skill;
+pub mod terminal;
 pub mod usage;
 pub mod workspace;
 
@@ -17,5 +18,6 @@ pub use files::*;
 pub use hub::*;
 pub use session::*;
 pub use skill::*;
+pub use terminal::*;
 pub use usage::*;
 pub use workspace::*;

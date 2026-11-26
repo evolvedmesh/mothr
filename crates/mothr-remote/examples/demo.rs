@@ -8,18 +8,47 @@
 use chrono::Utc;
 use mothr_core::*;
 use mothr_remote::{RemoteServer, generate_token};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
+
+/// Terminals with a new screen to send, and the wake-up for the task that sends them.
+type Dirty = Arc<(Mutex<HashSet<TerminalId>>, Notify)>;
 
 struct DemoHub {
     tx: broadcast::Sender<HubEvent>,
     sessions: Mutex<Vec<SessionState>>,
     usage: Vec<ProviderUsage>,
+    /// Real shells, like the hub's: the web client's terminal works against the demo.
+    terminals: Arc<mothr_terminal::Terminals>,
 }
 
 impl DemoHub {
+    /// Send the screens of terminals that changed, at most every 80 ms each (like the hub).
+    async fn terminal_loop(self: Arc<Self>, dirty: Dirty) {
+        loop {
+            dirty.1.notified().await;
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            let ids: Vec<TerminalId> = dirty.0.lock().unwrap().drain().collect();
+            for id in ids {
+                if let Some(t) = self.terminals.get(id) {
+                    let _ = self.tx.send(HubEvent::Terminal { screen: Box::new(t.screen()) });
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+    }
+
+    /// Where a chat's terminal starts: this repository for the "mothr" chats, else home.
+    fn terminal_cwd(&self, id: TerminalId, cwd: Option<PathBuf>) -> PathBuf {
+        cwd.filter(|c| c.is_dir())
+            .or_else(|| self.session(id).and_then(|s| demo_root(&s.meta.project).ok()?.canonicalize().ok()))
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("/"))
+    }
+
     fn emit(self: &Arc<Self>, id: SessionId, event: SessionEvent) {
         if let Some(s) = self
             .sessions
@@ -245,6 +274,7 @@ impl HubApi for DemoHub {
                 project("/home/me/projects/website"),
                 project("/home/me/projects/api"),
             ],
+            terminals: self.terminals.screens(),
             ..Default::default()
         }
     }
@@ -358,7 +388,39 @@ impl HubApi for DemoHub {
                 );
                 None
             }),
+            AppCommand::TerminalOpen { id, cwd } => {
+                let t = self.terminals.open(id, self.terminal_cwd(id, cwd));
+                // An exited shell starts again when someone opens it.
+                if t.exited().is_some() {
+                    t.restart();
+                }
+                Ok(None)
+            }
+            AppCommand::TerminalInput { id, data } => {
+                let t = self.terminals.get(id).ok_or_else(|| anyhow::anyhow!("no terminal is open there"))?;
+                t.write(data.into_bytes());
+                Ok(None)
+            }
+            AppCommand::TerminalResize { id, cols, rows } => {
+                let t = self.terminals.get(id).ok_or_else(|| anyhow::anyhow!("no terminal is open there"))?;
+                t.resize(cols, rows, None);
+                Ok(None)
+            }
+            AppCommand::TerminalRestart { id } => {
+                let t = self.terminals.get(id).ok_or_else(|| anyhow::anyhow!("no terminal is open there"))?;
+                t.restart();
+                Ok(None)
+            }
+            AppCommand::TerminalClose { id } => {
+                if self.terminals.close(id) {
+                    let _ = self.tx.send(HubEvent::TerminalClosed { id });
+                }
+                Ok(None)
+            }
             AppCommand::Delete { id } => {
+                if self.terminals.close(id) {
+                    let _ = self.tx.send(HubEvent::TerminalClosed { id });
+                }
                 self.sessions.lock().unwrap().retain(|s| s.meta.id != id);
                 let _ = self.tx.send(HubEvent::SessionRemoved { id });
                 Ok(None)
@@ -544,12 +606,20 @@ fn demo_usage() -> Vec<ProviderUsage> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let (tx, _) = broadcast::channel(1024);
+    let dirty: Dirty = Arc::default();
+    let d = dirty.clone();
+    let terminals = Arc::new(mothr_terminal::Terminals::new(move |id| {
+        d.0.lock().unwrap().insert(id);
+        d.1.notify_one();
+    }));
     let hub = Arc::new(DemoHub {
         tx,
         sessions: Mutex::new(demo_sessions()),
         usage: demo_usage(),
+        terminals,
     });
     let _ = HUB.set(hub.clone());
+    tokio::spawn(hub.clone().terminal_loop(dirty));
     let token = std::env::var("MOTHR_DEMO_TOKEN").unwrap_or_else(|_| generate_token());
     let port = std::env::var("MOTHR_DEMO_PORT")
         .ok()
@@ -562,13 +632,14 @@ async fn main() -> anyhow::Result<()> {
         token,
         tunnel: TunnelKind::None,
     };
-    let server = RemoteServer::start(hub, settings).await?;
+    let server = RemoteServer::start(hub.clone(), settings).await?;
     println!(
         "Mothr remote demo: {}",
         server.pairing_url().unwrap_or_default()
     );
     tokio::signal::ctrl_c().await?;
     server.stop().await;
+    hub.terminals.close_all();
     Ok(())
 }
 

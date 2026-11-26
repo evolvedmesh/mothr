@@ -2,8 +2,9 @@
 
 A native phone app for controlling the Mothr desktop app from anywhere: read chats as they
 stream, approve permissions, answer agent questions, send/queue/steer messages, run slash
-commands, start new chats and watch usage limits. It stays connected in the background and
-notifies you when an agent needs you.
+commands, start new chats, use a chat's terminal (a shell on the desktop, in the chat's repo)
+and watch usage limits. It stays connected in the background and notifies you when an agent
+needs you.
 
 Agents still run on your computer. The phone talks to the desktop's remote-control server
 (the same one the web client uses), on the local network or through Tailscale / Dev Tunnels.

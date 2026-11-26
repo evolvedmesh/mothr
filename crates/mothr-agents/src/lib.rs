@@ -11,6 +11,7 @@ mod ask_mcp;
 pub mod claude;
 mod edits;
 pub mod detect;
+pub mod history;
 mod policy;
 
 use mothr_core::{
@@ -38,6 +39,9 @@ pub struct SessionSpec {
     pub resume: Option<String>,
     /// Resume only up to this agent message (truncating resume, used by edit & resend).
     pub resume_at: Option<String>,
+    /// The chat has no transcript of the resumed conversation yet (it was started outside
+    /// Mothr): show the history the agent replays instead of skipping it.
+    pub replay: bool,
     /// Extra instructions (used by Design mode).
     pub system_prompt: Option<String>,
     /// More project folders the agent may work in besides `cwd`.

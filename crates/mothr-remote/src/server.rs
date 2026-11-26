@@ -517,6 +517,16 @@ fn handle_client_message(st: &AppState, text: &str, reply: &mpsc::UnboundedSende
             return;
         }
     };
+    // Keystrokes must reach the shell in the order they were typed, so terminal input and
+    // resizes run right here, in arrival order (they only queue bytes for the pty).
+    if matches!(cmd, AppCommand::TerminalInput { .. } | AppCommand::TerminalResize { .. }) {
+        let r = match st.hub.dispatch(cmd) {
+            Ok(session_id) => CommandReply { ok: true, session_id, error: None },
+            Err(e) => CommandReply { ok: false, session_id: None, error: Some(format!("{e:#}")) },
+        };
+        let _ = reply.send(ack(id, r));
+        return;
+    }
     let hub = st.hub.clone();
     let reply = reply.clone();
     tokio::spawn(async move {

@@ -22,6 +22,7 @@ qrcode.workspace = true
 
 [dev-dependencies]
 mothr-projects.workspace = true
+mothr-terminal.workspace = true
 tokio-tungstenite = "0.28"
 reqwest.workspace = true
 chrono.workspace = true

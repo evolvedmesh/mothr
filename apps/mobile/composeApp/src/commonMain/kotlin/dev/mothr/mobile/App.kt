@@ -37,6 +37,7 @@ fun App() {
             val screen = when {
                 model.client == null || model.addingComputer -> "pair"
                 model.showNewChat -> "new"
+                model.stack.isNotEmpty() && model.terminalFor != null -> "terminal"
                 model.stack.isNotEmpty() -> "chat"
                 model.openProject != null -> "project"
                 model.showProjects -> "projects"
@@ -62,6 +63,7 @@ fun App() {
                     "chats" -> ChatsScreen(model)
                     "projects" -> ProjectsScreen(model)
                     "project" -> ProjectScreen(model)
+                    "terminal" -> TerminalScreen(model)
                     else -> ChatScreen(model)
                 }
             }
@@ -73,6 +75,7 @@ fun App() {
                     model.showNewChat -> model.showNewChat = false
                     model.showUsage -> model.showUsage = false
                     model.showAppearance -> model.showAppearance = false
+                    model.terminalFor != null -> model.hideTerminal()
                     model.stack.isNotEmpty() -> model.back()
                     else -> model.projectBack()
                 }
@@ -110,5 +113,6 @@ private fun depth(screen: String) = when (screen) {
     "projects" -> 1
     "project" -> 2
     "chat" -> 3
+    "terminal" -> 4
     else -> 0
 }

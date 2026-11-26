@@ -67,6 +67,9 @@ pub struct Palette {
     pub info: Hsla,
     /// Code blocks and terminal output.
     pub code_bg: Hsla,
+    /// The terminal's 16 ANSI colors: black, red, green, yellow, blue, magenta, cyan, white,
+    /// then their bright versions.
+    pub ansi: [Hsla; 16],
     /// Backdrop behind modals.
     pub scrim: Hsla,
 }
@@ -104,6 +107,10 @@ impl Palette {
             info: c(0x5AA9FF),
             code_bg: c(0x101116),
             scrim: ca(0x000000, 0.55),
+            ansi: [
+                c(0x2B2C35), c(0xF2555A), c(0x3DD68C), c(0xF5B544), c(0x5AA9FF), c(0xB48CF6), c(0x4CC9D8), c(0xC9CAD3),
+                c(0x60626E), c(0xFF7A7E), c(0x6BE6A9), c(0xFFCB6B), c(0x84C0FF), c(0xC9A8FF), c(0x7ADDE8), c(0xECECF1),
+            ],
         }
     }
 
@@ -131,6 +138,10 @@ impl Palette {
             info: c(0x2F7FE0),
             code_bg: c(0xF6F6F9),
             scrim: ca(0x0B0C10, 0.28),
+            ansi: [
+                c(0x15161A), c(0xC8323A), c(0x0E8A52), c(0xA36D00), c(0x2364C7), c(0x7C4DDB), c(0x0B8494), c(0xB9BAC4),
+                c(0x5F6170), c(0xDC3B40), c(0x14A363), c(0xC7860A), c(0x2F7FE0), c(0x9466F0), c(0x1499AB), c(0x9698A4),
+            ],
         }
     }
 

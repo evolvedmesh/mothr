@@ -17,11 +17,14 @@ import dev.mothr.client.FileHitView
 import dev.mothr.client.FileView
 import dev.mothr.client.MothrClient
 import dev.mothr.client.ProjectView
+import dev.mothr.client.TerminalView
 import dev.mothr.client.UsageView
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -96,6 +99,12 @@ class AppModel(private val scope: CoroutineScope) {
     var stack: List<String> by mutableStateOf(emptyList())
         private set
     var openChat: ChatDetail? by mutableStateOf(null)
+        private set
+
+    /** The chat whose terminal is on screen, and its live screen (null until the shell is up). */
+    var terminalFor: String? by mutableStateOf(null)
+        private set
+    var terminal: TerminalView? by mutableStateOf(null)
         private set
 
     var query by mutableStateOf("")
@@ -245,6 +254,7 @@ class AppModel(private val scope: CoroutineScope) {
         showNewChat = false
         showUsage = false
         stack = path
+        hideTerminal()
         openChat = computer.client.chat(path.last())
         withdrawChat(computer, path.last())
         act { markRead(path.last()) }
@@ -374,6 +384,7 @@ class AppModel(private val scope: CoroutineScope) {
     private fun clearView() {
         stack = emptyList()
         openChat = null
+        hideTerminal()
         groups = emptyList()
         usage = emptyList()
         agents = emptyList()
@@ -441,9 +452,13 @@ class AppModel(private val scope: CoroutineScope) {
             return
         }
         val id = stack.lastOrNull()
+        val termId = terminalFor
         val q = query
         val snapshot = withContext(Dispatchers.Default) {
-            Snapshot(c.connection(), c.chatGroups(q), c.usage(), c.agents(), c.projects(), id?.let { c.chat(it) }, c.takeToasts(), c.attention())
+            Snapshot(
+                c.connection(), c.chatGroups(q), c.usage(), c.agents(), c.projects(), id?.let { c.chat(it) },
+                termId?.let { c.terminal(it) }, c.takeToasts(), c.attention(),
+            )
         }
         if (computer.client !== c) return
         update(computer, snapshot.connection, snapshot.attention)
@@ -454,6 +469,7 @@ class AppModel(private val scope: CoroutineScope) {
         agents = snapshot.agents
         projects = snapshot.projects
         if (id == stack.lastOrNull()) openChat = snapshot.chat
+        if (termId != null && termId == terminalFor) terminal = snapshot.terminal
         snapshot.toasts.lastOrNull()?.let { toast = it.text }
     }
 
@@ -464,6 +480,7 @@ class AppModel(private val scope: CoroutineScope) {
         val agents: List<AgentView>,
         val projects: List<ProjectView>,
         val chat: ChatDetail?,
+        val terminal: TerminalView?,
         val toasts: List<dev.mothr.client.Toast>,
         val attention: List<Attention>,
     )
@@ -553,6 +570,7 @@ class AppModel(private val scope: CoroutineScope) {
     }
 
     fun back() {
+        hideTerminal()
         stack = stack.dropLast(1)
         openChat = stack.lastOrNull()?.let { client?.chat(it) }
     }
@@ -566,6 +584,83 @@ class AppModel(private val scope: CoroutineScope) {
                 onDone?.invoke()
             } catch (e: Throwable) {
                 toast = e.friendly()
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Terminal: the chat's shell runs on the desktop; the phone shows its screen and types.
+
+    /** Open the chat's terminal (starting the shell if it isn't running) and show it. */
+    fun showTerminal(chatId: String) {
+        val c = client ?: return
+        terminalFor = chatId
+        terminal = c.terminal(chatId)
+        act { openTerminal(chatId) }
+    }
+
+    /** Leave the terminal screen; the shell keeps running on the desktop. */
+    fun hideTerminal() {
+        terminalFor = null
+        terminal = null
+    }
+
+    fun restartShell() {
+        val id = terminalFor ?: return
+        act { restartTerminal(id) }
+    }
+
+    /** End the shell and leave the screen. */
+    fun endShell() {
+        val id = terminalFor ?: return
+        act { closeTerminal(id) }
+        hideTerminal()
+    }
+
+    /** Size the shell to what fits on the phone. */
+    fun fitTerminal(cols: Int, rows: Int) {
+        val id = terminalFor ?: return
+        act { resizeTerminal(id, cols.toUShort(), rows.toUShort()) }
+    }
+
+    /** Type into the terminal. Keys pressed while the last batch is on its way go out together. */
+    fun typeInTerminal(data: String) {
+        val c = client ?: return
+        val id = terminalFor ?: return
+        // Full-screen programs (vim, less) ask for application cursor keys: ESC O A, not ESC [ A.
+        val keys = if (terminal?.appCursor == true && data.length == 3 && data.startsWith("\u001b[") && data[2] in "ABCDHF") {
+            "\u001bO${data[2]}"
+        } else {
+            data
+        }
+        termKeys.trySend(TermKeys(c, id, keys))
+    }
+
+    private class TermKeys(val client: MothrClient, val chatId: String, val data: String)
+
+    private val termKeys = Channel<TermKeys>(Channel.UNLIMITED)
+
+    init {
+        scope.launch {
+            var next: TermKeys? = null
+            while (isActive) {
+                val first = next ?: termKeys.receive()
+                next = null
+                val batch = StringBuilder(first.data)
+                while (true) {
+                    val more = termKeys.tryReceive().getOrNull() ?: break
+                    if (more.client !== first.client || more.chatId != first.chatId) {
+                        next = more
+                        break
+                    }
+                    batch.append(more.data)
+                }
+                try {
+                    withContext(Dispatchers.IO) { first.client.terminalInput(first.chatId, batch.toString()) }
+                } catch (e: Throwable) {
+                    if (e is CancellationException) throw e
+                    toast = e.friendly()
+                }
             }
         }
     }

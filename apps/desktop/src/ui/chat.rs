@@ -1,6 +1,7 @@
 //! A single agent conversation: header, transcript, composer and the Changes panel.
 
 use super::changes::{ChangesEvent, ChangesPanel};
+use super::terminal::{TerminalEvent, TerminalView, docked};
 use super::diff::{InlineDiffs, stat_label};
 use super::home::mode_menu;
 use super::kit::*;
@@ -68,6 +69,9 @@ pub struct ChatView {
     /// Created the first time the Changes panel opens.
     changes: Option<Entity<ChangesPanel>>,
     changes_open: bool,
+    /// A terminal in the chat's primary repo, created the first time it opens.
+    terminal: Option<Entity<TerminalView>>,
+    terminal_open: bool,
     /// The composer placeholder currently set (it explains Enter, which depends on the state).
     placeholder_busy: Option<bool>,
     /// Totals for the header button, recomputed when the session's edits change.
@@ -150,6 +154,8 @@ impl ChatView {
             diffs: InlineDiffs::default(),
             changes: None,
             changes_open: false,
+            terminal: None,
+            terminal_open: false,
             placeholder_busy: None,
             change_summary: (0, ChangeSummary::default()),
             _subs: subs,
@@ -180,6 +186,42 @@ impl ChatView {
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |i, cx| i.focus(window, cx));
+    }
+
+    /// Show or hide the terminal (its shell keeps running while hidden).
+    pub fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_terminal_open(!self.terminal_open, window, cx);
+    }
+
+    pub fn set_terminal_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.terminal_open = open;
+        if open && self.terminal.is_none() {
+            let dir = self.store.read(cx).session(self.id).map(|s| s.meta.project.clone()).unwrap_or_default();
+            let store = self.store.clone();
+            let id = self.id;
+            let view = cx.new(|cx| TerminalView::new(store, id, dir, false, window, cx));
+            self.watch_terminal(&view, window, cx);
+            self.terminal = Some(view);
+        }
+        match (&self.terminal, open) {
+            (Some(t), true) => t.update(cx, |t, cx| t.focus(window, cx)),
+            _ => self.focus(window, cx),
+        }
+        cx.notify();
+    }
+
+    /// Take over the terminal opened beside the new-chat box this chat was started from.
+    pub fn adopt_terminal(&mut self, view: Entity<TerminalView>, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.watch_terminal(&view, window, cx);
+        self.terminal = Some(view);
+        self.terminal_open = open;
+        cx.notify();
+    }
+
+    fn watch_terminal(&mut self, view: &Entity<TerminalView>, window: &mut Window, cx: &mut Context<Self>) {
+        self._subs.push(cx.subscribe_in(view, window, |this, _, ev: &TerminalEvent, window, cx| match ev {
+            TerminalEvent::Hide => this.set_terminal_open(false, window, cx),
+        }));
     }
 
     /// Show or hide the Changes panel.
@@ -491,8 +533,9 @@ impl ChatView {
         let pinned = m.pinned;
         let changes = Some(self.refresh_change_summary(cx)).filter(|c| c.total > 0 && m.kind == SessionKind::Chat);
         let changes_open = self.changes_open;
-        // Next to the Changes panel or a design the header is narrow: keep it to one line.
-        let compact = changes_open || m.kind == SessionKind::Design;
+        let terminal_open = self.terminal_open;
+        // Next to a side panel or a design the header is narrow: keep it to one line.
+        let compact = changes_open || terminal_open || m.kind == SessionKind::Design;
 
         h_flex()
             .px_4()
@@ -568,6 +611,26 @@ impl ChatView {
                         .child(icon("file-diff").size(sz(14.)).text_color(if waiting { pal.warning } else { pal.text_muted }))
                         .child(stat_label(c.stats, &pal)),
                 )
+            })
+            .child({
+                let pal = tokens::p(cx);
+                let tip = format!("Terminal in {}  (Ctrl+`)", tildify(&project));
+                h_flex()
+                    .id("terminal-toggle")
+                    .size(sz(30.))
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .rounded(sz(tokens::radius::MD))
+                    .border_1()
+                    .border_color(pal.border)
+                    .when(terminal_open, |d| d.bg(pal.surface_hover))
+                    .text_color(if terminal_open { pal.text } else { pal.text_muted })
+                    .cursor_pointer()
+                    .hover(|d| d.bg(pal.surface_hover).text_color(pal.text))
+                    .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)))
+                    .child(icon("square-terminal").size(sz(14.)))
             })
             .when(!compact, |el| el.child({
                 let pal = tokens::p(cx);
@@ -1968,13 +2031,18 @@ impl Render for ChatView {
             .child(div().w_full().max_w(sz(860.)).mx_auto().px_6().pb_4().child(composer));
 
         let _ = window;
+        // The terminal docks around the chat; the Changes panel stays on the right of both.
+        let content = match self.terminal.clone().filter(|_| self.terminal_open) {
+            Some(t) => docked(&format!("chat-terminal-{}", self.id), chat_column.into_any_element(), t.into_any_element(), window),
+            None => chat_column.into_any_element(),
+        };
         match self.changes.clone().filter(|_| self.changes_open && s.meta.kind == SessionKind::Chat) {
             Some(panel) => h_flex()
                 .size_full()
-                .child(div().flex_1().min_w(sz(360.)).h_full().child(chat_column))
+                .child(div().flex_1().min_w(sz(360.)).h_full().child(content))
                 .child(div().w(relative(0.52)).min_w(sz(380.)).h_full().flex_none().border_l_1().border_color(theme.border).child(panel))
                 .into_any_element(),
-            None => chat_column.into_any_element(),
+            None => content,
         }
     }
 }

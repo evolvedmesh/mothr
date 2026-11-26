@@ -73,6 +73,28 @@ with the app.
   `+N repos` button in the chat's header. Claude Code gets them as `--add-dir` folders (a
   running chat restarts on the same conversation to pick up a change); other agents are told
   about them with the next message.
+- **Resume any agent's chats.** "Resume a chat" under the new-chat box (`Ctrl+Shift+R`)
+  lists the conversations every installed agent keeps on its own, newest first, with search
+  and an agent filter. They include ones started in the agent's CLI, another app, or a Mothr
+  chat since deleted. Pick one and it opens as a Mothr chat with its history, and the agent
+  picks the conversation up:
+  - Claude Code's are read from `~/.claude/projects`, history included.
+  - ACP agents (Copilot, Hermes, OpenCode, codex-acp) are asked with `session/list` and replay
+    their history on `session/load`.
+  - Codex rollouts in `~/.codex/sessions` are read directly when the adapter can't list them.
+
+  A conversation that's already a Mothr chat just opens that chat.
+- **A terminal beside every chat.** `` Ctrl+` `` (or `Ctrl+~`), or the terminal button in a chat's
+  header or under the new-chat box, opens your own shell in the chat's primary repo. It starts
+  your account's login shell, so your profile, rc files and prompt load. It works for a chat
+  you haven't started yet too, and carries over to the chat once you send:
+  - dock it top, right, bottom or left (the menu in its header, or Settings), and drag the
+    divider to size it; a side dock moves below the chat while the window is too narrow
+  - keys go to the shell (`Ctrl+P`, `Ctrl+R` and friends included); copy and paste with
+    `Ctrl+Shift+C` / `Ctrl+Shift+V`, select with the mouse, scroll back with the wheel or
+    `Shift+PageUp`
+  - hiding it keeps the shell running; the hub owns it, so the web client and the phone show
+    and type into the same shell
 - **General chats.** These aren't tied to any repo. They're for questions and quick tasks
   anywhere on the system, such as editing a config file. They run from your home directory.
   Start one with the globe button, the "General" chip, the first row of the repo finder, or
@@ -116,8 +138,8 @@ with the app.
 - **Claude Remote Control.** A per-chat toggle that hands the session to claude.ai / the Claude
   app.
 - **Mothr Remote.** Controls the whole app from a phone or another computer. It's a
-  token-protected web client (installable as a PWA) with live streaming, approvals, answers and
-  new chats. It can be reached on the LAN, directly over your **Tailscale** tailnet (no
+  token-protected web client (installable as a PWA) with live streaming, approvals, answers,
+  new chats and each chat's terminal (your shell on the computer, in the chat's repo). It can be reached on the LAN, directly over your **Tailscale** tailnet (no
   extra setup beyond being signed in), or through **Dev Tunnels**. The app shows a QR code for pairing.
 - **Mothr mobile** (`apps/mobile`). A native Android/iOS remote built on the same Rust session
   model. It stays connected in the background and sends a notification when an agent needs a
@@ -178,6 +200,8 @@ crates/
   mothr-usage      account limits for Claude / Codex / Copilot / Hermes
   mothr-design     Design-mode document model, loader, file watcher, exporters, agent instructions
   mothr-skills     skill library: installs from GitHub, git, links and folders; skills.sh search
+  mothr-terminal   terminals beside chats: the user's shell on a pty (alacritty_terminal), shared
+                   by the desktop view and remote clients
   mothr-remote     axum server + embedded web client, tunnels, QR
   mothr-client     remote-API client shared with the mobile app (UniFFI)
 mothr-design/      Mothr's own design system, written in its Design format
@@ -219,6 +243,8 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 | `Ctrl+N`                | New chat                |
 | `Ctrl+Shift+N`          | New design              |
 | `Ctrl+Shift+G`          | New general chat        |
+| `Ctrl+Shift+R`          | Resume an agent's chat  |
+| `` Ctrl+` `` / `Ctrl+~` | Show/hide the terminal  |
 | `Ctrl+P` / `Ctrl+K`     | Find repo               |
 | `Ctrl+B`                | Toggle sidebar          |
 | `Ctrl+L`                | Focus composer          |
@@ -228,8 +254,9 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 ### Developer hooks
 
 - `MOTHR_HOME=<dir>`: isolated config and data.
-- `MOTHR_OPEN=settings|remote|picker|usage|latest|changes|designs|design|subagent|projects|workspaces|skills`:
-  open a view at startup (`MOTHR_OPEN_DELAY_MS` delays it). `changes` opens the newest chat's Changes
+- `MOTHR_OPEN=settings|remote|picker|resume|terminal|usage|latest|changes|designs|design|subagent|projects|workspaces|skills`:
+  open a view at startup (`MOTHR_OPEN_DELAY_MS` delays it). `resume:<agent id>:<session id>`
+  resumes that past chat. `changes` opens the newest chat's Changes
   panel; `design` opens the newest design. `project:<path>[:<file>[:full]]` opens a repo, a
   file in it, and full screen. `image:<path>` opens the image viewer. `skills:discover[:<owner/repo>]`
   opens Discover on the Skills page, browsing a popular repo; `skills:search:<query>` searches.
@@ -245,7 +272,10 @@ Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libr
 - `cargo run -p mothr-app --example export_design -- <project> <out.html> [storybook-dir] [--build]`:
   export a repo's design without opening the app.
 - `cargo run -p mothr-agents --example drive -- <agent_id> <cwd> "<prompt>" [model]`: headless
-  driver smoke test.
+  driver smoke test. `DRIVE_RESUME=<agent session id>` resumes that conversation, showing its
+  history.
+- `cargo run -p mothr-agents --example past -- <agent_id> [session id]`: list an agent's past
+  chats as the resume picker sees them (with a Claude Code session id, print its history).
 - `cargo run -p mothr-remote --example demo`: the remote web client against a fake hub.
 - `cargo run -p mothr-skills --example skills -- search|browse|add|local [arg]`: the skill library
   from the shell (use a throwaway `MOTHR_HOME`).

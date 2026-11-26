@@ -7,6 +7,7 @@ use super::home::{Home, HomeEvent};
 use super::kit::*;
 use super::lightbox::{Lightbox, LightboxEvent, ViewImage};
 use super::picker::{PickerEvent, ProjectPicker};
+use super::resume::{ResumeEvent, ResumePicker};
 use super::projects::{Location, ProjectsEvent, ProjectsPage};
 use super::settings::SettingsView;
 use super::sidebar::{DraftRow, Sidebar, SidebarEvent};
@@ -106,6 +107,8 @@ pub struct Workspace {
     settings_view: Option<Entity<SettingsView>>,
     picker: Option<Entity<ProjectPicker>>,
     picker_for: PickerFor,
+    /// The past-chats picker (Ctrl+Shift+R).
+    resume: Option<Entity<ResumePicker>>,
     usage_open: bool,
     /// The image viewer, over the main area.
     lightbox: Option<Entity<Lightbox>>,
@@ -229,6 +232,7 @@ impl Workspace {
             settings_view: None,
             picker: None,
             picker_for: PickerFor::Chat,
+            resume: None,
             usage_open: false,
             lightbox: None,
             lightbox_return: None,
@@ -250,9 +254,19 @@ impl Workspace {
             match ev {
                 HomeEvent::Started(id) if active => {
                     this.open_session(*id, window, cx);
+                    // A terminal opened beside the box carries on beside the chat.
+                    if let Some((term, open)) = home.update(cx, |h, cx| h.take_terminal(cx))
+                        && let Some(chat) = this.chats.get(id).cloned()
+                    {
+                        let draft = term.read(cx).id();
+                        this.store.read(cx).hub.rekey_terminal(draft, *id);
+                        term.update(cx, |t, _| t.adopted());
+                        chat.update(cx, |c, cx| c.adopt_terminal(term, open, window, cx));
+                    }
                 }
                 HomeEvent::PickProject if active => this.open_picker(PickerFor::Chat, window, cx),
                 HomeEvent::AddProject if active => this.open_picker(PickerFor::AddToDraft, window, cx),
+                HomeEvent::Resume if active => this.open_resume(window, cx),
                 HomeEvent::Changed => this.refresh_drafts(cx),
                 _ => {}
             }
@@ -314,7 +328,7 @@ impl Workspace {
     }
 
     /// Developer hooks for screenshots / smoke tests:
-    /// `MOTHR_OPEN=settings|picker|latest|changes|designs|design|projects|project:<path>[:<file>[:full]]` and
+    /// `MOTHR_OPEN=settings|picker|resume|terminal|latest|changes|designs|design|projects|project:<path>[:<file>[:full]]` and
     /// `MOTHR_DEV_PROMPT="<agent_id>|<mode>|<model>|<chat|design>|<prompt>"` (project = cwd).
     fn dev_hooks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let open = std::env::var("MOTHR_OPEN").ok();
@@ -409,6 +423,7 @@ impl Workspace {
         self.route = route;
         self.queue_history_sync(cx);
         self.picker = None;
+        self.resume = None;
         self.usage_open = false;
         self.lightbox = None;
         if route == Route::Settings && self.settings_view.is_none() {
@@ -646,6 +661,20 @@ impl Workspace {
                 }
             }
             Some("picker") => this.open_picker(PickerFor::Chat, window, cx),
+            Some("resume") => this.open_resume(window, cx),
+            Some("terminal") => this.toggle_terminal(window, cx),
+            // MOTHR_OPEN=resume:<agent id>:<agent session id> resumes that past chat.
+            Some(p) if p.starts_with("resume:") => {
+                let mut parts = p.splitn(3, ':').skip(1);
+                let (Some(agent), Some(sid)) = (parts.next().and_then(AgentKind::from_id), parts.next()) else { return };
+                let chat = mothr_core::HubApi::past_chats(&*this.store.read(cx).hub, agent).ok().and_then(|cs| cs.into_iter().find(|c| c.id == sid));
+                if let Some(chat) = chat {
+                    let cmd = AppCommand::ResumePast { agent, agent_session_id: chat.id, project: chat.cwd, title: Some(chat.title), workspace: None };
+                    if let Some(id) = this.store.update(cx, |s, cx| s.dispatch(cmd, window, cx)) {
+                        this.open_session(id, window, cx);
+                    }
+                }
+            }
             Some("usage") => {
                 this.usage_open = true;
                 cx.notify();
@@ -751,7 +780,46 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Show or hide the terminal of the chat (or new-chat box) on screen.
+    fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.route {
+            Route::Session(id) => {
+                if let Some(chat) = self.chats.get(&id).cloned() {
+                    chat.update(cx, |c, cx| c.toggle_terminal(window, cx));
+                }
+            }
+            Route::Home => self.home.update(cx, |h, cx| h.toggle_terminal(window, cx)),
+            _ => {}
+        }
+    }
+
+    /// Pick one of the conversations the agents keep on their own and resume it here.
+    fn open_resume(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.picker = None;
+        let picker = cx.new(|cx| ResumePicker::new(self.store.clone(), window, cx));
+        self._subs.push(cx.subscribe_in(&picker, window, |this, _, ev: &ResumeEvent, window, cx| {
+            this.resume = None;
+            if let ResumeEvent::Picked(chat) = ev {
+                let cmd = AppCommand::ResumePast {
+                    agent: chat.agent,
+                    agent_session_id: chat.id.clone(),
+                    project: chat.cwd.clone(),
+                    title: Some(chat.title.clone()),
+                    workspace: this.store.read(cx).active_workspace_id(),
+                };
+                if let Some(id) = this.store.update(cx, |s, cx| s.dispatch(cmd, window, cx)) {
+                    this.open_session(id, window, cx);
+                }
+            }
+            cx.notify();
+        }));
+        picker.update(cx, |p, cx| p.focus(window, cx));
+        self.resume = Some(picker);
+        cx.notify();
+    }
+
     fn open_picker(&mut self, purpose: PickerFor, window: &mut Window, cx: &mut Context<Self>) {
+        self.resume = None;
         self.picker_for = purpose;
         let adding = matches!(purpose, PickerFor::AddToDraft | PickerFor::AddToChat(_));
         let picker = cx.new(|cx| {
@@ -884,6 +952,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &NewDesign, window, cx| this.new_design(None, window, cx)))
             .on_action(cx.listener(|this, _: &crate::NewGeneralChat, window, cx| this.new_general_chat(window, cx)))
             .on_action(cx.listener(|this, _: &OpenProjectPalette, window, cx| this.open_picker(PickerFor::Chat, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::ResumeChat, window, cx| this.open_resume(window, cx)))
+            .on_action(cx.listener(|this, _: &crate::ToggleTerminal, window, cx| this.toggle_terminal(window, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.navigate(Route::Settings, window, cx)))
             .on_action(cx.listener(|this, _: &OpenProjects, window, cx| this.open_projects(window, cx)))
             .on_action(cx.listener(|this, _: &OpenWorkspaces, window, cx| this.open_workspaces(window, cx)))
@@ -969,7 +1039,7 @@ impl Render for Workspace {
                                 )),
                         )
                     })
-                    .when_some(self.picker.clone(), |el, picker| {
+                    .when_some(self.picker.clone().map(|p| p.into_any_element()).or_else(|| self.resume.clone().map(|r| r.into_any_element())), |el, picker| {
                         el.child(
                             div()
                                 .id("picker-backdrop")
@@ -978,6 +1048,7 @@ impl Render for Workspace {
                                 .bg(gpui_kit::black().opacity(0.35))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.picker = None;
+                                    this.resume = None;
                                     cx.notify();
                                 }))
                                 .with_animation(

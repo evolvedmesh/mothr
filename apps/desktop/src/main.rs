@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 actions!(
     mothr,
-    [NewChat, NewDesign, NewGeneralChat, OpenProjectPalette, OpenProjects, OpenWorkspaces, NextWorkspace, PrevWorkspace, ToggleSidebar, OpenSettings, FocusComposer, GoBack, GoForward, Quit]
+    [NewChat, NewDesign, NewGeneralChat, ResumeChat, ToggleTerminal, OpenProjectPalette, OpenProjects, OpenWorkspaces, NextWorkspace, PrevWorkspace, ToggleSidebar, OpenSettings, FocusComposer, GoBack, GoForward, Quit]
 );
 
 /// Switch to the workspace at this position (0-based), like a browser's tab shortcuts.
@@ -81,6 +81,11 @@ fn main() {
                 KeyBinding::new(k!("n"), NewChat, None),
                 KeyBinding::new(k!("shift-n"), NewDesign, None),
                 KeyBinding::new(k!("shift-g"), NewGeneralChat, None),
+                KeyBinding::new(k!("shift-r"), ResumeChat, None),
+                // The terminal, as in VS Code: Ctrl+` (Ctrl+~ too).
+                KeyBinding::new("ctrl-`", ToggleTerminal, None),
+                KeyBinding::new("ctrl-~", ToggleTerminal, None),
+                KeyBinding::new("ctrl-shift-`", ToggleTerminal, None),
                 KeyBinding::new(k!("p"), OpenProjectPalette, None),
                 KeyBinding::new(k!("k"), OpenProjectPalette, None),
                 KeyBinding::new(k!("shift-p"), OpenProjects, None),

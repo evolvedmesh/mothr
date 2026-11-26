@@ -25,3 +25,4 @@ chrono.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 notify.workspace = true
+mothr-terminal.workspace = true

@@ -380,3 +380,43 @@ pub struct Attention {
     pub quick_replies: Vec<QuickReply>,
     pub updated_ms: i64,
 }
+
+/// A run of terminal cells with one style. Colors: `0..=255` index the 256-color table (0–15
+/// are the theme's ANSI colors); a value with bit 24 set (`0x1000000`) is `0xRRGGBB` in its low
+/// bits; None is the default color.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TermSpanView {
+    pub text: String,
+    pub fg: Option<u32>,
+    pub bg: Option<u32>,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub dim: bool,
+    /// Foreground and background swapped (default colors included).
+    pub inverse: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TermLineView {
+    pub spans: Vec<TermSpanView>,
+}
+
+/// The terminal beside a chat: its live screen (the desktop keeps the scrollback).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TerminalView {
+    pub chat_id: String,
+    /// Where the shell started, `~/…`.
+    pub cwd: String,
+    pub title: Option<String>,
+    pub cols: u16,
+    pub rows: u16,
+    /// One per row, top to bottom; trailing blanks are left out.
+    pub lines: Vec<TermLineView>,
+    pub cursor_row: Option<u16>,
+    pub cursor_col: Option<u16>,
+    /// Why the shell isn't running; None while it runs.
+    pub exited: Option<String>,
+    /// Arrows must send `ESC O A`/`B`/`C`/`D` (application cursor keys) instead of `ESC [ A`.
+    pub app_cursor: bool,
+}

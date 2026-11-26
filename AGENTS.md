@@ -54,6 +54,7 @@ crates/
   mothr-usage       account limits: Claude OAuth usage, Codex logs, Copilot quotas, Hermes
   mothr-design      Design-mode JSON DSL, loader, watcher, exporters, agent instructions
   mothr-skills      skill library: install from GitHub/git/links/folders, discovery (skills.sh)
+  mothr-terminal    terminals beside chats: user's login shell on a pty, screens for remote
   mothr-remote      axum server + embedded web client (assets/index.html), tunnels, QR
   mothr-client      remote-API client exported to Kotlin via UniFFI (mobile app)
 mothr-design/       Mothr's own design system written in its Design DSL

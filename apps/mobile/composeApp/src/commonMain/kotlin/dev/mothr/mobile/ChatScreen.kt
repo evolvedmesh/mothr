@@ -176,6 +176,7 @@ private fun TopBar(model: AppModel, chat: ChatDetail?) {
         } else {
             IconBtn(Res.drawable.ic_gauge, tint = pal.textMuted) { model.showUsage = true }
         }
+        IconBtn(Res.drawable.ic_terminal, tint = pal.textMuted) { model.showTerminal(s.id) }
     }
     Box(Modifier.fillMaxWidth().height(1.dp).background(pal.border))
 }
