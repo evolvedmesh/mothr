@@ -713,8 +713,15 @@ function showUsage() {
 }
 
 /* ======================= session list ======================= */
+// Mirrors SessionMeta::list_order: busy chats by creation (every event bumps updated_at, so
+// two streaming chats would trade places on each reply), then the rest by last activity.
+const isBusy = (m) => ['starting', 'working', 'needs_input'].includes(m.status.state);
 function sortedSessions() {
-  return [...S.sessions.values()].sort((a, b) => ts(b.meta.updated_at) - ts(a.meta.updated_at));
+  return [...S.sessions.values()].sort((a, b) => {
+    const x = a.meta, y = b.meta, bx = isBusy(x), by = isBusy(y);
+    if (bx !== by) return bx ? -1 : 1;
+    return bx ? ts(y.created_at) - ts(x.created_at) : ts(y.updated_at) - ts(x.updated_at);
+  });
 }
 function renderList() {
   const all = sortedSessions(), archived = all.filter((s) => s.meta.archived).length;

@@ -427,7 +427,7 @@ impl Sidebar {
                     || m.agent.display_name().to_lowercase().contains(&q)
             })
             .collect();
-        metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at));
+        metas.sort_by(SessionMeta::list_order);
 
         let mut out: Vec<(String, Vec<SessionMeta>)> = vec![];
         let push = |name: String, m: SessionMeta, out: &mut Vec<(String, Vec<SessionMeta>)>| {
@@ -483,7 +483,7 @@ impl Sidebar {
                     map.entry(m.project_name()).or_default().push(m);
                 }
                 let mut v: Vec<_> = map.into_iter().collect();
-                v.sort_by(|a, b| b.1[0].updated_at.cmp(&a.1[0].updated_at));
+                v.sort_by(|a, b| SessionMeta::list_order(&a.1[0], &b.1[0]));
                 out = v;
             }
             GroupMode::Agent => {

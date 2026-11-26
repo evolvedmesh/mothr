@@ -292,6 +292,26 @@ impl SessionMeta {
         self.parent.is_some()
     }
 
+    /// Mid-turn, starting, or waiting on the user.
+    pub fn is_busy(&self) -> bool {
+        matches!(self.status, SessionStatus::Starting | SessionStatus::Working | SessionStatus::NeedsInput)
+    }
+
+    /// The order chat lists show chats in: busy chats first, newest chat first; then the rest by
+    /// last activity, most recent first.
+    ///
+    /// Every event a chat applies bumps `updated_at`, so ordering busy chats by it makes two
+    /// streaming chats trade the top spot on each reply. Their creation time holds still until
+    /// the turn ends.
+    pub fn list_order(a: &SessionMeta, b: &SessionMeta) -> std::cmp::Ordering {
+        match (a.is_busy(), b.is_busy()) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (true, true) => b.created_at.cmp(&a.created_at).then_with(|| a.id.cmp(&b.id)),
+            (false, false) => b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)),
+        }
+    }
+
     pub fn project_name(&self) -> String {
         if self.general {
             return "General".into();
@@ -927,6 +947,32 @@ mod tests {
         let (efforts, contexts) = model_settings(&models, None);
         assert_eq!(efforts, vec!["low".to_string(), "high".into()]);
         assert_eq!(contexts, vec![ChoiceInfo::new("1m", "1M")]);
+    }
+
+    #[test]
+    fn busy_chats_keep_their_places_while_they_stream() {
+        let chat = |status: SessionStatus, created: i64, updated: i64| {
+            let mut m = SessionMeta::new(AgentKind::ClaudeCode, SessionKind::Chat, PathBuf::from("/p"), PermissionMode::Ask);
+            m.status = status;
+            m.created_at = DateTime::from_timestamp(created, 0).unwrap();
+            m.updated_at = DateTime::from_timestamp(updated, 0).unwrap();
+            m
+        };
+        let older = chat(SessionStatus::Working, 100, 900);
+        let newer = chat(SessionStatus::Working, 200, 800);
+        let idle = chat(SessionStatus::Idle, 300, 1000);
+        let mut list = vec![idle.clone(), older.clone(), newer.clone()];
+        list.sort_by(SessionMeta::list_order);
+        assert_eq!(list.iter().map(|m| m.id).collect::<Vec<_>>(), vec![newer.id, older.id, idle.id]);
+        // The older chat replies (its `updated_at` jumps ahead): nothing moves.
+        list[1].updated_at = DateTime::from_timestamp(2000, 0).unwrap();
+        list.sort_by(SessionMeta::list_order);
+        assert_eq!(list.iter().map(|m| m.id).collect::<Vec<_>>(), vec![newer.id, older.id, idle.id]);
+        // Idle chats go by last activity.
+        let recent = chat(SessionStatus::Ended, 50, 1500);
+        list.push(recent.clone());
+        list.sort_by(SessionMeta::list_order);
+        assert_eq!(list.iter().map(|m| m.id).collect::<Vec<_>>(), vec![newer.id, older.id, recent.id, idle.id]);
     }
 
     #[test]
