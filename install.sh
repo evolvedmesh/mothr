@@ -5,9 +5,10 @@
 #
 # Installs for the current user (no sudo). Run it again to update or repair. Mothr then keeps
 # itself up to date (Settings → Updates).
-#   Linux: the app in ~/.local/lib/mothr, the `mothr` command in ~/.local/bin and a menu entry.
-#   macOS: Mothr.app in ~/Applications (Launchpad, Spotlight) and the `mothr` command in
-#          ~/.local/bin.
+#   Linux: the app in ~/.local/lib/mothr, the `mothr` command in ~/.local/bin and a menu entry
+#          with Mothr's icon, so the desktop's app search finds it.
+#   macOS: Mothr.app in ~/Applications, registered and indexed so Spotlight and Launchpad find
+#          it right away, and the `mothr` command in ~/.local/bin.
 #
 # Options (pass after `bash -s --` when piping, e.g. `| bash -s -- --version 0.2.0`):
 #   --version <x.y.z>   install this release instead of the newest
@@ -231,7 +232,13 @@ install_linux() {
 
     if [ "$menu" = 1 ]; then
         mkdir -p "$apps_dir"
-        sed "s|^Exec=.*|Exec=$root/current/mothr|" "$root/current/dev.mothr.Mothr.desktop" > "$apps_dir/dev.mothr.Mothr.desktop"
+        # The icon by its path through `current`, so it follows updates. Older releases ship
+        # none; drop the line then.
+        local icon="$root/current/dev.mothr.Mothr.svg" icon_line
+        icon_line="s|^Icon=.*|Icon=$icon|"
+        [ -f "$icon" ] || icon_line='/^Icon=/d'
+        sed -e "s|^Exec=.*|Exec=$root/current/mothr|" -e "$icon_line" \
+            "$root/current/dev.mothr.Mothr.desktop" > "$apps_dir/dev.mothr.Mothr.desktop"
         command -v update-desktop-database >/dev/null && update-desktop-database -q "$apps_dir" 2>/dev/null || true
     fi
 

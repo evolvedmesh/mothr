@@ -181,6 +181,8 @@ jobs:
           install -m 755 target/release/mothr "$DIR/mothr"
           install -m 644 LICENSE "$DIR/LICENSE"
           install -m 644 apps/desktop/linux/dev.mothr.Mothr.desktop "$DIR/"
+          # The menu entry's icon (install.sh points the entry's Icon= at it): the macOS icon's SVG.
+          install -m 644 apps/desktop/macos/icon.svg "$DIR/dev.mothr.Mothr.svg"
           install -m 644 apps/desktop/assets/fonts/OFL.txt "$DIR/licenses/OFL-Geist.txt"
           install -m 644 apps/desktop/assets/logos/NOTICE.md "$DIR/licenses/NOTICE-logos.md"
           tar -czf "$DIR.tar.gz" "$DIR"

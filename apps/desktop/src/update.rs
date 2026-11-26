@@ -66,9 +66,11 @@ impl EventEmitter<UpdateEvent> for Updater {}
 impl Updater {
     pub fn new(rt: Handle, hub: Arc<Hub>, cx: &mut Context<Self>) -> Self {
         let install = Install::detect();
-        // What an update on Windows left behind: the binary it replaced, now that it's stopped.
+        // What an update left behind (on Windows the binary it replaced, now that it's stopped;
+        // on macOS the bundle), and on Linux a menu entry from before this version.
         if let Some(i) = &install {
             i.clean_up();
+            i.refresh_menu_entry();
         }
         // An update installed earlier that this run hasn't switched to yet.
         let state = install

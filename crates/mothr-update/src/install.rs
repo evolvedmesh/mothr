@@ -7,12 +7,14 @@
 //!   install.json                 marker: this copy was installed by the installer and updates itself
 //!   current -> versions/0.2.0    what `~/.local/bin/mothr` and the menu entry start
 //!   versions/0.1.0/  versions/0.2.0/
-//!     mothr  dev.mothr.Mothr.desktop  licenses/
+//!     mothr  dev.mothr.Mothr.desktop  dev.mothr.Mothr.svg  licenses/
 //! ```
 //!
 //! An update unpacks next to the running version and then swaps `current` in one rename, so
 //! the running app is never touched and the next start runs the new one. The version that is
-//! running and the new one are kept; older ones are removed.
+//! running and the new one are kept; older ones are removed. The menu entry install.sh wrote
+//! (`~/.local/share/applications/dev.mothr.Mothr.desktop`) is brought up to date by the new
+//! version's first start ([`Install::refresh_menu_entry`]).
 //!
 //! **Windows** ([`Layout::InPlace`], made by the setup, `apps/desktop/windows/mothr.iss`):
 //!
@@ -59,6 +61,11 @@ pub const WINDOWS_BINARY: &str = "mothr.exe";
 pub const MACOS_BINARY: &str = "Contents/MacOS/mothr";
 /// Next to a macOS bundle while it updates (see the module docs).
 pub const MACOS_WORK_DIR: &str = ".mothr-update";
+/// Linux: a release's menu entry. install.sh copies it into `$XDG_DATA_HOME/applications`
+/// (unless `--no-menu-entry`) with `Exec=` and `Icon=` pointing into the install.
+pub const MENU_ENTRY: &str = "dev.mothr.Mothr.desktop";
+/// Linux: the menu entry's icon in a release.
+pub const MENU_ICON: &str = "dev.mothr.Mothr.svg";
 /// The setup's Apps & features entry (`HKCU`). Keep the GUID in step with `AppId` in
 /// `apps/desktop/windows/mothr.iss`.
 pub const WINDOWS_UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{0E591738-8A65-45C8-8C9B-61E1FE0ECC9E}_is1";
@@ -185,6 +192,46 @@ impl Install {
                 let _ = std::fs::remove_dir_all(e.path());
             }
         }
+    }
+
+    /// Linux: rewrite the menu entry install.sh made from the release that starts now, as
+    /// install.sh would. An update is put in place by the version it replaces, which can't know
+    /// what the new release changes in the entry (its icon, at first); this start does. Only an
+    /// entry that starts this install is touched, and none is made.
+    pub fn refresh_menu_entry(&self) {
+        if self.layout != Layout::Versions {
+            return;
+        }
+        let Some(apps) = applications_dir() else { return };
+        match self.refresh_menu_entry_in(&apps) {
+            Ok(true) => tracing::info!("updated the menu entry in {}", apps.display()),
+            Ok(false) => {}
+            Err(e) => tracing::info!("couldn't update the menu entry: {e:#}"),
+        }
+    }
+
+    /// [`Self::refresh_menu_entry`] for the entry in `apps`; whether it changed.
+    fn refresh_menu_entry_in(&self, apps: &Path) -> anyhow::Result<bool> {
+        let path = apps.join(MENU_ENTRY);
+        let Ok(old) = std::fs::read_to_string(&path) else { return Ok(false) };
+        // install.sh wrote `Exec=<root>/current/mothr` in the spelling it was given (`/home`
+        // may be a symlink, say), so it's ours if it resolves to this install's binary.
+        let Some(exec) = old.lines().find_map(|l| l.strip_prefix("Exec=")).map(|e| PathBuf::from(e.trim())) else { return Ok(false) };
+        let ours = matches!((exec.canonicalize(), self.current_binary().canonicalize()), (Ok(a), Ok(b)) if a == b);
+        if !ours {
+            return Ok(false);
+        }
+        let Some(current) = exec.parent() else { return Ok(false) };
+        let template = std::fs::read_to_string(current.join(MENU_ENTRY)).context("the release has no menu entry")?;
+        let icon = current.join(MENU_ICON);
+        let new = menu_entry(&template, &exec, icon.is_file().then_some(icon.as_path()));
+        if new == old {
+            return Ok(false);
+        }
+        let tmp = apps.join(format!(".{MENU_ENTRY}.new"));
+        std::fs::write(&tmp, &new)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(true)
     }
 
     /// Download `release`, check it and put it in place. Returns once the next start will run
@@ -405,6 +452,33 @@ impl Install {
     }
 }
 
+/// Where install.sh puts the menu entry: `${XDG_DATA_HOME:-$HOME/.local/share}/applications`.
+fn applications_dir() -> Option<PathBuf> {
+    let set = |name| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let data = set("XDG_DATA_HOME").or_else(|| set("HOME").map(|h| h.join(".local/share")))?;
+    Some(data.join("applications"))
+}
+
+/// A release's menu entry as install.sh writes it: `Exec=` starts `exec` and `Icon=` shows
+/// `icon`, or goes without one. Keep in step with `install_linux` in install.sh.
+fn menu_entry(template: &str, exec: &Path, icon: Option<&Path>) -> String {
+    let mut out = String::with_capacity(template.len() + 160);
+    for line in template.lines() {
+        if line.starts_with("Exec=") {
+            out.push_str("Exec=");
+            out.push_str(&exec.to_string_lossy());
+        } else if line.starts_with("Icon=") {
+            let Some(icon) = icon else { continue };
+            out.push_str("Icon=");
+            out.push_str(&icon.to_string_lossy());
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// Copy everything in `from` into `to`, replacing files that exist.
 fn copy_over(from: &Path, to: &Path) -> anyhow::Result<()> {
     for e in std::fs::read_dir(from)?.flatten() {
@@ -543,6 +617,62 @@ mod tests {
         assert!(root.join("versions/0.1.0").is_dir(), "the running version stays");
         assert!(!root.join("versions/0.0.9").exists(), "older ones go");
         assert!(install.switch_to("9.9.9").is_err());
+    }
+
+    const RELEASE_ENTRY: &str = include_str!("../../../apps/desktop/linux/dev.mothr.Mothr.desktop");
+
+    /// An install (at its resolved path, as `detect` finds it) whose current release has a menu
+    /// entry and icon, and an `applications` folder.
+    fn with_release_entry(name: &str) -> (PathBuf, PathBuf, Install) {
+        let root = scratch(name).canonicalize().unwrap();
+        std::fs::write(root.join(MARKER), "{}").unwrap();
+        let dir = root.join("versions/0.2.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(BINARY), "").unwrap();
+        std::fs::write(dir.join(MENU_ENTRY), RELEASE_ENTRY).unwrap();
+        std::fs::write(dir.join(MENU_ICON), "<svg/>").unwrap();
+        let install = Install { root: root.clone(), running: Some("0.2.0".into()), layout: Layout::Versions };
+        install.switch_to("0.2.0").unwrap();
+        let apps = root.join("applications");
+        std::fs::create_dir_all(&apps).unwrap();
+        (root, apps, install)
+    }
+
+    #[test]
+    fn an_update_brings_the_menu_entry_its_icon() {
+        let (root, apps, install) = with_release_entry("menu");
+        assert!(RELEASE_ENTRY.contains("\nIcon=dev.mothr.Mothr\n"));
+        // install.sh was given another spelling of the root (`/home` as a symlink, say) and
+        // installed a release without an icon.
+        let alias = root.parent().unwrap().join(format!("{}-alias", root.file_name().unwrap().to_string_lossy()));
+        let _ = std::fs::remove_file(&alias);
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let exec = alias.join("current").join(BINARY);
+        std::fs::write(apps.join(MENU_ENTRY), menu_entry(RELEASE_ENTRY, &exec, None)).unwrap();
+
+        assert!(install.refresh_menu_entry_in(&apps).unwrap());
+        let entry = std::fs::read_to_string(apps.join(MENU_ENTRY)).unwrap();
+        assert!(entry.contains(&format!("\nExec={}\n", exec.display())), "{entry}");
+        assert!(entry.contains(&format!("\nIcon={}\n", alias.join("current").join(MENU_ICON).display())), "{entry}");
+        assert!(entry.starts_with("[Desktop Entry]\n") && entry.contains("\nName=Mothr\n"));
+        assert!(!install.refresh_menu_entry_in(&apps).unwrap(), "up to date: left as it is");
+
+        // A release without the icon drops the line rather than pointing at nothing.
+        std::fs::remove_file(root.join("versions/0.2.0").join(MENU_ICON)).unwrap();
+        assert!(install.refresh_menu_entry_in(&apps).unwrap());
+        assert!(!std::fs::read_to_string(apps.join(MENU_ENTRY)).unwrap().contains("Icon="));
+    }
+
+    #[test]
+    fn other_menu_entries_are_left_alone() {
+        let (_root, apps, install) = with_release_entry("menu-other");
+        assert!(!install.refresh_menu_entry_in(&apps).unwrap());
+        assert!(!apps.join(MENU_ENTRY).exists(), "installed with --no-menu-entry: none is made");
+
+        let packaged = "[Desktop Entry]\nName=Mothr\nExec=/usr/bin/mothr\n";
+        std::fs::write(apps.join(MENU_ENTRY), packaged).unwrap();
+        assert!(!install.refresh_menu_entry_in(&apps).unwrap());
+        assert_eq!(std::fs::read_to_string(apps.join(MENU_ENTRY)).unwrap(), packaged, "another install's entry");
     }
 }
 

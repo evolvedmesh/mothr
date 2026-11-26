@@ -35,10 +35,10 @@ curl -fsSL https://raw.githubusercontent.com/evolvedmesh/mothr/main/install.sh |
 The script finds out which system it's on and installs the newest release for your user,
 without `sudo`:
 
-- **Linux:** the app in `~/.local/lib/mothr`, one folder per version, and a Mothr entry in your
-  application menu
-- **macOS:** `Mothr.app` in `~/Applications`, where Launchpad and Spotlight find it (the build
-  for Apple silicon or Intel, whichever the Mac is)
+- **Linux:** the app in `~/.local/lib/mothr`, one folder per version, and a Mothr entry with its
+  icon in your application menu: search for "Mothr" in your desktop's launcher
+- **macOS:** `Mothr.app` in `~/Applications` (the build for Apple silicon or Intel, whichever
+  the Mac is): search for "Mothr" in Spotlight or find it in Launchpad, right after installing
 - on both, the `mothr` command in `~/.local/bin`
 
 The download is checked against the release's `SHA256SUMS` before anything is installed. To
