@@ -140,7 +140,8 @@ cargo clippy --workspace --all-targets        # keep it warning-free
   unit, so `cargo build --release` takes several minutes. Don't use it as an edit loop.
 - Windows code paths compile only for a Windows target. From Linux, check them with
   `XWIN_ACCEPT_LICENSE=1 cargo xwin clippy --target x86_64-pc-windows-msvc --workspace --all-targets`
-  (CI's `windows` job runs the same); the `release` skill has the Wine recipe.
+  (CI's `windows` job runs the same, but only on pull requests into `main`); the `release` skill
+  has the Wine recipe.
 - Linux needs the GPUI system libraries: Vulkan, xkbcommon (+x11), wayland, x11-xcb,
   fontconfig, freetype (the release workflow's apt list is the reference).
 - **Mobile** needs JDK 17, the Android SDK and NDK r28. Gotchas:

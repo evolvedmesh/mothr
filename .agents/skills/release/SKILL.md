@@ -149,7 +149,9 @@ Ask the user before deleting tags or releases.
 - `NDK_VERSION` must match `ndkVersion` in `composeApp/build.gradle.kts`.
 - The apt list in the linux job is the reference for GPUI's system libraries.
 - CI's `windows` job (clippy for the Windows target, and compiling `mothr.iss` with placeholder
-  files) isn't a required check, but when it's red the next release's windows job fails too.
+  files) runs only on pull requests into `main` (it takes ~5 min), so a Windows-only break in a
+  feature PR shows up at the `dev` → `main` PR; check locally with `cargo xwin clippy` before.
+  It isn't a required check, but when it's red the next release's windows job fails too.
 
 ## Trying the Windows build on Linux (Wine)
 

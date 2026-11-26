@@ -8,8 +8,9 @@ name: CI
 # `rust` and `pr-title` are required status checks on dev and main (the "mothr checks" repo
 # ruleset). Job names are the check names: rename them only together with the ruleset.
 # `windows` lints the same workspace for Windows and compiles the installer script, both of which
-# the release builds too; it isn't required (yet), but a red one means the next release's
-# Windows build will fail.
+# the release builds too. It's slow (~5 min), so it only runs on pull requests into main (the dev
+# -> main merge), not on every feature PR into dev. It isn't required; a red one means the next
+# release's Windows build will fail.
 # Don't add path filters: a required check that never runs stays pending and blocks the merge.
 
 on:
@@ -59,9 +60,11 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked --config 'profile.dev.package."*".opt-level=0' -- -D warnings
 
-  # Same lint for the Windows target: the cfg(windows) code paths only compile here.
+  # Same lint for the Windows target: the cfg(windows) code paths only compile here. Only for
+  # pull requests into main; on the others this job is skipped.
   windows:
     name: windows
+    if: github.base_ref == 'main'
     runs-on: windows-2025
     env:
       CARGO_INCREMENTAL: "0"
