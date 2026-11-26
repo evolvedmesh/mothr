@@ -94,6 +94,11 @@ scripts/            set-version.sh (used by semantic-release)
 - **Capabilities are explicit.** Per-agent features are gated by `AgentKind::supports_*`
   (`supports_edit`, `supports_steering`, `supports_remote_control`) and `supported_modes`.
   Don't branch on the agent kind in the UI for something a capability should say.
+- **Windows is a release target.** Start child processes through
+  `mothr_core::process::no_window` (tokio: `no_window(cmd.as_std_mut())`), or every agent,
+  `git` or probe flashes a console window from the GUI app. Get the home directory from
+  `mothr_core::config::home_dir()`, never `$HOME` (Windows doesn't set it), and gate
+  Unix-only code with `cfg(unix)`.
 - **Persisted data stays readable.** Transcripts (`<data>/sessions/<id>.json`) and
   `settings.toml` are serde of the core types. New fields get `#[serde(default)]` (or
   `skip_serializing_if`) so files from older versions still load; see
@@ -133,6 +138,9 @@ cargo clippy --workspace --all-targets        # keep it warning-free
   (in `apps/mobile`), `cargo test --workspace`, and clippy.
 - Debug builds use `opt-level = 1` (dependencies at 3); release uses thin LTO and one codegen
   unit, so `cargo build --release` takes several minutes. Don't use it as an edit loop.
+- Windows code paths compile only for a Windows target. From Linux, check them with
+  `XWIN_ACCEPT_LICENSE=1 cargo xwin clippy --target x86_64-pc-windows-msvc --workspace --all-targets`
+  (CI's `windows` job runs the same); the `release` skill has the Wine recipe.
 - Linux needs the GPUI system libraries: Vulkan, xkbcommon (+x11), wayland, x11-xcb,
   fontconfig, freetype (the release workflow's apt list is the reference).
 - **Mobile** needs JDK 17, the Android SDK and NDK r28. Gotchas:

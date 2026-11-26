@@ -129,6 +129,7 @@ pub async fn run(
             args.extend(["--context".to_string(), tier.to_string()]);
         }
     let mut cmd = Command::new(&program);
+    mothr_core::process::no_window(cmd.as_std_mut());
     cmd.args(&args)
         .envs(env)
         .current_dir(&spec.cwd)

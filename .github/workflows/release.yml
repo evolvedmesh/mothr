@@ -1,4 +1,4 @@
-name: Release (Linux x64, Android)
+name: Release (Linux x64, Windows x64, Android)
 
 # Every push to main or dev runs semantic-release: it reads the Conventional Commits since the
 # last release, bumps the version (scripts/set-version.sh), commits it, tags it and publishes a
@@ -6,10 +6,12 @@ name: Release (Linux x64, Android)
 # releases.
 #
 # Only a stable release on main is built and gets binaries attached:
-#   mothr_<version>_linux_x64.tar.gz       the desktop app
+#   mothr_<version>_linux_x64.tar.gz       the desktop app for Linux
+#   mothr_<version>_windows_x64_setup.exe  the Windows installer (per user, updates itself)
+#   mothr_<version>_windows_x64.zip        the same app, portable; installed copies update from it
 #   mothr_<version>_android_arm64-v8a.apk  the companion phone app (R8-optimized)
 # After every push to main, sync-dev merges main back into dev (a normal merge commit).
-# Other desktop platforms come later.
+# macOS comes later.
 #
 # Every stable release also carries SHA256SUMS; install.sh and the in-app updaters (desktop
 # and phone) only install files that match it.
@@ -189,6 +191,59 @@ jobs:
           # Only needed until the publish job attaches it to the release.
           retention-days: 1
 
+  # Built on Windows, not cross-compiled: GPUI's build script compiles its HLSL shaders with
+  # the Windows SDK's fxc.exe (preinstalled on this image) and only does so on a Windows host.
+  # .cargo/config.toml links the C runtime statically, so no VC++ redistributable is needed.
+  windows:
+    needs: release
+    if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-release
+
+      - name: Build
+        run: cargo build --release --locked -p mothr-app
+
+      # A portable folder: unzip and run mothr.exe. Chats and settings live in %APPDATA%\mothr,
+      # so replacing the folder with a newer one keeps them. Installed copies update from this
+      # zip too (mothr-update swaps the new mothr.exe in), so keep its name and shape.
+      - name: Package
+        shell: bash
+        run: |
+          VER="${{ needs.release.outputs.version }}"
+          DIR="mothr_${VER}_windows_x64"
+          mkdir -p "$DIR/licenses"
+          cp target/release/mothr.exe "$DIR/mothr.exe"
+          cp LICENSE "$DIR/LICENSE.txt"
+          cp apps/desktop/assets/fonts/OFL.txt "$DIR/licenses/OFL-Geist.txt"
+          cp apps/desktop/assets/logos/NOTICE.md "$DIR/licenses/NOTICE-logos.md"
+          7z a -tzip -mx=9 "$DIR.zip" "$DIR" >/dev/null
+          7z l "$DIR.zip"
+
+      # The installer (apps/desktop/windows/mothr.iss), from the same folder.
+      - name: Installer
+        shell: pwsh
+        run: |
+          $ver = "${{ needs.release.outputs.version }}"
+          ./apps/desktop/windows/build-installer.ps1 -Version $ver -Source "mothr_${ver}_windows_x64" -OutDir .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            mothr_*.zip
+            mothr_*_setup.exe
+          if-no-files-found: error
+          retention-days: 1
+
   android:
     needs: release
     if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/main'
@@ -266,7 +321,7 @@ jobs:
 
   # Attach every binary to the release in one step, after all builds finished.
   publish:
-    needs: [release, linux, android]
+    needs: [release, linux, windows, android]
     if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:

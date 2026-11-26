@@ -325,14 +325,14 @@ pub fn primary_local_ip() -> Option<IpAddr> {
     (!ip.is_unspecified() && !ip.is_loopback()).then_some(ip)
 }
 
-#[cfg(test)]
+// The fake CLIs are shell scripts, so the tests using them are Unix-only.
+#[cfg(all(test, unix))]
 pub(crate) mod test_util {
     use std::path::{Path, PathBuf};
 
     /// Tests that write and exec fake CLIs race with concurrent forks (ETXTBSY); run them serially.
     pub static PROC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    #[cfg(unix)]
     pub fn fake_cli(dir: &Path, script: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(dir).unwrap();

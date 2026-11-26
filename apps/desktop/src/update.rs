@@ -5,8 +5,9 @@
 //! next to the running version and restarts into it (or waits for "Restart to update" while
 //! chats are working). With "Install updates automatically" on, the download and install
 //! happen on their own and the next start runs the new version.
-//! Only copies installed with `install.sh` (see `mothr_update::install`) update themselves;
-//! others (`cargo run`, packages) only say that an update exists.
+//! Only copies installed with `install.sh` (Linux) or the setup (Windows) update themselves
+//! (see `mothr_update::install`); others (`cargo run`, packages, the portable Windows zip)
+//! only say that an update exists and where to get it.
 
 use chrono::{DateTime, Utc};
 use gpui_kit::*;
@@ -64,6 +65,10 @@ impl EventEmitter<UpdateEvent> for Updater {}
 impl Updater {
     pub fn new(rt: Handle, hub: Arc<Hub>, cx: &mut Context<Self>) -> Self {
         let install = Install::detect();
+        // What an update on Windows left behind: the binary it replaced, now that it's stopped.
+        if let Some(i) = &install {
+            i.clean_up();
+        }
         // An update installed earlier that this run hasn't switched to yet.
         let state = install
             .as_ref()
@@ -105,6 +110,18 @@ impl Updater {
     /// The release page of the newest version seen.
     pub fn release_url(&self) -> Option<&str> {
         self.latest.as_ref().map(|r| r.url.as_str())
+    }
+
+    /// Where to get the newest version by hand, for copies that don't update themselves: the
+    /// Windows installer itself on Windows, else the release page.
+    pub fn download_url(&self) -> Option<&str> {
+        let r = self.latest.as_ref()?;
+        if cfg!(windows)
+            && let Some(setup) = r.asset(&mothr_update::windows_setup_asset(&r.version))
+        {
+            return Some(&setup.url);
+        }
+        Some(&r.url)
     }
 
     /// Ask GitHub for the newest release. `manual` comes from "Check now".
@@ -208,12 +225,32 @@ impl Updater {
     /// Quit and start the installed version once this process has exited.
     pub fn restart(this: &Entity<Self>, cx: &mut App) {
         let Some(binary) = this.read(cx).install.as_ref().map(Install::current_binary) else { return };
+        match Self::restart_command(&binary).spawn() {
+            Ok(_) => cx.quit(),
+            Err(e) => tracing::warn!("couldn't restart into {}: {e}", binary.display()),
+        }
+    }
+
+    /// Windows: start the new binary now; it waits for this process to exit (see `main`).
+    #[cfg(windows)]
+    fn restart_command(binary: &std::path::Path) -> std::process::Command {
+        let mut cmd = std::process::Command::new(binary);
+        cmd.env(WAIT_PID_VAR, std::process::id().to_string());
+        if let Some(dir) = binary.parent() {
+            cmd.current_dir(dir);
+        }
+        cmd
+    }
+
+    /// A shell that waits for this process to exit and then starts the new binary.
+    #[cfg(not(windows))]
+    fn restart_command(binary: &std::path::Path) -> std::process::Command {
         let mut cmd = std::process::Command::new("sh");
         cmd.arg("-c")
             .arg(r#"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; exec "$2""#)
             .arg("mothr-restart")
             .arg(std::process::id().to_string())
-            .arg(&binary)
+            .arg(binary)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -223,10 +260,22 @@ impl Updater {
             // Its own process group, so it outlives this one.
             cmd.process_group(0);
         }
-        match cmd.spawn() {
-            Ok(_) => cx.quit(),
-            Err(e) => tracing::warn!("couldn't restart into {}: {e}", binary.display()),
-        }
+        cmd
+    }
+}
+
+/// Set on a Windows restart: the process id of the Mothr that started this one, to wait for.
+#[cfg(windows)]
+pub const WAIT_PID_VAR: &str = "MOTHR_WAIT_PID";
+
+/// After a restart into a new version (Windows), wait for the previous Mothr to finish saving
+/// and exit. Call first thing in `main`, while the process has one thread.
+pub fn wait_for_previous() {
+    #[cfg(windows)]
+    if let Some(pid) = std::env::var(WAIT_PID_VAR).ok().and_then(|p| p.parse::<u32>().ok()) {
+        // SAFETY: called at the top of `main`, before any other thread exists.
+        unsafe { std::env::remove_var(WAIT_PID_VAR) };
+        mothr_update::install::wait_for_exit(pid, Duration::from_secs(30));
     }
 }
 

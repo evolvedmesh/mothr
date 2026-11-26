@@ -143,7 +143,9 @@ async fn run_devtunnel(
     status: &watch::Sender<RemoteStatus>,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    let mut child = match Command::new(program)
+    let mut cmd = Command::new(program);
+    mothr_core::process::no_window(cmd.as_std_mut());
+    let mut child = match cmd
         .args(devtunnel_args(cfg.target.port()))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

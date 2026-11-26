@@ -1,5 +1,8 @@
 //! Mothr — a native manager for coding-agent chats.
 
+// A GUI app on Windows: no console window behind it. Debug builds keep the console for logs.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod assets;
 mod remote;
 mod store;
@@ -35,6 +38,7 @@ macro_rules! k {
 }
 
 fn main() {
+    update::wait_for_previous();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "mothr=info,warn".into()),

@@ -247,6 +247,7 @@ impl SettingsView {
         let state = u.state().clone();
         let can_install = u.can_install();
         let release_url = u.release_url().map(str::to_string);
+        let download_url = u.download_url().map(str::to_string);
         let checked = u.checked_at().map(relative_time);
         let busy_chats = self.store.read(cx).sessions.iter().filter(|c| c.meta.status.is_live()).count();
 
@@ -284,6 +285,14 @@ impl SettingsView {
                         u2.update(cx, |u, cx| u.install(cx));
                     }),
                 );
+            }
+            // The portable Windows zip: the new version's installer is a download.
+            UpdateState::Available { version, .. } if cfg!(windows) => {
+                if let Some(url) = download_url {
+                    actions = actions.child(
+                        Button::new("download-update").small().primary().icon(icon("download")).label(format!("Download {version}")).on_click(move |_, _, cx| cx.open_url(&url)),
+                    );
+                }
             }
             _ => {}
         }
@@ -337,6 +346,11 @@ impl SettingsView {
                         }
                     }))),
             );
+        } else if cfg!(windows) {
+            // The portable zip.
+            body = body.child(div().text_xs().text_color(pal.text_muted).child(
+                "This copy wasn’t installed with the Mothr installer, so it doesn’t update itself. Install Mothr with the setup from the release page to get updates; your chats and settings stay.",
+            ));
         } else {
             body = body.child(
                 v_flex()

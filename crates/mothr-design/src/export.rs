@@ -1291,14 +1291,18 @@ pub enum JsRuntimeKind {
 pub fn find_js_runtime() -> Option<JsRuntime> {
     let candidates = [("bun", JsRuntimeKind::Bun), ("npm", JsRuntimeKind::Npm)];
     let path = std::env::var_os("PATH")?;
-    let home_bun = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".bun/bin/bun"));
+    // Windows has no HOME, and the runners are bun.exe and npm.cmd there.
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd"] } else { &[""] };
+    let home_bun = home.map(|h| PathBuf::from(h).join(format!(".bun/bin/bun{}", exts[0])));
     for (name, kind) in candidates {
-        let mut found: Option<PathBuf> = std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file());
+        let mut found: Option<PathBuf> =
+            std::env::split_paths(&path).flat_map(|d| exts.iter().map(move |e| d.join(format!("{name}{e}")))).find(|p| p.is_file());
         if found.is_none() && kind == JsRuntimeKind::Bun {
             found = home_bun.clone().filter(|p| p.is_file());
         }
         if let Some(program) = found {
-            let ok = std::process::Command::new(&program)
+            let ok = command(&program)
                 .arg("--version")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -1312,11 +1316,23 @@ pub fn find_js_runtime() -> Option<JsRuntime> {
     None
 }
 
+/// A command that doesn't open a console window on Windows (Mothr is a GUI app there).
+fn command(program: &Path) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 /// Install dependencies and build the Storybook into `<dir>/storybook-static`. Blocking; can take
 /// a few minutes and needs network access for the install.
 pub fn build_storybook(dir: &Path, rt: &JsRuntime) -> anyhow::Result<PathBuf> {
     let run = |args: &[&str]| -> anyhow::Result<()> {
-        let out = std::process::Command::new(&rt.program)
+        let out = command(&rt.program)
             .args(args)
             .current_dir(dir)
             .env("STORYBOOK_DISABLE_TELEMETRY", "1")

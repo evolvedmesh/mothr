@@ -294,5 +294,5 @@ impl Render for ResumePicker {
 }
 
 fn dirs_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
+    Some(mothr_core::config::home_dir())
 }
