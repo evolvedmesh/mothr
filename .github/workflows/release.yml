@@ -1,0 +1,227 @@
+name: Release (Linux x64, Android)
+
+# Every push to main or dev runs semantic-release: it reads the Conventional Commits since the
+# last release, bumps the version (scripts/set-version.sh), commits it, tags it and publishes a
+# GitHub release with notes. dev publishes prereleases (0.1.0-dev.1, …); main publishes stable
+# releases.
+#
+# Only a stable release on main is built and gets binaries attached:
+#   mothr_<version>_linux_x64.tar.gz       the desktop app
+#   mothr_<version>_android_arm64-v8a.apk  the companion phone app (R8-optimized)
+# Other desktop platforms come later.
+#
+# Secrets:
+#   RELEASE_APP_ID, RELEASE_APP_PRIVATE_KEY  the evolvedmesh release bot GitHub App (required)
+#   ANDROID_KEYSTORE_BASE64                  release keystore, base64 encoded (optional)
+#   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# Without the keystore the APK is signed with a throwaway debug key, so it won't install over
+# a previous release.
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.semrel.outputs.new_release_version }}
+      tag: ${{ steps.semrel.outputs.new_release_git_tag }}
+      released: ${{ steps.semrel.outputs.new_release_published }}
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      # @semantic-release/git pushes the `ci(release):` commit back to the protected branch.
+      # Only the release bot App can bypass the dev/main rulesets; the default GITHUB_TOKEN
+      # can't, so everything here runs as the App.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Without any tag semantic-release starts at 1.0.0. Mothr starts at 0.1.0, so the first
+      # run tags the root commit v0.0.0 as the base; the first `feat` then releases 0.1.0.
+      - name: Seed base version
+        run: |
+          if [ -z "$(git tag -l 'v*')" ]; then
+            root=$(git rev-list --max-parents=0 HEAD | tail -n 1)
+            git tag v0.0.0 "$root"
+            git push origin v0.0.0
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      # scripts/set-version.sh rewrites Cargo.toml and Cargo.lock and @semantic-release/git
+      # commits them before the tag is created, so the tag points at a tree with its version.
+      - name: Run semantic-release
+        id: semrel
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          extra_plugins: |
+            @semantic-release/exec
+            @semantic-release/git
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+  # Release assets and workflow artifacts count against the account's storage, so dev
+  # prereleases get a tag and notes but no binaries.
+  linux:
+    needs: release
+    if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/main'
+    # Pinned, not *-latest, so an image bump can't break a release. The binary needs
+    # glibc 2.39+ (this image's).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      # GPUI's Linux backends: Wayland and X11 (xkbcommon, xcb), fonts, Vulkan.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libvulkan-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-release
+
+      - name: Build
+        run: cargo build --release --locked -p mothr-app
+
+      - name: Package
+        run: |
+          VER="${{ needs.release.outputs.version }}"
+          DIR="mothr_${VER}_linux_x64"
+          mkdir -p "$DIR/licenses"
+          install -m 755 target/release/mothr "$DIR/mothr"
+          install -m 644 apps/desktop/linux/dev.mothr.Mothr.desktop "$DIR/"
+          install -m 644 apps/desktop/assets/fonts/OFL.txt "$DIR/licenses/OFL-Geist.txt"
+          install -m 644 apps/desktop/assets/logos/NOTICE.md "$DIR/licenses/NOTICE-logos.md"
+          tar -czf "$DIR.tar.gz" "$DIR"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: mothr_*.tar.gz
+          if-no-files-found: error
+          # Only needed until the publish job attaches it to the release.
+          retention-days: 1
+
+  android:
+    needs: release
+    if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/mobile
+    env:
+      # Keep in lockstep with ndkVersion in apps/mobile/composeApp/build.gradle.kts.
+      NDK_VERSION: 28.2.13676358
+      # Gobley 0.3.7 reads build-script output from Cargo's old build-dir layout; Cargo 1.100
+      # switched to the new one and the build fails. RUSTUP_TOOLCHAIN makes Gobley's `cargo`
+      # and `rustup` calls use this one. Lift it once Gobley supports the new layout.
+      RUSTUP_TOOLCHAIN: "1.93.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install the NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" >/dev/null
+
+      # Gobley builds crates/mothr-client for Android (and adds the rustup targets itself) and
+      # generates the Kotlin bindings from a host build of it.
+      - uses: dtolnay/rust-toolchain@1.93.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-release
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "MOTHR_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set; the APK is signed with a debug key."
+          fi
+
+      # Release build: R8 minify + resource shrinking, Rust client built with --release. Only
+      # arm64-v8a, which covers practically every real phone.
+      - name: Build
+        env:
+          MOTHR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MOTHR_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          MOTHR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          ./gradlew :composeApp:assembleRelease --console=plain \
+            -Pmothr.abis=arm64-v8a -Pmothr.versionCode=${{ github.run_number }}
+
+      - name: Package
+        run: |
+          mv composeApp/build/outputs/apk/release/composeApp-release.apk \
+             "$GITHUB_WORKSPACE/mothr_${{ needs.release.outputs.version }}_android_arm64-v8a.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: mothr_*.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  # Attach every binary to the release in one step, after all builds finished.
+  publish:
+    needs: [release, linux, android]
+    if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.release.outputs.tag }}" dist/* \
+            --clobber --repo "${{ github.repository }}"

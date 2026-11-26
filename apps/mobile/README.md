@@ -64,7 +64,9 @@ curl -H 'Authorization: Bearer devtoken-devtoken-devtoken' -H 'content-type: app
 
 ## Requirements
 
-- Rust (stable) with the mobile targets. Gobley runs `rustup target add` for you.
+- Rust with the mobile targets. Gobley runs `rustup target add` for you. Gobley 0.3.7 can't
+  read the build-dir layout of Cargo 1.100+, so build with an older toolchain:
+  `RUSTUP_TOOLCHAIN=1.93.0 ./gradlew …` (CI pins the same).
 - JDK 17.
 - **Android:** the Android SDK and NDK r28 (`ndkVersion` in `composeApp/build.gradle.kts`).
   Point Gradle at the SDK with `ANDROID_HOME` or `local.properties` (`sdk.dir=…`).

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Mothr
+Comment=Run Claude Code, Codex, Copilot, OpenCode and Hermes in one native chat window
+Exec=mothr
+Terminal=false
+Categories=Development;
+StartupWMClass=dev.mothr.Mothr

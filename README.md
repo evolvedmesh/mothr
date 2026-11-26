@@ -238,6 +238,16 @@ Plain Cargo works too: `cargo run --release` builds and launches `mothr`, and
 
 Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libraries).
 
+### Releases
+
+Every push to `main` or `dev` runs `.github/workflows/release.yml`. semantic-release reads the
+[Conventional Commits](https://www.conventionalcommits.org/) since the last release, sets the
+version with `scripts/set-version.sh` (the Cargo workspace, and through it the Android app),
+then tags and publishes a GitHub release. Versions start at `0.1.0`; `dev` publishes
+prereleases (`0.1.0-dev.1`, …). Stable releases on `main` also attach the Linux x64 desktop
+build (`mothr_<version>_linux_x64.tar.gz`) and the R8-optimized Android APK
+(`mothr_<version>_android_arm64-v8a.apk`). The workflow's header lists the secrets it needs.
+
 | Shortcut (Cmd on macOS) | Action                  |
 | ----------------------- | ----------------------- |
 | `Ctrl+N`                | New chat                |

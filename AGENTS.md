@@ -105,5 +105,8 @@ Run against an isolated profile so you don't touch real chats or settings:
   `feat(hub): …`, `fix(app): …`, `docs: …`, `refactor(agents): …`, `test(core): …`,
   `chore: …`. Use the crate name without the `mothr-` prefix as the scope (`desktop` and
   `mobile` for the apps).
+- Releases are cut by semantic-release from those commit types (`.github/workflows/release.yml`,
+  `.releaserc.json`): `feat` → minor, `fix`/`perf` → patch. Don't bump versions by hand; it
+  owns `version` in Cargo.toml (the Android app reads it from there).
 - Don't commit `target/`, `.codegraph/` contents, or anything from a real `MOTHR_HOME`
   (transcripts, settings, tokens).

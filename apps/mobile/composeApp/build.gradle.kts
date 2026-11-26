@@ -2,6 +2,21 @@ import gobley.gradle.Variant
 import gobley.gradle.cargo.dsl.appleMobile
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
+// The app's version is the Cargo workspace's, which semantic-release bumps on every release
+// (scripts/set-version.sh). CI passes a growing versionCode (-Pmothr.versionCode) and can narrow
+// the ABIs (-Pmothr.abis=arm64-v8a); Gobley builds the Rust client for the same ABIs.
+val mothrVersion: String = rootProject.file("../../Cargo.toml").readLines()
+    .first { it.startsWith("version = ") }
+    .substringAfter('"').substringBefore('"')
+val mothrVersionCode: Int = providers.gradleProperty("mothr.versionCode").orNull?.toInt() ?: 1
+val mothrAbis: List<String> = providers.gradleProperty("mothr.abis").orNull
+    ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
+    ?: listOf("arm64-v8a", "x86_64")
+
+// Release signing comes from the environment (CI decodes the keystore from a secret). Without
+// it, release builds fall back to the debug key so they still build and install locally.
+val releaseKeystore: String? = providers.environmentVariable("MOTHR_KEYSTORE").orNull
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.application)
@@ -76,13 +91,27 @@ android {
         applicationId = "dev.mothr.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
-        ndk { abiFilters += setOf("arm64-v8a", "x86_64") }
+        versionCode = mothrVersionCode
+        versionName = mothrVersion
+        ndk { abiFilters += mothrAbis }
+    }
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = providers.environmentVariable("MOTHR_KEYSTORE_PASSWORD").orNull
+                keyAlias = providers.environmentVariable("MOTHR_KEY_ALIAS").orNull
+                keyPassword = providers.environmentVariable("MOTHR_KEY_PASSWORD").orNull
+            }
+        }
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            // R8: shrink, optimize and obfuscate the Kotlin side, drop unused resources.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     compileOptions {
