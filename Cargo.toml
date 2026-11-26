@@ -4,7 +4,7 @@ members = ["crates/*", "apps/desktop"]
 default-members = ["apps/desktop"]
 
 [workspace.package]
-version = "0.2.0-dev.1"
+version = "0.2.0-dev.2"
 edition = "2024"
 license = "MIT"
 authors = ["Mothr contributors"]
