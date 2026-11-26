@@ -91,12 +91,6 @@ fun NewChatScreen(model: AppModel) {
         ?: agents.firstOrNull { it.agent.id == model.lastAgent }
         ?: agents.firstOrNull()
 
-    // The mode list depends on the agent; fall back to its closest supported mode.
-    var modeId by remember { mutableStateOf<String?>(null) }
-    val modes = agent?.modes.orEmpty()
-    val wantedMode = modeId ?: model.lastMode ?: "ask"
-    val mode = modes.firstOrNull { it.id == wantedMode } ?: modes.firstOrNull()
-
     // Model, reasoning and context: what the person picked this time, else what this agent last
     // started with. Whatever the agent (or the picked model) no longer offers falls back to Default.
     var modelChoice by remember { mutableStateOf<Choice?>(null) }
@@ -106,6 +100,14 @@ fun NewChatScreen(model: AppModel) {
     val modelOption = agent?.models?.firstOrNull { it.id == (modelChoice ?: Choice(agentKey?.let(model::lastModel))).id }
     val effort = modelOption?.efforts?.firstOrNull { it.id == (effortChoice ?: Choice(agentKey?.let(model::lastEffort))).id }
     val context = modelOption?.contexts?.firstOrNull { it.id == (contextChoice ?: Choice(agentKey?.let(model::lastContext))).id }
+
+    // The mode list depends on the agent and the model (Default: the agent's "default" entry);
+    // fall back to its closest supported mode.
+    var modeId by remember { mutableStateOf<String?>(null) }
+    val unsupported = (modelOption ?: agent?.models?.firstOrNull { it.id == "default" })?.unsupportedModes.orEmpty()
+    val modes = agent?.modes.orEmpty().filter { it.id !in unsupported }
+    val wantedMode = modeId ?: model.lastMode ?: "ask"
+    val mode = modes.firstOrNull { it.id == wantedMode } ?: modes.firstOrNull()
 
     var picked by remember { mutableStateOf(model.takeNewChatProject()?.let { ProjectPick(it) }) }
     val last = model.lastProject

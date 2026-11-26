@@ -119,6 +119,10 @@ fn pairs_streams_and_sends_commands() {
     let hits = client.search_projects("web".into()).unwrap();
     assert_eq!(hits[0].display_path, "~/web");
     assert_eq!(client.find_projects("web".into(), 500).unwrap()[0].name, "web");
+    // The mode changes mid-chat; the chat shows it once the agent has switched.
+    client.set_mode(id.to_string(), "allow_all".into()).unwrap();
+    let _ = hub.tx.send(HubEvent::Session { id, event: SessionEvent::Mode { mode: PermissionMode::AllowAll } });
+    wait_until(&client, "mode switched", |c| c.chat(id.to_string()).is_some_and(|d| d.mode.id == "allow_all" && d.mode.dangerous));
     {
         let d = hub.dispatched.lock().unwrap();
         assert!(matches!(&d[0], AppCommand::Session { command: SessionCommand::Prompt { delivery: mothr_core::Delivery::Steer, .. }, .. }));
@@ -127,6 +131,7 @@ fn pairs_streams_and_sends_commands() {
             AppCommand::NewSession { agent: AgentKind::Copilot, mode: PermissionMode::Plan, model: Some(m), effort: Some(e), context: Some(c), .. }
                 if m == "claude-opus-5.5" && e == "high" && c == "long_context"
         ));
+        assert!(matches!(&d[2], AppCommand::Session { id: s, command: SessionCommand::SetMode { mode: PermissionMode::AllowAll } } if *s == id));
     }
     assert!(matches!(client.send(id.to_string(), "  ".into(), Delivery::Normal), Err(ClientError::Invalid { .. })));
 

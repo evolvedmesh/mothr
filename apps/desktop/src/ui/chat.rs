@@ -1581,6 +1581,12 @@ impl ChatView {
         let weak = cx.entity().downgrade();
         let agent = s.meta.agent;
         let mode = s.meta.permission_mode;
+        // Only what the chat's model can run (Claude's auto mode needs a model with it).
+        let modes = if s.models.is_empty() {
+            permission_modes(agent, &self.store.read(cx).known_models(agent), s.meta.model.as_deref())
+        } else {
+            s.permission_modes()
+        };
         let attachments = self.attachments.clone();
         let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         let has_text = !self.input.read(cx).value().trim().is_empty();
@@ -1772,7 +1778,7 @@ impl ChatView {
                             .tooltip("Attach files or images (drop or paste them too)")
                             .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
                     )
-                    .child(mode_menu("chat-mode", Some(agent), mode, Some(format!("{} — {}", mode.label(), mode.description())), weak, |this: &mut ChatView, m, window, cx| {
+                    .child(mode_menu("chat-mode", modes, mode, Some(format!("{} — {}", mode.label(), mode.description())), weak, |this: &mut ChatView, m, window, cx| {
                         this.dispatch(SessionCommand::SetMode { mode: m }, window, cx);
                     }))
                     .child(div().flex_1())

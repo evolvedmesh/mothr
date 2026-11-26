@@ -6,7 +6,7 @@ use crate::views::*;
 use chrono::{DateTime, Local, Utc};
 use mothr_core::{
     AgentInstall, AgentKind, Entry, HubEvent, HubSnapshot, ModelInfo, NoticeLevel, PermissionMode, PermissionOptionKind,
-    PlanStatus, ProjectRef, ProviderUsage, SessionId, SessionKind, SessionState, SessionStatus, ToolKind,
+    PlanStatus, ProjectRef, permission_modes, ProviderUsage, SessionId, SessionKind, SessionState, SessionStatus, ToolKind,
     ToolStatus, UsageLevel,
 };
 use serde::Deserialize;
@@ -346,6 +346,7 @@ impl Store {
     pub fn detail(&self, id: SessionId) -> Option<ChatDetail> {
         let s = self.sessions.get(&id)?;
         let m = &s.meta;
+        let models = if s.models.is_empty() { self.agent_models.get(&m.agent).map(Vec::as_slice).unwrap_or_default() } else { &s.models };
         let ctx = m.context;
         let subagents = {
             let mut subs: Vec<&SessionState> = self.sessions.values().filter(|c| c.meta.parent == Some(id)).collect();
@@ -355,9 +356,10 @@ impl Store {
         Some(ChatDetail {
             summary: self.summary(s),
             mode: mode_option(m.permission_mode),
-            modes: m.agent.supported_modes().iter().map(|&p| mode_option(p)).collect(),
+            // Only what the chat's model can run (Claude's auto mode needs a model with it).
+            modes: permission_modes(m.agent, models, m.model.as_deref()).into_iter().map(mode_option).collect(),
             model: m.model.clone(),
-            models: model_options(if s.models.is_empty() { self.agent_models.get(&m.agent).map(Vec::as_slice).unwrap_or_default() } else { &s.models }),
+            models: model_options(models),
             effort: m.effort.clone(),
             context_limit: m.context_limit.clone(),
             commands: s
@@ -779,6 +781,7 @@ fn model_options(models: &[ModelInfo]) -> Vec<ModelOption> {
             description: m.description.clone(),
             efforts: m.efforts.iter().map(|e| ChoiceOption { id: e.clone(), label: mothr_core::effort_label(e) }).collect(),
             contexts: m.contexts.iter().map(|c| ChoiceOption { id: c.id.clone(), label: c.label.clone() }).collect(),
+            unsupported_modes: m.unsupported_modes.iter().map(|p| p.id().to_string()).collect(),
         })
         .collect()
 }
