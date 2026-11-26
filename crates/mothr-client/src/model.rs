@@ -6,7 +6,7 @@ use crate::views::*;
 use chrono::{DateTime, Local, Utc};
 use mothr_core::{
     AgentInstall, AgentKind, ChoiceInfo, Entry, HubEvent, HubSnapshot, ModelInfo, NoticeLevel, PermissionMode,
-    PermissionOptionKind, PlanStatus, ProjectRef, model_settings, permission_modes, ProviderUsage, SessionId, SessionKind, SessionState, SessionStatus, ToolKind,
+    PermissionOptionKind, PlanStatus, ProjectRef, model_settings, permission_modes, ProviderUsage, SessionId, SessionKind, SessionMeta, SessionState, SessionStatus, ToolKind,
     ToolStatus, UsageLevel,
 };
 use serde::Deserialize;
@@ -230,7 +230,7 @@ impl Store {
                     || s.meta.agent.display_name().to_lowercase().contains(&q)
             })
             .collect();
-        list.sort_by_key(|s| std::cmp::Reverse(s.meta.updated_at));
+        list.sort_by(|a, b| SessionMeta::list_order(&a.meta, &b.meta));
 
         let now = Local::now();
         let order = ["Pinned", "Needs you", "Working", "Today", "Yesterday", "This week", "Older"];

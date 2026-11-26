@@ -86,10 +86,13 @@ fun ChatsScreen(model: AppModel) {
                             Text(
                                 g.title,
                                 style = type.label.copy(color = if (g.title == "Needs you") pal.warning else pal.textMuted),
-                                modifier = Modifier.padding(start = 20.dp, top = 20.dp, bottom = 4.dp),
+                                modifier = Modifier.animateItem().padding(start = 20.dp, top = 20.dp, bottom = 4.dp),
                             )
                         }
-                        items(g.chats, key = { g.title + it.id }) { chat -> ChatRow(chat) { model.open(chat.id) } }
+                        // A chat that changes place (it starts working, or finishes) glides there.
+                        items(g.chats, key = { g.title + it.id }) { chat ->
+                            Box(Modifier.animateItem()) { ChatRow(chat) { model.open(chat.id) } }
+                        }
                     }
                 }
                 NewChatButton(
