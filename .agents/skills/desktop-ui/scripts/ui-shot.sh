@@ -32,20 +32,22 @@ start() {
     (cd "$root" && cargo build -q -p mothr-app) || die "build failed"
   fi
   [ -x "$bin" ] || die "no binary at $bin"
-  local home log before sock
+  local home log sock
   home="$(mktemp -d "${TMPDIR:-/tmp}/mothr-ui-shot.XXXXXX")"
   log="$home/gamescope.log"
   if [ -n "${UI_SHOT_SETTINGS:-}" ]; then
     mkdir -p "$home/config" && cp "$UI_SHOT_SETTINGS" "$home/config/settings.toml"
   fi
-  before="$(ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -E '^gamescope-[0-9]+$' || true)"
+  # gamescope can reuse a display name a killed instance left behind, so look for the socket
+  # created after this point rather than for a new name.
+  touch "$home/.started"
   # WAYLAND_DISPLAY is unset so GPUI picks gamescope's Xwayland instead of the user's session.
   setsid gamescope --backend headless -w "$w" -h "$h" -W "$w" -H "$h" --force-windows-fullscreen -- \
     env -u WAYLAND_DISPLAY MOTHR_HOME="$home" "$@" "$bin" >"$log" 2>&1 < /dev/null &
   local pid=$!
   # Up to 30 s: gamescope starts slowly while the machine is busy (e.g. building).
   for _ in $(seq 1 300); do
-    sock="$(ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -E '^gamescope-[0-9]+$' | grep -vxF "$before" | head -n1 || true)"
+    sock="$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'gamescope-[0-9]*' ! -name '*-ei' -newer "$home/.started" -printf '%f\n' 2>/dev/null | head -n1)"
     [ -n "$sock" ] && grep -q 'Starting Xwayland on' "$log" && break
     kill -0 "$pid" 2>/dev/null || { cat "$log" >&2; rm -rf "$home"; die "gamescope exited"; }
     sleep 0.1
