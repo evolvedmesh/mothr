@@ -1,0 +1,57 @@
+name: CI
+
+# Lint gate for every pull request: clippy over the whole Rust workspace (it type-checks
+# without building binaries) plus pr-title.yml. Nothing is compiled into an app here: both
+# apps are built once, by release.yml on main, and the pull request template asks for a local
+# build of each before a PR is opened.
+#
+# `rust` and `pr-title` are required status checks on dev and main (the "mothr checks" repo
+# ruleset). Job names are the check names: rename them only together with the ruleset.
+# Don't add path filters: a required check that never runs stays pending and blocks the merge.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: rust
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+      # Cargo.toml optimizes the dev profile, every dependency at opt-level 3, so the app runs
+      # well from debug builds. Clippy still fully compiles build scripts and proc-macros
+      # (serde_derive, syn, GPUI's macros…), and at opt-level 3 that triples the run (measured
+      # 8m14s vs 2m54s). Linting doesn't need any of it.
+      CARGO_PROFILE_DEV_OPT_LEVEL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      # GPUI's build scripts look these up (same list as release.yml).
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libvulkan-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # Reused by later pushes to the same pull request.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked --config 'profile.dev.package."*".opt-level=0' -- -D warnings

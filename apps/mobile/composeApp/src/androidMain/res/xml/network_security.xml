@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mothr pairs with a desktop over plain http plus a pairing token on the local network or
+     the tailnet (where Tailscale encrypts the traffic), or through a Dev Tunnels https URL. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

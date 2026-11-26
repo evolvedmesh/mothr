@@ -1,0 +1,4 @@
+# Reviewers GitHub requests on every pull request; the dev/main rulesets require a code owner's
+# approval. Add people or teams per path as the project grows, e.g.
+#   /apps/mobile/   @someone
+* @61soldiers

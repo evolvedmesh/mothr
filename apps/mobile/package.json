@@ -1,0 +1,14 @@
+{
+  "name": "@mothr/mobile",
+  "private": true,
+  "description": "Mothr for phones: Kotlin Multiplatform + Compose UI over the shared Rust client (crates/mothr-client).",
+  "scripts": {
+    "build": "./gradlew :composeApp:assembleDebug --console=plain",
+    "dev": "./gradlew :composeApp:installDebug --console=plain && adb shell am start -n dev.mothr.mobile/.MainActivity",
+    "test": "./gradlew :composeApp:testDebugUnitTest --console=plain",
+    "lint": "./gradlew :composeApp:compileDebugKotlinAndroid --console=plain"
+  },
+  "dependencies": {
+    "@mothr/crates": "workspace:*"
+  }
+}

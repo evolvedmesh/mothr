@@ -1,0 +1,16 @@
+{
+  "name": "mothr",
+  "private": true,
+  "packageManager": "bun@1.4.4",
+  "workspaces": ["apps/*", "crates"],
+  "scripts": {
+    "build": "bun --bun x turbo run build",
+    "test": "bun --bun x turbo run test",
+    "lint": "bun --bun x turbo run lint",
+    "dev": "bun --bun x turbo run dev --filter=@mothr/desktop",
+    "dev:mobile": "bun --bun x turbo run dev --filter=@mothr/mobile"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0"
+  }
+}
