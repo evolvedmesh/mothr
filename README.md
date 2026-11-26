@@ -399,3 +399,9 @@ header lists the secrets it needs.
   themselves.
 - Design mode renders a JSON DSL rather than HTML/React. Exports are HTML and Storybook (static
   mocks); export to framework code (React, SwiftUI…) is not implemented yet.
+
+## License
+
+Mothr is released under the [MIT License](LICENSE). Bundled third-party assets keep their own
+licenses: the Geist fonts (SIL OFL), Lucide icons (ISC) and the agent logos from Lobe Icons
+(MIT; the marks are their owners' trademarks); see the notices next to each.

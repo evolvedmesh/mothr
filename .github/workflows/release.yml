@@ -175,6 +175,7 @@ jobs:
           DIR="mothr_${VER}_linux_x64"
           mkdir -p "$DIR/licenses"
           install -m 755 target/release/mothr "$DIR/mothr"
+          install -m 644 LICENSE "$DIR/LICENSE"
           install -m 644 apps/desktop/linux/dev.mothr.Mothr.desktop "$DIR/"
           install -m 644 apps/desktop/assets/fonts/OFL.txt "$DIR/licenses/OFL-Geist.txt"
           install -m 644 apps/desktop/assets/logos/NOTICE.md "$DIR/licenses/NOTICE-logos.md"
