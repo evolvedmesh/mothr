@@ -46,9 +46,16 @@ and dark if you touched colors.
 The demo hub is a fake `HubApi` with canned chats; no agents or desktop app needed:
 
 ```sh
-MOTHR_DEMO_TOKEN=devtoken-devtoken-devtoken MOTHR_DEMO_PORT=7979 \
+MOTHR_HOME=$(mktemp -d) MOTHR_DEMO_TOKEN=devtoken-devtoken-devtoken MOTHR_DEMO_PORT=7979 \
   cargo run -p mothr-remote --example demo
 ```
+
+With `MOTHR_HOME` set, the "Wire up remote control" chat's picture is written there and served
+(without it the chat shows only the image's name). That chat also reports an unlisted model id
+with reasoning levels on the "default" entry, like Claude Code does.
+
+If the phone app is already installed from a release, `adb install -r` refuses the debug build
+(`INSTALL_FAILED_VERSION_DOWNGRADE`); add `-d`.
 
 - Web client: open `http://127.0.0.1:7979/?token=devtoken-devtoken-devtoken`. It is
   `crates/mothr-remote/assets/index.html`, compiled into the server with `include_str!`, so

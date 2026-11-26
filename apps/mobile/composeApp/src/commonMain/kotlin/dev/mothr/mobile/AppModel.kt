@@ -3,6 +3,7 @@ package dev.mothr.mobile
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
 import com.russhwolf.settings.Settings
 import dev.mothr.client.AgentView
 import dev.mothr.client.Attention
@@ -15,6 +16,7 @@ import dev.mothr.client.ConnectionState
 import dev.mothr.client.DirView
 import dev.mothr.client.FileHitView
 import dev.mothr.client.FileView
+import dev.mothr.client.ModelSettings
 import dev.mothr.client.MothrClient
 import dev.mothr.client.ProjectView
 import dev.mothr.client.TerminalView
@@ -31,6 +33,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
+import org.jetbrains.compose.resources.decodeToImageBitmap
 
 /** One paired desktop. It stays connected while paired, whichever computer is on screen. */
 class Computer internal constructor(
@@ -776,6 +779,33 @@ class AppModel(private val scope: CoroutineScope) {
         }
     }
 
+    // ---------------------------------------------------------------------------------------
+    // Images in chats: fetched from the desktop by name, decoded once, the latest few kept.
+
+    private val images = LinkedHashMap<String, ImageBitmap>()
+
+    /** A picture from a chat on the current computer, or null when it can't be fetched or read. */
+    suspend fun image(name: String): ImageBitmap? {
+        val computer = current ?: return null
+        val key = "${computer.id}/$name"
+        images[key]?.let { return it }
+        return try {
+            val bytes = withContext(Dispatchers.IO) { computer.client.image(name) }
+            val bitmap = withContext(Dispatchers.Default) { bytes.decodeToImageBitmap() }
+            images[key] = bitmap
+            while (images.size > MAX_IMAGES) images.remove(images.keys.first())
+            bitmap
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /** Reasoning levels and context sizes a new chat with [agentId] on [modelId] can pick. */
+    fun modelSettings(agentId: String, modelId: String?): ModelSettings =
+        client?.modelSettings(agentId, modelId) ?: ModelSettings(emptyList(), emptyList())
+
     suspend fun searchProjects(q: String): List<ProjectView> {
         val c = client ?: return emptyList()
         return try {
@@ -910,6 +940,7 @@ class AppModel(private val scope: CoroutineScope) {
     val lastProject: String? get() = current?.let { prefs.getStringOrNull(projectKey(it.id)) }
 
     companion object {
+        private const val MAX_IMAGES = 24
         private const val KEY_LINK = "pairing_link"
         private const val KEY_COMPUTERS = "computers"
         private const val KEY_CURRENT = "current_computer"
