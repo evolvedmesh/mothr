@@ -164,7 +164,10 @@ jobs:
           lipo -info "$BIN"
           otool -l "$BIN" | grep -A4 LC_BUILD_VERSION | head -6
           R=$RUNNER_TEMP/rel
-          for v in 0.2.0 0.2.1; do
+          # The first release is the binary's own version, as in a real release.
+          V0=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "V0=$V0" >> $GITHUB_ENV
+          for v in $V0 0.2.1; do
             mkdir -p $R/$v
             apps/desktop/macos/bundle.sh $v ${{ matrix.arch }} "$BIN" $R/$v
             (cd $R/$v && shasum -a 256 -- * > SHA256SUMS && cat SHA256SUMS)
@@ -173,7 +176,7 @@ jobs:
           nohup python3 -I .agents/skills/release/scripts/mock-releases.py $R 8799 > $RUNNER_TEMP/mock.log 2>&1 &
           sleep 2
           curl -fsS http://127.0.0.1:8799/api/releases/latest
-          hdiutil attach -nobrowse -readonly $R/0.2.0/mothr_0.2.0_macos_${{ matrix.arch }}.dmg
+          hdiutil attach -nobrowse -readonly $R/$V0/mothr_${V0}_macos_${{ matrix.arch }}.dmg
           ls -la /Volumes/Mothr
           hdiutil detach /Volumes/Mothr
       - name: Rosetta
@@ -189,15 +192,15 @@ jobs:
           if [ "${{ matrix.arch }}" = x64 ]; then
             # From a Rosetta shell on Apple silicon install.sh must still pick arm64; force x64 with a shim.
             mkdir -p $RUNNER_TEMP/shim
-            printf '#!/bin/sh\n[ "$1" = hw.optional.arm64 ] && echo 0 || /usr/sbin/sysctl "$@"\n' > $RUNNER_TEMP/shim/sysctl
+            printf '#!/bin/sh\ncase "$*" in *hw.optional.arm64*) echo 0 ;; *) exec /usr/sbin/sysctl "$@" ;; esac\n' > $RUNNER_TEMP/shim/sysctl
             chmod +x $RUNNER_TEMP/shim/sysctl
             # This mock release only has the x64 build, so picking arm64 shows as a failed download.
-            out="$(env HOME=$H MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases arch -x86_64 /bin/bash install.sh --version 0.2.0 --dir $RUNNER_TEMP/rosetta-check 2>&1 || true)"
+            out="$(env HOME=$H MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases arch -x86_64 /bin/bash install.sh --version $V0 --dir $RUNNER_TEMP/rosetta-check 2>&1 || true)"
             echo "$out"
             echo "$out" | grep -q "for macOS on Apple silicon"
-            env PATH="$RUNNER_TEMP/shim:$PATH" HOME=$H MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases arch -x86_64 /bin/bash install.sh --version 0.2.0
+            env PATH="$RUNNER_TEMP/shim:$PATH" HOME=$H MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases arch -x86_64 /bin/bash install.sh --version $V0
           else
-            env HOME=$H MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases /bin/bash install.sh --version 0.2.0
+            env HOME=$H MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases /bin/bash install.sh --version $V0
           fi
           lipo -info $H/Applications/Mothr.app/Contents/MacOS/mothr
           ls -la $H/Applications $H/.local/bin
@@ -259,5 +262,5 @@ jobs:
           path: |
             ${{ runner.temp }}/shots
             ${{ runner.temp }}/*.log
-            ${{ runner.temp }}/rel/0.2.0/*
+            ${{ runner.temp }}/rel/0.2.1/*
           retention-days: 3
