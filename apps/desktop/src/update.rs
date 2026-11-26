@@ -5,9 +5,10 @@
 //! next to the running version and restarts into it (or waits for "Restart to update" while
 //! chats are working). With "Install updates automatically" on, the download and install
 //! happen on their own and the next start runs the new version.
-//! Only copies installed with `install.sh` (Linux) or the setup (Windows) update themselves
-//! (see `mothr_update::install`); others (`cargo run`, packages, the portable Windows zip)
-//! only say that an update exists and where to get it.
+//! Only copies installed with `install.sh` (Linux), the setup (Windows) or as an app the user
+//! can replace (macOS: `install.sh` or the disk image) update themselves (see
+//! `mothr_update::install`); others (`cargo run`, packages, the portable Windows zip) only say
+//! that an update exists and where to get it.
 
 use chrono::{DateTime, Utc};
 use gpui_kit::*;
@@ -97,7 +98,7 @@ impl Updater {
         self.checked_at
     }
 
-    /// Whether this copy installs updates itself (it was installed with `install.sh`).
+    /// Whether this copy installs updates itself (see `Install::detect`).
     pub fn can_install(&self) -> bool {
         self.install.is_some()
     }
@@ -113,13 +114,18 @@ impl Updater {
     }
 
     /// Where to get the newest version by hand, for copies that don't update themselves: the
-    /// Windows installer itself on Windows, else the release page.
+    /// Windows installer itself on Windows, the disk image on macOS, else the release page.
     pub fn download_url(&self) -> Option<&str> {
         let r = self.latest.as_ref()?;
-        if cfg!(windows)
-            && let Some(setup) = r.asset(&mothr_update::windows_setup_asset(&r.version))
-        {
-            return Some(&setup.url);
+        let direct = if cfg!(windows) {
+            Some(mothr_update::windows_setup_asset(&r.version))
+        } else if cfg!(target_os = "macos") {
+            Some(mothr_update::macos_dmg_asset(&r.version, mothr_update::macos_arch()))
+        } else {
+            None
+        };
+        if let Some(asset) = direct.and_then(|name| r.asset(&name)) {
+            return Some(&asset.url);
         }
         Some(&r.url)
     }
@@ -224,7 +230,7 @@ impl Updater {
 
     /// Quit and start the installed version once this process has exited.
     pub fn restart(this: &Entity<Self>, cx: &mut App) {
-        let Some(binary) = this.read(cx).install.as_ref().map(Install::current_binary) else { return };
+        let Some(binary) = this.read(cx).install.as_ref().map(Install::launch_path) else { return };
         match Self::restart_command(&binary).spawn() {
             Ok(_) => cx.quit(),
             Err(e) => tracing::warn!("couldn't restart into {}: {e}", binary.display()),
@@ -242,12 +248,13 @@ impl Updater {
         cmd
     }
 
-    /// A shell that waits for this process to exit and then starts the new binary.
+    /// A shell that waits for this process to exit and then starts the new binary, or opens the
+    /// app bundle (macOS), so it starts like one launched from the Dock.
     #[cfg(not(windows))]
     fn restart_command(binary: &std::path::Path) -> std::process::Command {
         let mut cmd = std::process::Command::new("sh");
         cmd.arg("-c")
-            .arg(r#"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; exec "$2""#)
+            .arg(r#"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; if [ -d "$2" ]; then exec open "$2"; else exec "$2"; fi"#)
             .arg("mothr-restart")
             .arg(std::process::id().to_string())
             .arg(binary)

@@ -3,7 +3,7 @@ name = "mothr-update"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Mothr's updates: the newest GitHub release, checksum-verified downloads, and the Linux and Windows install layouts."
+description = "Mothr's updates: the newest GitHub release, checksum-verified downloads, and the Linux, Windows and macOS install layouts."
 
 [dependencies]
 anyhow.workspace = true
