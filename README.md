@@ -6,8 +6,8 @@ over its machine protocol and never shows the agent's terminal UI. A companion A
 web client let you follow and answer your chats from your phone.
 
 Built in Rust with [GPUI](https://gpui.rs) via [`gpui-kit`](https://gpui-kit.com). Mothr is
-released for Linux (x86_64, X11 and Wayland), Windows (x64, 10 version 1903 and later) and
-Android. GPUI also runs on macOS, but Mothr isn't built or tested there yet. Dark and light themes follow your system live, and
+released for Linux (x86_64, X11 and Wayland), macOS (11 Big Sur and later, Apple silicon and
+Intel), Windows (x64, 10 version 1903 and later) and Android. Dark and light themes follow your system live, and
 the interface size can be set from 100% to 145% for high-resolution screens. The visual
 language is documented in [DESIGN.md](DESIGN.md); type is set in Geist, which is bundled with
 the app.
@@ -17,25 +17,29 @@ the app.
 | Platform | How | Updates |
 | --- | --- | --- |
 | **Linux** (x86_64) | the install script below | automatic, in the app |
+| **macOS** (Apple silicon, Intel) | the same install script, or the disk image from the [latest release](https://github.com/evolvedmesh/mothr/releases/latest) | automatic, in the app |
 | **Windows** (x64) | installer from the [latest release](https://github.com/evolvedmesh/mothr/releases/latest) | automatic, in the app |
 | **Android** phone app | APK from the [latest release](https://github.com/evolvedmesh/mothr/releases/latest) | in the app |
-| macOS, iOS | not released yet; see [Building from source](#building-from-source) | — |
+| iOS | not released yet | — |
 
 Mothr runs the agents you already use. Install and sign in to at least one of
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code), GitHub Copilot CLI, Codex
 (`codex-acp`), OpenCode or Hermes; Mothr finds them on its own.
 
-### Linux
+### Linux and macOS
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/evolvedmesh/mothr/main/install.sh | bash
 ```
 
-That installs the newest release for your user, without `sudo`:
+The script finds out which system it's on and installs the newest release for your user,
+without `sudo`:
 
-- the app in `~/.local/lib/mothr`, one folder per version
-- the `mothr` command in `~/.local/bin`
-- a Mothr entry in your application menu
+- **Linux:** the app in `~/.local/lib/mothr`, one folder per version, and a Mothr entry in your
+  application menu
+- **macOS:** `Mothr.app` in `~/Applications`, where Launchpad and Spotlight find it (the build
+  for Apple silicon or Intel, whichever the Mac is)
+- on both, the `mothr` command in `~/.local/bin`
 
 The download is checked against the release's `SHA256SUMS` before anything is installed. To
 read the script first:
@@ -46,9 +50,10 @@ less install.sh
 bash install.sh
 ```
 
-**Requirements.** A glibc 2.39+ distribution (Ubuntu 24.04+, Debian 13+, Fedora 40+, Arch and
-other rolling releases), a Wayland or X11 desktop, and a working Vulkan driver (Mesa or
-NVIDIA). The installer tells you which packages to add if a library is missing.
+**Requirements.** Linux: a glibc 2.39+ distribution (Ubuntu 24.04+, Debian 13+, Fedora 40+,
+Arch and other rolling releases), a Wayland or X11 desktop, and a working Vulkan driver (Mesa
+or NVIDIA); the installer tells you which packages to add if a library is missing. macOS: 11
+Big Sur or later.
 
 **Options.** Pass them after `bash -s --`, e.g.
 `curl -fsSL …/install.sh | bash -s -- --version 0.2.0`:
@@ -56,15 +61,15 @@ NVIDIA). The installer tells you which packages to add if a library is missing.
 | Option | Does |
 | --- | --- |
 | `--version <x.y.z>` | install that release instead of the newest |
-| `--dir <path>` | put the app somewhere else (default `~/.local/lib/mothr`, or `MOTHR_INSTALL_DIR`) |
+| `--dir <path>` | put the app somewhere else (default `~/.local/lib/mothr` on Linux, `~/Applications` on macOS, or `MOTHR_INSTALL_DIR`) |
 | `--bin-dir <path>` | put the `mothr` command somewhere else (default `~/.local/bin`, or `MOTHR_BIN_DIR`) |
-| `--no-menu-entry` | don't add Mothr to the application menu |
+| `--no-menu-entry` | don't add Mothr to the application menu (Linux) |
 | `--uninstall` | remove Mothr; your chats and settings stay |
 
 **Updates.** Mothr checks for a new release shortly after it starts and every 6 hours. When
 there is one, **Update to Mothr x.y.z** appears at the bottom of the sidebar. Click it and
-Mothr downloads the new version, checks it against the release's `SHA256SUMS`, installs it
-next to the running one and restarts into it. If chats are still working, it waits and shows
+Mothr downloads the new version, checks it against the release's `SHA256SUMS`, puts it in
+place without touching the running one and restarts into it. If chats are still working, it waits and shows
 **Restart to update** instead, so nothing is cut off. Settings → Updates has the same controls,
 plus **Install updates automatically** (off by default): with it on, new versions download and
 install in the background and the next start uses them. Running the install script again also
@@ -77,14 +82,24 @@ version (as the user agent).
 curl -fsSL https://raw.githubusercontent.com/evolvedmesh/mothr/main/install.sh | bash -s -- --uninstall
 ```
 
-Chats and settings stay in `~/.config/mothr` and `~/.local/share/mothr`; delete those folders
-to remove them too.
+Chats and settings stay in `~/.config/mothr` and `~/.local/share/mothr` on Linux, and in
+`~/Library/Application Support/mothr` on macOS; delete those folders to remove them too.
 
 **Manual install.** Download `mothr_<version>_linux_x64.tar.gz` and `SHA256SUMS` from the
 [latest release](https://github.com/evolvedmesh/mothr/releases/latest), check it with
 `sha256sum -c --ignore-missing SHA256SUMS`, unpack it anywhere and run `./mothr`. A copy
 installed this way doesn't update itself; Settings → Updates tells you when there's a new
 version.
+
+**Disk image (macOS).** Download `mothr_<version>_macos_arm64.dmg` (Apple silicon) or
+`mothr_<version>_macos_x64.dmg` (Intel) from the
+[latest release](https://github.com/evolvedmesh/mothr/releases/latest), open it and drag Mothr
+to Applications. Mothr isn't notarized by Apple yet, so the first time you open a copy
+downloaded in a browser, macOS says it can't check it: open System Settings → Privacy &
+Security and click **Open Anyway** (on macOS 14 and earlier, Control-click Mothr → Open). The
+install script doesn't hit this, because `curl` doesn't mark its downloads. Any Mothr in a
+folder you can write to (Applications or `~/Applications`) updates itself like one from the
+script; uninstall it by moving it to the Bin.
 
 ### Windows
 
@@ -96,7 +111,7 @@ confirm it (**More info → Run anyway**). To check the download first, compare
 `Get-FileHash mothr_<version>_windows_x64_setup.exe` in PowerShell with its line in
 `SHA256SUMS`. Windows 10 version 1903 or later, or Windows 11, is needed.
 
-**Updates** work as on Linux: Mothr checks shortly after it starts and every 6 hours, and
+**Updates** work as on Linux and macOS: Mothr checks shortly after it starts and every 6 hours, and
 **Update to Mothr x.y.z** in the sidebar downloads the new version, checks it against
 `SHA256SUMS`, puts it in place and restarts (Settings → Updates has the same controls and
 **Install updates automatically**). Running a newer installer also updates.
@@ -334,9 +349,9 @@ crates/
                    by the desktop view and remote clients
   mothr-remote     axum server + embedded web client, tunnels, QR
   mothr-client     remote-API client shared with the mobile app (UniFFI)
-  mothr-update     updates: newest GitHub release, checksum-verified downloads, Linux install layout
+  mothr-update     updates: newest GitHub release, checksum-verified downloads, install layouts
 mothr-design/      Mothr's own design system, written in its Design format
-install.sh         the Linux installer (see Install)
+install.sh         the Linux and macOS installer (see Install)
 scripts/           release helpers (set-version.sh)
 ```
 
@@ -387,7 +402,10 @@ The installer is built from `apps/desktop/windows/mothr.iss` with Inno Setup:
 `apps/desktop/windows/build-installer.ps1 -Version <x.y.z> -Source <release folder>`.
 The `release` agent skill has the Wine recipe and its gaps.
 
-macOS builds aren't set up or tested yet.
+macOS builds with Xcode (its `metal` tool compiles GPUI's shaders) and stable Rust:
+`cargo build --release -p mothr-app`; add `--target x86_64-apple-darwin` on Apple silicon for
+an Intel build. `apps/desktop/macos/bundle.sh <x.y.z> <arm64|x64> <binary>` wraps the binary
+into `Mothr.app`, the release tarball and the disk image.
 
 ### Releases
 
@@ -397,7 +415,8 @@ version with `scripts/set-version.sh` (the Cargo workspace, and through it the A
 then tags and publishes a GitHub release. Versions start at `0.1.0`; `dev` publishes
 prereleases (`0.1.0-dev.1`, …). Stable releases on `main` also attach the Linux x64 desktop
 build (`mothr_<version>_linux_x64.tar.gz`), the Windows x64 build
-(`mothr_<version>_windows_x64_setup.exe`, and the same app as a portable `.zip`) and the
+(`mothr_<version>_windows_x64_setup.exe`, and the same app as a portable `.zip`), the macOS
+builds for Apple silicon and Intel (`mothr_<version>_macos_<arm64|x64>.tar.gz` and `.dmg`) and the
 R8-optimized Android APK
 (`mothr_<version>_android_arm64-v8a.apk`) plus `SHA256SUMS`, which `install.sh` and both in-app
 updaters (`crates/mothr-update`) check every download against, and `main` is merged back into

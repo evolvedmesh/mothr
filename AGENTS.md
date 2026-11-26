@@ -72,10 +72,12 @@ crates/
                     auth, tunnels (Tailscale, Dev Tunnels), QR
   mothr-client      remote-API client exported to Kotlin via UniFFI: model.rs (state +
                     entry_view), views.rs (flat uniffi records), pairing.rs, update.rs
-  mothr-update      updates: newest GitHub release, SHA256SUMS-checked downloads, the Linux
-                    install layout (install.rs); used by the desktop app and mothr-client
+  mothr-update      updates: newest GitHub release, SHA256SUMS-checked downloads, the Linux,
+                    Windows and macOS install layouts (install.rs); used by the desktop app
+                    and mothr-client
 mothr-design/       Mothr's own design system written in its Design DSL (system.json)
-install.sh          the public Linux installer (raw.githubusercontent.com/…/main/install.sh)
+install.sh          the public Linux and macOS installer (raw.githubusercontent.com/…/main/install.sh);
+                    keep it to bash 3.2 and BSD tools (macOS's)
 scripts/            set-version.sh (used by semantic-release)
 .agents/skills/     task skills for agents working on this repo (.claude/skills links here)
 ```
@@ -99,6 +101,10 @@ scripts/            set-version.sh (used by semantic-release)
   `git` or probe flashes a console window from the GUI app. Get the home directory from
   `mothr_core::config::home_dir()`, never `$HOME` (Windows doesn't set it), and gate
   Unix-only code with `cfg(unix)`.
+- **macOS is a release target too.** The app ships as `Mothr.app` (`apps/desktop/macos/`), so
+  it starts from Launchpad with launchd's minimal `PATH`; agent detection adds the usual bin
+  folders (`detect.rs`). Keyboard shortcuts use `cmd` there (`k!` in `main.rs`). From Linux,
+  macOS-only code can't be compiled; CI's `macos` job lints it (see the `release` skill).
 - **Persisted data stays readable.** Transcripts (`<data>/sessions/<id>.json`) and
   `settings.toml` are serde of the core types. New fields get `#[serde(default)]` (or
   `skip_serializing_if`) so files from older versions still load; see

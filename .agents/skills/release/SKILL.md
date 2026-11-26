@@ -1,6 +1,6 @@
 ---
 name: release
-description: How Mothr releases are cut (semantic-release on main and dev, Linux x64 tarball, Windows x64 installer and zip, and Android APK) and how to fix a failed or missing release. Use when preparing a merge to dev/main, choosing a commit type, asking why no release happened, or debugging .github/workflows/release.yml.
+description: How Mothr releases are cut (semantic-release on main and dev, Linux x64 tarball, Windows x64 installer and zip, macOS app tarballs and disk images, and Android APK) and how to fix a failed or missing release. Use when preparing a merge to dev/main, choosing a commit type, asking why no release happened, or debugging .github/workflows/release.yml.
 ---
 
 # Releases
@@ -13,7 +13,7 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
    `ci(release): <version> [skip ci]`, tags `v<version>` and publishes a GitHub release with
    notes. It runs as the release bot GitHub App (`RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`)
    because only that App may push to the protected branches.
-2. **linux**, **windows** and **android** jobs (only on `main`, only when a release was published) build
+2. **linux**, **windows**, **macos** and **android** jobs (only on `main`, only when a release was published) build
    from the tag:
    - `mothr_<v>_linux_x64.tar.gz`: `cargo build --release --locked -p mothr-app` on
      ubuntu-24.04 (glibc 2.39+), with the `.desktop` entry and license files.
@@ -28,6 +28,17 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
      `apps/desktop/windows/build-installer.ps1` (Inno Setup, pinned by version and SHA-256 in
      that script) from `apps/desktop/windows/mothr.iss`. Never change its `AppId`: Windows and
      the updater (`WINDOWS_UNINSTALL_KEY`) find the install by it.
+   - `mothr_<v>_macos_<arch>.tar.gz` and `.dmg` (`arch`: `arm64` for Apple silicon, `x64` for
+     Intel): both built on `macos-15` (Apple silicon; x64 cross-compiled with
+     `--target x86_64-apple-darwin`) with `MACOSX_DEPLOYMENT_TARGET=11.0`. GPUI's build compiles
+     its Metal shaders with Xcode's `metal`. `apps/desktop/macos/bundle.sh` wraps the binary in
+     `Mothr.app` (Info.plist from `apps/desktop/macos/Info.plist`, icon `Mothr.icns` made from
+     `icon.svg` by `make-icns.py`), signs it ad hoc (Apple silicon only runs signed code) and
+     packs one folder `mothr_<v>_macos_<arch>/Mothr.app` into the tarball, and `Mothr.app` plus
+     an Applications link into the disk image. It isn't Developer ID signed or notarized, so a
+     browser-downloaded disk image needs **Open Anyway** once; `install.sh` (curl) doesn't.
+     Installed copies update from the tarball, so keep its name and shape, and keep
+     `CFBundleShortVersionString` in an XML Info.plist (the updater reads it).
    - `mothr_<v>_android_arm64-v8a.apk`: `assembleRelease -Pmothr.abis=arm64-v8a
      -Pmothr.versionCode=<run number>`, R8-minified, signed with `ANDROID_KEYSTORE_*` secrets
      (debug key with a warning if they're missing).
@@ -68,10 +79,16 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
 Users get releases these ways, all from the same GitHub release and all checked against its
 `SHA256SUMS` (written by the publish job):
 
-- `install.sh` (repo root, served from `main` via raw.githubusercontent.com): installs to
-  `~/.local/lib/mothr/versions/<v>` with a `current` symlink and an `install.json` marker.
-  It resolves "latest" from the `/releases/latest` redirect, so asset names must stay
-  `mothr_<v>_linux_x64.tar.gz`.
+- `install.sh` (repo root, served from `main` via raw.githubusercontent.com): checks `uname`
+  and installs the Linux or macOS build. On Linux it installs to
+  `~/.local/lib/mothr/versions/<v>` with a `current` symlink and an `install.json` marker; on
+  macOS it puts `Mothr.app` in `~/Applications` (picking `arm64` or `x64`, also from a Rosetta
+  shell) and links `~/.local/bin/mothr` into it. It resolves "latest" from the
+  `/releases/latest` redirect, so asset names must stay `mothr_<v>_linux_x64.tar.gz` and
+  `mothr_<v>_macos_<arch>.tar.gz`. It runs under macOS's bash 3.2 with BSD tools: no arrays
+  under `set -u`, no `mv -T`/`sed -i`/`readlink -f` outside the Linux-only function, and
+  `shasum -a 256` where there's no `sha256sum`. Don't run its functions in `$(…)`: bash
+  drops `set -e` there.
 - The desktop updater (`apps/desktop/src/update.rs` on `crates/mothr-update`): checks 20 s
   after start and every 6 h, and offers a newer release in the sidebar (`ui/workspace/frame.rs`)
   and Settings → Updates. Clicking stages the new version next to the running one, swaps
@@ -85,6 +102,15 @@ Users get releases these ways, all from the same GitHub release and all checked 
   with `MOTHR_WAIT_PID`, which waits for the old one to exit (`update::wait_for_previous`);
   each start deletes the `.old` files (`Install::clean_up`). The portable zip has no marker
   and only links the installer.
+- macOS (`Layout::Bundle`): no marker. Any `<name>.app/Contents/MacOS/mothr` whose bundle and
+  folder are writable updates itself (Mac apps are installed by copying), so a copy dragged
+  from the disk image updates like one from `install.sh`; one on the disk image, in a
+  read-only folder or translocated (opened from Downloads while quarantined) doesn't, and
+  links the disk image. An update downloads `mothr_<v>_macos_<arch>.tar.gz`, unpacks it into
+  `.mothr-update/` next to the bundle, moves the running bundle aside into it and the new one
+  into its place. "Restart" waits for the old process and runs `open <bundle>`; each start
+  deletes `.mothr-update/`. The installed version is the bundle's
+  `CFBundleShortVersionString`.
 - The phone (`AndroidUpdates.kt` via `mothr-client`'s `check_app_update` /
   `download_app_update`): downloads `mothr_<v>_android_<abi>.apk` and installs it with
   `PackageInstaller`. Phones only accept it when it's signed with the release key, so the
@@ -107,8 +133,16 @@ R=$(mktemp -d); mkdir -p $R/0.1.1
 python3 -I .agents/skills/release/scripts/mock-releases.py $R 8799 &
 ```
 
-- Installer, into a throwaway home:
-  `HOME=$(mktemp -d) MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases bash install.sh`
+- Installer, into a throwaway home. Unset the XDG variables, or the menu entry lands in the
+  real `$XDG_DATA_HOME/applications` (and replaces a real install's):
+  `env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME=$(mktemp -d) MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases bash install.sh`
+- macOS installer path, from Linux: put `mothr_<v>_macos_arm64.tar.gz` (made with
+  `apps/desktop/macos/bundle.sh <v> arm64 <any executable> <dir>`) in the mock release, and
+  shims first on `PATH`: `uname` (`-s` → `Darwin`, `-m` → `arm64`), `sw_vers` (prints
+  `15.1`) and `sysctl` (`hw.optional.arm64` → `1` to try a Rosetta shell with `uname -m` =
+  `x86_64`). To check bash 3.2 compatibility, run the same in the `bash:3.2` Docker image
+  (`--network host`, `apk add curl`). On a Mac, run it as is; `xattr` and `lsregister` only
+  run there.
 - Desktop updater: install an older version that way, then run it (e.g. with the `desktop-ui`
   skill's `ui-shot.sh`, `UI_SHOT_BIN=<home>/.local/lib/mothr/current/mothr`) with
   `MOTHR_UPDATE_API=http://127.0.0.1:8799/api`. The first check runs 20 s after start,
@@ -149,9 +183,11 @@ Ask the user before deleting tags or releases.
 - `NDK_VERSION` must match `ndkVersion` in `composeApp/build.gradle.kts`.
 - The apt list in the linux job is the reference for GPUI's system libraries.
 - CI's `windows` job (clippy for the Windows target, and compiling `mothr.iss` with placeholder
-  files) runs only on pull requests into `main` (it takes ~5 min), so a Windows-only break in a
-  feature PR shows up at the `dev` → `main` PR; check locally with `cargo xwin clippy` before.
-  It isn't a required check, but when it's red the next release's windows job fails too.
+  files) and `macos` job (clippy on macOS, and `bundle.sh` with a stand-in binary) run only on
+  pull requests into `main` (they take ~5 min), so a Windows- or macOS-only break in a feature
+  PR shows up at the `dev` → `main` PR. Check before: `cargo xwin clippy` for Windows, and for
+  either, run CI by hand on the branch (`gh workflow run ci.yml --ref <branch>`). They aren't
+  required checks, but when one is red the next release's build for it fails too.
 
 ## Trying the Windows build on Linux (Wine)
 
