@@ -1,14 +1,16 @@
 # Mothr
 
-A native, GPU-rendered desktop manager for coding-agent chats. Mothr runs **Claude Code,
-GitHub Copilot, Codex, OpenCode and Hermes** behind one interface of its own. It talks to each
-agent over its machine protocol and never shows the agent's terminal UI.
+A native, GPU-rendered desktop app for coding-agent chats. Mothr runs **Claude Code, GitHub
+Copilot, Codex, OpenCode and Hermes** behind one interface of its own. It talks to each agent
+over its machine protocol and never shows the agent's terminal UI. A companion Android app and a
+web client let you follow and answer your chats from your phone.
 
-Built in Rust with [GPUI](https://gpui.rs) via [`gpui-kit`](https://gpui-kit.com). It runs on
-macOS, Windows and Linux (X11 and Wayland). Dark and light themes follow your system live, and the interface size can be set from 100%
-to 145% for high-resolution screens. The
-visual language is documented in [DESIGN.md](DESIGN.md); type is set in Geist, which is bundled
-with the app.
+Built in Rust with [GPUI](https://gpui.rs) via [`gpui-kit`](https://gpui-kit.com). Mothr is
+released for Linux (x86_64, X11 and Wayland) and Android. GPUI also runs on macOS and Windows,
+but Mothr isn't built or tested there yet. Dark and light themes follow your system live, and
+the interface size can be set from 100% to 145% for high-resolution screens. The visual
+language is documented in [DESIGN.md](DESIGN.md); type is set in Geist, which is bundled with
+the app.
 
 ## Install
 
@@ -16,7 +18,7 @@ with the app.
 | --- | --- | --- |
 | **Linux** (x86_64) | the install script below | automatic, in the app |
 | **Android** phone app | APK from the [latest release](https://github.com/evolvedmesh/mothr/releases/latest) | in the app |
-| macOS, Windows, iOS | not released yet; [build from source](#running) | — |
+| macOS, Windows, iOS | not released yet; see [Building from source](#building-from-source) | — |
 
 Mothr runs the agents you already use. Install and sign in to at least one of
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code), GitHub Copilot CLI, Codex
@@ -192,8 +194,8 @@ background so they're ready to install.
   (Graphite, Slate, Warm, or pure Black), and put the sidebar on either side. The phone app has
   its own theme, accent and tone.
 - **No title bar.** The sidebar is the window's frame: its header finds repos and goes
-  back/forward, a live row counts chats working or waiting on you, and its footer holds your
-  limits, Mothr Remote, light/dark and Settings. Collapsed (Ctrl+B) it's a rail of the same
+  back/forward, a live row counts chats working or waiting on you, a new Mothr version shows up
+  above the footer, and the footer holds your limits, Mothr Remote, light/dark and Settings. Collapsed (Ctrl+B) it's a rail of the same
   controls.
 - **Saved preferences**:
   - one app-wide default permission mode for every agent (an agent that lacks that mode falls
@@ -228,10 +230,11 @@ background so they're ready to install.
   app.
 - **Mothr Remote.** Controls the whole app from a phone or another computer. It's a
   token-protected web client (installable as a PWA) with live streaming, approvals, answers,
-  new chats and each chat's terminal (your shell on the computer, in the chat's repo). It can be reached on the LAN, directly over your **Tailscale** tailnet (no
-  extra setup beyond being signed in), or through **Dev Tunnels**. The app shows a QR code for pairing.
-- **Mothr mobile** (`apps/mobile`). A native Android/iOS remote built on the same Rust session
-  model. It stays connected in the background and sends a notification when an agent needs a
+  new chats and each chat's terminal (your shell on the computer, in the chat's repo). It can
+  be reached on the LAN, directly over your **Tailscale** tailnet (no extra setup beyond being
+  signed in), or through **Dev Tunnels**. The app shows a QR code for pairing.
+- **Mothr mobile** (`apps/mobile`). A native remote built on the same Rust session model,
+  released for Android (the iOS app builds from source on a Mac). It stays connected in the background and sends a notification when an agent needs a
   permission or an answer. Allow, Deny or an answer can be tapped right on the notification.
 - **Review agent changes.** Every file edit shows as a real line diff with syntax highlighting.
   The **Changes** panel (the `+N −M` button in a chat's header) lists all of a chat's edits,
@@ -271,6 +274,21 @@ background so they're ready to install.
   The phone app has the same page: the folder button on the chat list. Only folders Mothr knows
   as repos can be browsed remotely, and paths can't leave the repo.
 
+## Shortcuts
+
+| Shortcut (Cmd on macOS) | Action                  |
+| ----------------------- | ----------------------- |
+| `Ctrl+N`                | New chat                |
+| `Ctrl+Shift+N`          | New design              |
+| `Ctrl+Shift+G`          | New general chat        |
+| `Ctrl+Shift+R`          | Resume an agent's chat  |
+| `` Ctrl+` `` / `Ctrl+~` | Show/hide the terminal  |
+| `Ctrl+P` / `Ctrl+K`     | Find repo               |
+| `Ctrl+B`                | Toggle sidebar          |
+| `Ctrl+L`                | Focus composer          |
+| `Ctrl+,`                | Settings                |
+| `Enter` / `Shift+Enter` | Send / newline          |
+
 ## Repository layout
 
 A monorepo managed with [Turborepo](https://turborepo.com) (bun workspaces) on top of a Cargo
@@ -293,12 +311,16 @@ crates/
                    by the desktop view and remote clients
   mothr-remote     axum server + embedded web client, tunnels, QR
   mothr-client     remote-API client shared with the mobile app (UniFFI)
+  mothr-update     updates: newest GitHub release, checksum-verified downloads, Linux install layout
 mothr-design/      Mothr's own design system, written in its Design format
+install.sh         the Linux installer (see Install)
+scripts/           release helpers (set-version.sh)
 ```
 
-- **One state model, three places.** Every view of a session (hub, desktop, web) applies the same
-  `SessionEvent`s through the same reducer (`SessionState::apply`). The web client uses a JS port
-  of it, tested for equivalence.
+- **One state model everywhere.** Every view of a session (hub, desktop, phone through
+  `mothr-client`, web client) applies the same `SessionEvent`s through the same reducer
+  (`SessionState::apply`). The web client runs a hand-written JS port of it, kept in step by
+  hand.
 - **Transports**:
   - Claude Code uses `claude -p --input-format stream-json --permission-prompt-tool stdio`. That
     gives permission prompts, rate-limit events, permission-mode and model switching, and Remote
@@ -311,7 +333,7 @@ mothr-design/      Mothr's own design system, written in its Design format
   `shepherd` config and data folders over, and Design mode still reads a repo's old
   `shepherd-design/` folder.
 
-## Running
+## Building from source
 
 ```sh
 bun install                    # once: installs Turborepo
@@ -325,7 +347,14 @@ Plain Cargo works too: `cargo run --release` builds and launches `mothr`, and
 `cargo test --workspace` runs the Rust tests. The mobile app's own build steps are in
 [apps/mobile/README.md](apps/mobile/README.md).
 
-Linux needs the usual GPUI dependencies (Vulkan, xkbcommon, wayland/x11 dev libraries).
+Linux needs Rust (stable) and GPUI's system libraries. On Ubuntu/Debian:
+
+```sh
+sudo apt install clang pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+  libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libvulkan-dev
+```
+
+macOS and Windows builds aren't set up or tested yet.
 
 ### Releases
 
@@ -337,22 +366,8 @@ prereleases (`0.1.0-dev.1`, …). Stable releases on `main` also attach the Linu
 build (`mothr_<version>_linux_x64.tar.gz`) and the R8-optimized Android APK
 (`mothr_<version>_android_arm64-v8a.apk`) plus `SHA256SUMS`, which `install.sh` and both in-app
 updaters (`crates/mothr-update`) check every download against, and `main` is merged back into
-`dev` afterwards.
-Pull requests into `dev` and `main` must pass CI (`.github/workflows/ci.yml`). The workflow's
-header lists the secrets it needs.
-
-| Shortcut (Cmd on macOS) | Action                  |
-| ----------------------- | ----------------------- |
-| `Ctrl+N`                | New chat                |
-| `Ctrl+Shift+N`          | New design              |
-| `Ctrl+Shift+G`          | New general chat        |
-| `Ctrl+Shift+R`          | Resume an agent's chat  |
-| `` Ctrl+` `` / `Ctrl+~` | Show/hide the terminal  |
-| `Ctrl+P` / `Ctrl+K`     | Find repo               |
-| `Ctrl+B`                | Toggle sidebar          |
-| `Ctrl+L`                | Focus composer          |
-| `Ctrl+,`                | Settings                |
-| `Enter` / `Shift+Enter` | Send / newline          |
+`dev` afterwards. Pull requests into `dev` and `main` must pass CI (`.github/workflows/ci.yml`).
+The release workflow's header lists the secrets it needs.
 
 ### Developer hooks
 
@@ -367,7 +382,7 @@ header lists the secrets it needs.
   design opens on. `MOTHR_DESIGN_EXPORT=menu|html|storybook` opens the export menu or exports.
 - `MOTHR_DEV_REVIEW=accept|reject`: answer the first waiting edits from the Changes panel.
   `MOTHR_DIFF_MODE=split` starts the panel in split view.
-- `MOTHR_TRACE=<file>`: append Claude Code's raw protocol lines to a file.
+- `MOTHR_TRACE=<file>`: append every agent's raw protocol lines (Claude Code and ACP) to a file.
 - `MOTHR_PREFILL=<text>`: type text into the open chat's composer at startup.
 - `MOTHR_DEV_PROMPT="<agent_id>|<mode>|<model>|<chat|design>|<prompt>"`: start a real chat in
   the current directory.
