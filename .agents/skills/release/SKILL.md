@@ -110,7 +110,8 @@ Users get releases these ways, all from the same GitHub release and all checked 
   read-only folder or translocated (opened from Downloads while quarantined) doesn't, and
   links the disk image. An update downloads `mothr_<v>_macos_<arch>.tar.gz`, unpacks it into
   `.mothr-update/` next to the bundle, moves the running bundle aside into it and the new one
-  into its place. "Restart" waits for the old process and runs `open <bundle>`; each start
+  into its place. "Restart" waits for the old process and runs the bundle's binary (not
+  `open`, which would drop Mothr's environment, e.g. `MOTHR_HOME`); each start
   deletes `.mothr-update/`. The installed version is the bundle's
   `CFBundleShortVersionString`.
 - The phone (`AndroidUpdates.kt` via `mothr-client`'s `check_app_update` /

@@ -230,7 +230,7 @@ impl Updater {
 
     /// Quit and start the installed version once this process has exited.
     pub fn restart(this: &Entity<Self>, cx: &mut App) {
-        let Some(binary) = this.read(cx).install.as_ref().map(Install::launch_path) else { return };
+        let Some(binary) = this.read(cx).install.as_ref().map(Install::current_binary) else { return };
         match Self::restart_command(&binary).spawn() {
             Ok(_) => cx.quit(),
             Err(e) => tracing::warn!("couldn't restart into {}: {e}", binary.display()),
@@ -248,13 +248,14 @@ impl Updater {
         cmd
     }
 
-    /// A shell that waits for this process to exit and then starts the new binary, or opens the
-    /// app bundle (macOS), so it starts like one launched from the Dock.
+    /// A shell that waits for this process to exit and then starts the new binary. On macOS too
+    /// it runs the binary inside the bundle rather than `open`ing the bundle: LaunchServices
+    /// would start it with launchd's environment instead of this one's.
     #[cfg(not(windows))]
     fn restart_command(binary: &std::path::Path) -> std::process::Command {
         let mut cmd = std::process::Command::new("sh");
         cmd.arg("-c")
-            .arg(r#"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; if [ -d "$2" ]; then exec open "$2"; else exec "$2"; fi"#)
+            .arg(r#"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; exec "$2""#)
             .arg("mothr-restart")
             .arg(std::process::id().to_string())
             .arg(binary)

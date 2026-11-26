@@ -44,6 +44,8 @@
 //! the disk image) doesn't. An update unpacks the release tarball into `.mothr-update/` next to
 //! the bundle, moves the running bundle aside into it and the new one into its place (macOS lets a
 //! running app's bundle move). The next start runs the new one and deletes `.mothr-update/`.
+//! A restart runs the bundle's binary directly, not through `open`, so it keeps Mothr's
+//! environment (`MOTHR_HOME` and the like) as on Linux.
 
 use crate::{Client, Release, linux_asset, macos_arch, macos_asset, windows_asset};
 use anyhow::{Context as _, bail};
@@ -152,14 +154,6 @@ impl Install {
             Layout::Versions => self.root.join("current").join(BINARY),
             Layout::InPlace => self.root.join(WINDOWS_BINARY),
             Layout::Bundle => self.root.join(MACOS_BINARY),
-        }
-    }
-
-    /// What a restart opens: the app bundle on macOS (through `open`), else the binary.
-    pub fn launch_path(&self) -> PathBuf {
-        match self.layout {
-            Layout::Bundle => self.root.clone(),
-            _ => self.current_binary(),
         }
     }
 
@@ -689,7 +683,6 @@ mod bundle_tests {
         let (dir, install) = installed("detect");
         assert_eq!((install.root.as_path(), install.layout), (dir.join("Applications/Mothr.app").as_path(), Layout::Bundle));
         assert_eq!(install.current_version().as_deref(), Some("0.1.0"));
-        assert_eq!(install.launch_path(), install.root);
         assert_eq!(Install::bundle_for_binary(&dir.join("target/release/mothr")), None, "not in a bundle");
         let loose = dir.join("Mothr/Contents/MacOS/mothr");
         std::fs::create_dir_all(loose.parent().unwrap()).unwrap();
