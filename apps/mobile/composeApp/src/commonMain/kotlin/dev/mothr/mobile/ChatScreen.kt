@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -65,6 +66,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.mikepenz.markdown.model.rememberMarkdownState
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -268,7 +273,11 @@ private fun Transcript(model: AppModel, chat: ChatDetail) {
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
             ) {
-                items(entries.asReversed(), key = { entryId(it) }) { e -> EntryItem(model, chat, e) }
+                items(entries.asReversed(), key = { entryId(it) }) { e ->
+                    // What arrives while the chat is open fades in; nothing slides, since the newest
+                    // entry grows as it streams and the ones above would trail it.
+                    Box(Modifier.animateItem(fadeInSpec = tween(260), placementSpec = null, fadeOutSpec = null)) { EntryItem(model, chat, e) }
+                }
             }
         }
         AnimatedVisibility(
@@ -315,7 +324,7 @@ private fun EntryItem(model: AppModel, chat: ChatDetail, e: EntryView) {
                 Modifier.clip(Radius.xl).background(pal.surfaceHover).padding(horizontal = 15.dp, vertical = 11.dp),
             ) { Text(e.text, style = type.reading) }
         }
-        is EntryView.Assistant -> MarkdownText(e.text)
+        is EntryView.Assistant -> MarkdownText(revealed(e.id, e.text, e.streaming), Modifier.animateContentSize(tween(200)))
         is EntryView.Thinking -> Thinking(e)
         is EntryView.Tool -> ToolCard(e)
         is EntryView.Plan -> PlanCard(e)
@@ -418,12 +427,39 @@ private fun ImageViewer(bitmap: ImageBitmap, label: String, onDismiss: () -> Uni
     }
 }
 
+/**
+ * Streamed text as it shows this frame. An agent's text lands a dozen words at a time; revealing
+ * each chunk word by word over about a quarter of a second reads as writing, not popping in.
+ * Text that is already there when the entry first shows (an older message) shows at once.
+ */
 @Composable
-fun MarkdownText(text: String) {
+private fun revealed(id: String, text: String, streaming: Boolean): String {
+    var shown by rememberSaveable(id) { mutableIntStateOf(if (streaming) 0 else text.length) }
+    LaunchedEffect(id, text) {
+        while (shown < text.length) {
+            delay(REVEAL_TICK_MS)
+            // Close what is left in REVEAL_STEPS ticks, however large, and end on a word.
+            var next = minOf(text.length, shown + maxOf(4, (text.length - shown) / REVEAL_STEPS))
+            while (next < text.length && !text[next].isWhitespace()) next++
+            shown = next
+        }
+    }
+    return if (shown >= text.length) text else text.substring(0, shown)
+}
+
+private const val REVEAL_TICK_MS = 32L
+private const val REVEAL_STEPS = 8
+
+@Composable
+fun MarkdownText(text: String, modifier: Modifier = Modifier) {
     val p = pal
     val t = type
+    // Keep the last render while new text parses, or every streamed chunk blanks the message
+    // for a frame.
+    val state = rememberMarkdownState(text, retainState = true)
     Markdown(
-        content = text,
+        state,
+        modifier = modifier,
         colors = markdownColor(text = p.text, codeBackground = p.codeBg, inlineCodeBackground = p.surfaceHover, dividerColor = p.border),
         typography = markdownTypography(
             h1 = t.title, h2 = t.title, h3 = t.heading, h4 = t.heading, h5 = t.label, h6 = t.label,
