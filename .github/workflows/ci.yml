@@ -191,8 +191,10 @@ jobs:
             mkdir -p $RUNNER_TEMP/shim
             printf '#!/bin/sh\n[ "$1" = hw.optional.arm64 ] && echo 0 || /usr/sbin/sysctl "$@"\n' > $RUNNER_TEMP/shim/sysctl
             chmod +x $RUNNER_TEMP/shim/sysctl
-            env HOME=$H MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases arch -x86_64 /bin/bash install.sh --version 0.2.0 --dir $RUNNER_TEMP/rosetta-check
-            lipo -info $RUNNER_TEMP/rosetta-check/Mothr.app/Contents/MacOS/mothr
+            # This mock release only has the x64 build, so picking arm64 shows as a failed download.
+            out="$(env HOME=$H MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases arch -x86_64 /bin/bash install.sh --version 0.2.0 --dir $RUNNER_TEMP/rosetta-check 2>&1 || true)"
+            echo "$out"
+            echo "$out" | grep -q "for macOS on Apple silicon"
             env PATH="$RUNNER_TEMP/shim:$PATH" HOME=$H MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases arch -x86_64 /bin/bash install.sh --version 0.2.0
           else
             env HOME=$H MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases /bin/bash install.sh --version 0.2.0
