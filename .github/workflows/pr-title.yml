@@ -1,0 +1,42 @@
+name: PR title
+
+# With a squash merge, the PR title becomes the commit semantic-release reads, so it has to
+# be a Conventional Commit (`feat(hub): …`, `fix(desktop,mobile): …`, `docs: …`).
+# `pr-title` is a required status check on dev and main (the "mothr checks" repo ruleset).
+# Kept apart from ci.yml so editing a title doesn't restart the builds.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  pr-title:
+    name: pr-title
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # The repo's types (AGENTS.md → Git workflow).
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            docs
+            test
+            build
+            ci
+            chore
+            style
+            revert
+          requireScope: false
+          # Subjects are lowercase sentences in this repo ("add workspaces, …").
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            Start the subject "{subject}" with a lowercase letter, like the rest of the history:
+            "feat(hub): add workspaces", not "feat(hub): Add workspaces".

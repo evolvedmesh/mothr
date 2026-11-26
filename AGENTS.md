@@ -121,6 +121,10 @@ cargo test -p mothr-core                      # one crate (fast loop for reducer
 cargo clippy --workspace --all-targets        # keep it warning-free
 ```
 
+- Pull requests must pass CI before they merge into `dev` or `main` (required checks):
+  `rust` (clippy `-D warnings` + `cargo test --workspace`) and `android` (Kotlin compile +
+  unit tests) from `.github/workflows/ci.yml`, and `pr-title` (a lowercase Conventional
+  Commit title) from `pr-title.yml`. Run `bun run lint && bun run test` before you push.
 - Debug builds use `opt-level = 1` (dependencies at 3); release uses thin LTO and one codegen
   unit, so `cargo build --release` takes several minutes. Don't use it as an edit loop.
 - Linux needs the GPUI system libraries: Vulkan, xkbcommon (+x11), wayland, x11-xcb,
