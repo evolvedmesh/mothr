@@ -1,18 +1,16 @@
 name: CI
 
-# Gate for every pull request: lint and test the Rust workspace, and compile the phone app.
-# `rust` and `android` are required status checks on dev and main (the "mothr checks" repo
-# ruleset), so a PR can't merge while either is red. Their job names are the check names:
-# rename them only together with the ruleset.
+# Lint gate for every pull request: clippy over the whole Rust workspace (it type-checks
+# without building binaries) plus pr-title.yml. Nothing is compiled into an app here: both
+# apps are built once, by release.yml on main, and the pull request template asks for a local
+# build of each before a PR is opened.
 #
+# `rust` and `pr-title` are required status checks on dev and main (the "mothr checks" repo
+# ruleset). Job names are the check names: rename them only together with the ruleset.
 # Don't add path filters: a required check that never runs stays pending and blocks the merge.
 
 on:
   pull_request:
-  # Runs on dev save the Rust/Gradle caches PRs read (a PR can only read caches from its base
-  # and the default branch). The release bot's `[skip ci]` commits don't trigger it.
-  push:
-    branches: [dev]
   workflow_dispatch:
 
 permissions:
@@ -29,15 +27,10 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
-      # The dev profile optimizes (opt-level 1, dependencies at 3) because the app is run from
-      # debug builds. Linting and tests don't need that, and optimizing is most of a cold
-      # compile; no debuginfo keeps target/ within the runner's disk.
-      CARGO_PROFILE_DEV_OPT_LEVEL: "0"
-      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v4
 
-      # GPUI's Linux backends (same list as release.yml).
+      # GPUI's build scripts look these up (same list as release.yml).
       - name: Install system libraries
         run: |
           sudo apt-get update
@@ -49,56 +42,10 @@ jobs:
         with:
           components: clippy
 
+      # Reused by later pushes to the same pull request.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ci
-          # PRs only read it, so they don't each store a copy.
-          save-if: ${{ github.event_name != 'pull_request' }}
+          key: clippy
 
       - name: clippy
-        run: cargo clippy --workspace --all-targets --locked --config 'profile.dev.package."*".opt-level=0' -- -D warnings
-
-      - name: tests
-        run: cargo test --workspace --locked --config 'profile.dev.package."*".opt-level=0'
-
-  android:
-    name: android
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: apps/mobile
-    env:
-      # Keep in lockstep with ndkVersion in apps/mobile/composeApp/build.gradle.kts.
-      NDK_VERSION: 28.2.13676358
-      # Gobley 0.3.7 can't read Cargo 1.100+'s build-dir layout (see release.yml).
-      RUSTUP_TOOLCHAIN: "1.93.0"
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Install the NDK
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" >/dev/null
-
-      - uses: dtolnay/rust-toolchain@1.93.0
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ci-android
-          save-if: ${{ github.event_name != 'pull_request' }}
-
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-read-only: ${{ github.event_name == 'pull_request' }}
-
-      # The same checks as `bun run lint` / `bun run test` for @mothr/mobile: compile the
-      # Kotlin against freshly generated UniFFI bindings, and run the unit tests.
-      - name: Compile and test
-        run: |
-          ./gradlew :composeApp:compileDebugKotlinAndroid :composeApp:testDebugUnitTest \
-            --console=plain -Pmothr.abis=arm64-v8a
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings

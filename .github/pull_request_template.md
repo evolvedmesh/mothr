@@ -32,10 +32,20 @@ Feature branches target `dev`.
 
 ## How has this been tested?
 
-<!-- What you ran and what you checked by hand. Say which agents you tried it with. -->
+<!--
+CI only lints (clippy). Nothing builds the apps until the release on `main`, so both must be
+compiled locally before this PR is opened. Tick each box only after running it on this branch.
+-->
 
-- [ ] `bun run test`
-- [ ] `bun run lint` (clippy `-D warnings` + mobile lint)
+**Required: both apps compile**
+
+- [ ] Desktop app builds: `cargo build -p mothr-app`
+- [ ] Phone app builds: `cd apps/mobile && RUSTUP_TOOLCHAIN=1.93.0 ./gradlew :composeApp:assembleDebug`
+- [ ] Tests pass: `cargo test --workspace`
+- [ ] Lint is clean: `cargo clippy --workspace --all-targets -- -D warnings`
+
+**What you checked by hand** <!-- Say which agents you tried it with. -->
+
 - [ ] Ran the app against an isolated profile (`MOTHR_HOME=$(mktemp -d) cargo run`)
 
 ## Screenshots

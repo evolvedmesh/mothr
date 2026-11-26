@@ -1,9 +1,11 @@
-name: PR title
+name: PR title and checklist
 
-# With a squash merge, the PR title becomes the commit semantic-release reads, so it has to
-# be a Conventional Commit (`feat(hub): …`, `fix(desktop,mobile): …`, `docs: …`).
-# `pr-title` is a required status check on dev and main (the "mothr checks" repo ruleset).
-# Kept apart from ci.yml so editing a title doesn't restart the builds.
+# Two quick checks on the pull request itself, re-run whenever its title or description is
+# edited. Both are required status checks on dev and main (the "mothr checks" repo ruleset).
+# - pr-title: with a squash merge, the title becomes the commit semantic-release reads, so it
+#   has to be a Conventional Commit (`feat(hub): …`, `fix(desktop,mobile): …`, `docs: …`).
+# - pr-checklist: CI doesn't build the apps (only the release on main does), so the
+#   description must tick the template's "both apps compile" boxes.
 
 on:
   pull_request:
@@ -40,3 +42,20 @@ jobs:
           subjectPatternError: |
             Start the subject "{subject}" with a lowercase letter, like the rest of the history:
             "feat(hub): add workspaces", not "feat(hub): Add workspaces".
+
+  pr-checklist:
+    name: pr-checklist
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Both apps were compiled locally
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          missing=0
+          for item in "Desktop app builds" "Phone app builds" "Tests pass" "Lint is clean"; do
+            if ! grep -iE "^[[:space:]]*[-*][[:space:]]*\[[xX]\][[:space:]]*${item}" >/dev/null <<<"$BODY"; then
+              echo "::error::Run and tick \"${item}\" in the pull request description (see the template)."
+              missing=1
+            fi
+          done
+          exit "$missing"

@@ -125,10 +125,12 @@ cargo test -p mothr-core                      # one crate (fast loop for reducer
 cargo clippy --workspace --all-targets        # keep it warning-free
 ```
 
-- Pull requests must pass CI before they merge into `dev` or `main` (required checks):
-  `rust` (clippy `-D warnings` + `cargo test --workspace`) and `android` (Kotlin compile +
-  unit tests) from `.github/workflows/ci.yml`, and `pr-title` (a lowercase Conventional
-  Commit title) from `pr-title.yml`. Run `bun run lint && bun run test` before you push.
+- CI only lints. Required checks on `dev` and `main`: `rust` (clippy `-D warnings`,
+  `.github/workflows/ci.yml`), `pr-title` (a lowercase Conventional Commit title) and
+  `pr-checklist` (`pr-title.yml`). The apps are built only by the release on `main`, so before
+  opening a PR build both locally and tick them in the template, or `pr-checklist` fails:
+  `cargo build -p mothr-app`, `RUSTUP_TOOLCHAIN=1.93.0 ./gradlew :composeApp:assembleDebug`
+  (in `apps/mobile`), `cargo test --workspace`, and clippy.
 - Debug builds use `opt-level = 1` (dependencies at 3); release uses thin LTO and one codegen
   unit, so `cargo build --release` takes several minutes. Don't use it as an edit loop.
 - Linux needs the GPUI system libraries: Vulkan, xkbcommon (+x11), wayland, x11-xcb,

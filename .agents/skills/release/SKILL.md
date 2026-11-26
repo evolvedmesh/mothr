@@ -41,7 +41,7 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
 - Merge PRs with a merge commit so semantic-release sees every commit. With squash merges, the
   PR title alone decides the release; make it a Conventional Commit.
 - Changes reach `dev` and `main` only through pull requests: admins' ruleset bypass is
-  "pull requests only", and the required checks (`rust`, `android`, `pr-title`) must pass or
+  "pull requests only", and the required checks (`rust`, `pr-title`, `pr-checklist`) must pass or
   be explicitly bypassed in the merge dialog. Only the release bot pushes directly.
 - Flow: feature → PR into `dev` → PR `dev` into `main`. After every push to `main`, the
   `sync-dev` job merges `main` back into `dev` (a normal merge commit,

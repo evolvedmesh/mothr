@@ -366,7 +366,9 @@ prereleases (`0.1.0-dev.1`, …). Stable releases on `main` also attach the Linu
 build (`mothr_<version>_linux_x64.tar.gz`) and the R8-optimized Android APK
 (`mothr_<version>_android_arm64-v8a.apk`) plus `SHA256SUMS`, which `install.sh` and both in-app
 updaters (`crates/mothr-update`) check every download against, and `main` is merged back into
-`dev` afterwards. Pull requests into `dev` and `main` must pass CI (`.github/workflows/ci.yml`).
+`dev` afterwards. Pull requests into `dev` and `main` must pass a lint-only CI (clippy, PR title,
+and the template's ticked "both apps compile" checklist); the apps themselves are built only
+for releases.
 The release workflow's header lists the secrets it needs.
 
 ### Developer hooks
