@@ -1,0 +1,30 @@
+[package]
+name = "mothr-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mothr: a native manager for Claude Code, Codex, Copilot, OpenCode and Hermes agent chats."
+
+[[bin]]
+name = "mothr"
+path = "src/main.rs"
+
+[dependencies]
+# syntect highlights code in chat replies and diffs.
+gpui-kit = { workspace = true, features = ["syntect"] }
+mothr-core.workspace = true
+mothr-hub.workspace = true
+mothr-design.workspace = true
+mothr-remote.workspace = true
+parking_lot.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+notify.workspace = true
+mothr-terminal.workspace = true
+mothr-update.workspace = true
+semver = "1"

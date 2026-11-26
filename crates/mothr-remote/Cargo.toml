@@ -1,0 +1,28 @@
+[package]
+name = "mothr-remote"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mothr remote control: an authenticated HTTP/WebSocket server plus an embedded web client, reachable over LAN, Tailscale or Dev Tunnels."
+
+[dependencies]
+mothr-core.workspace = true
+axum.workspace = true
+gethostname = "1"
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+rand.workspace = true
+base64.workspace = true
+qrcode.workspace = true
+
+[dev-dependencies]
+mothr-projects.workspace = true
+mothr-terminal.workspace = true
+tokio-tungstenite = "0.28"
+reqwest.workspace = true
+chrono.workspace = true

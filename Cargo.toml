@@ -1,0 +1,61 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "apps/desktop"]
+default-members = ["apps/desktop"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Mothr contributors"]
+
+[workspace.dependencies]
+mothr-core = { path = "crates/mothr-core" }
+mothr-agents = { path = "crates/mothr-agents" }
+mothr-projects = { path = "crates/mothr-projects" }
+mothr-usage = { path = "crates/mothr-usage" }
+mothr-design = { path = "crates/mothr-design" }
+mothr-remote = { path = "crates/mothr-remote" }
+mothr-hub = { path = "crates/mothr-hub" }
+mothr-skills = { path = "crates/mothr-skills" }
+mothr-terminal = { path = "crates/mothr-terminal" }
+mothr-update = { path = "crates/mothr-update" }
+
+gpui-kit = "0.10"
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+toml = "0.9"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+async-channel = "2"
+futures = "0.3"
+parking_lot = "0.12"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+which = "8"
+ignore = "0.4"
+nucleo-matcher = "0.3"
+notify = "8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+axum = { version = "0.8", features = ["ws"] }
+qrcode = { version = "0.14", default-features = false }
+rand = "0.9"
+base64 = "0.22"
+similar = "2"
+alacritty_terminal = "0.26"
+agent-client-protocol-schema = "1.18"
+
+[profile.dev]
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
