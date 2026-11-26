@@ -19,6 +19,7 @@ mothr-remote = { path = "crates/mothr-remote" }
 mothr-hub = { path = "crates/mothr-hub" }
 mothr-skills = { path = "crates/mothr-skills" }
 mothr-terminal = { path = "crates/mothr-terminal" }
+mothr-update = { path = "crates/mothr-update" }
 
 gpui-kit = "0.10"
 anyhow = "1"

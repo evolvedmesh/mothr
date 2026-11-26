@@ -401,6 +401,10 @@ pub struct Settings {
     /// List the enabled skills in every chat's instructions, so agents can pick one on their
     /// own. Off, skills only run when typed as `/name`.
     pub skills_auto: bool,
+    /// Download and install new releases in the background; they take effect on the next
+    /// start. Off, a new release is offered in the sidebar and installs when clicked. Only
+    /// copies installed with the Mothr installer update themselves.
+    pub auto_update: bool,
 }
 
 impl Default for Settings {
@@ -438,6 +442,7 @@ impl Default for Settings {
             sidebar_open: true,
             appearance: Appearance::default(),
             skills_auto: true,
+            auto_update: false,
         }
     }
 }

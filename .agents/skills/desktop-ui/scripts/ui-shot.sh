@@ -43,13 +43,14 @@ start() {
   setsid gamescope --backend headless -w "$w" -h "$h" -W "$w" -H "$h" --force-windows-fullscreen -- \
     env -u WAYLAND_DISPLAY MOTHR_HOME="$home" "$@" "$bin" >"$log" 2>&1 < /dev/null &
   local pid=$!
-  for _ in $(seq 1 100); do
+  # Up to 30 s: gamescope starts slowly while the machine is busy (e.g. building).
+  for _ in $(seq 1 300); do
     sock="$(ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -E '^gamescope-[0-9]+$' | grep -vxF "$before" | head -n1 || true)"
     [ -n "$sock" ] && grep -q 'Starting Xwayland on' "$log" && break
     kill -0 "$pid" 2>/dev/null || { cat "$log" >&2; rm -rf "$home"; die "gamescope exited"; }
     sleep 0.1
   done
-  [ -n "$sock" ] || { kill -- -"$pid" 2>/dev/null; rm -rf "$home"; die "gamescope didn't come up"; }
+  [ -n "$sock" ] || { kill -- -"$pid" 2>/dev/null; tail -n 20 "$log" >&2; rm -rf "$home"; die "gamescope didn't come up"; }
   local display; display="$(sed -n 's/.*Starting Xwayland on \(:[0-9]*\).*/\1/p' "$log" | head -n1)"
   printf 'PGID=%s\nSOCK=%s\nHOME_DIR=%s\nXDISPLAY=%s\n' "$pid" "$sock" "$home" "$display" > "$state"
   echo "started: display $display, MOTHR_HOME $home, log $log"

@@ -20,6 +20,7 @@ class MothrApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         Mothr.background = AndroidBackground(this)
+        Mothr.updates = AndroidUpdates(this)
         // Create the model (and reconnect a paired phone) outside any Compose snapshot.
         Mothr.model
     }

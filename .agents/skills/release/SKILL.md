@@ -52,6 +52,56 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
 - `v*` tags are protected org-wide ("release tags" ruleset): only the release bot and org
   admins can create, move or delete them.
 
+## Updates
+
+Users get releases three ways, all from the same GitHub release and all checked against its
+`SHA256SUMS` (written by the publish job):
+
+- `install.sh` (repo root, served from `main` via raw.githubusercontent.com): installs to
+  `~/.local/lib/mothr/versions/<v>` with a `current` symlink and an `install.json` marker.
+  It resolves "latest" from the `/releases/latest` redirect, so asset names must stay
+  `mothr_<v>_linux_x64.tar.gz`.
+- The desktop updater (`apps/desktop/src/update.rs` on `crates/mothr-update`): checks 20 s
+  after start and every 6 h, and offers a newer release in the sidebar (`ui/workspace/frame.rs`)
+  and Settings → Updates. Clicking stages the new version next to the running one, swaps
+  `current` and restarts (or waits while chats work). "Install updates automatically" (off by
+  default) stages it unprompted. Only copies with the marker update themselves.
+- The phone (`AndroidUpdates.kt` via `mothr-client`'s `check_app_update` /
+  `download_app_update`): downloads `mothr_<v>_android_<abi>.apk` and installs it with
+  `PackageInstaller`. Phones only accept it when it's signed with the release key, so the
+  android job fails without `ANDROID_KEYSTORE_*`. The key and its password live outside the
+  repo with the maintainer (backed up); never regenerate it, or every installed phone app
+  loses updates.
+
+Renaming an asset, the tag format or the install layout breaks updates for everyone already
+installed. Change them only together with a fallback in the updaters.
+
+### Test updates locally
+
+`scripts/mock-releases.py` stands in for GitHub:
+
+```sh
+R=$(mktemp -d); mkdir -p $R/0.1.1
+# put mothr_0.1.1_linux_x64.tar.gz (one folder mothr_0.1.1_linux_x64/ inside) and/or
+# mothr_0.1.1_android_<abi>.apk in $R/0.1.1, then:
+(cd $R/0.1.1 && sha256sum -- * > SHA256SUMS); echo 0.1.1 > $R/latest
+python3 -I .agents/skills/release/scripts/mock-releases.py $R 8799 &
+```
+
+- Installer, into a throwaway home:
+  `HOME=$(mktemp -d) MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases bash install.sh`
+- Desktop updater: install an older version that way, then run it (e.g. with the `desktop-ui`
+  skill's `ui-shot.sh`, `UI_SHOT_BIN=<home>/.local/lib/mothr/current/mothr`) with
+  `MOTHR_UPDATE_API=http://127.0.0.1:8799/api`. The first check runs 20 s after start,
+  then the sidebar offers the update. Seed `auto_update = true` (`UI_SHOT_SETTINGS`) to install
+  without clicking; `readlink <root>/current` shows the switch.
+- Phone (with "Download updates" off, the banner's **Update** downloads, then installs): run a second mock with `PUBLIC_BASE=http://10.0.2.2:<port>`, install an older debug
+  APK, and point the debug build at it:
+  `adb shell run-as dev.mothr.mobile sh -c 'mkdir -p files && echo http://10.0.2.2:<port>/api > files/update-api'`.
+  The newer APK must be signed with the same key (debug builds share the debug key) and have a
+  higher versionCode (`-Pmothr.versionCode=`). Build it with `scripts/set-version.sh <newer>`,
+  and set the version back afterwards.
+
 ## When a run fails
 
 ```sh

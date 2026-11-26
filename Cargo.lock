@@ -4016,8 +4016,10 @@ dependencies = [
  "mothr-hub",
  "mothr-remote",
  "mothr-terminal",
+ "mothr-update",
  "notify",
  "parking_lot",
+ "semver",
  "serde_json",
  "tokio",
  "tracing",
@@ -4034,6 +4036,7 @@ dependencies = [
  "futures",
  "mothr-core",
  "mothr-remote",
+ "mothr-update",
  "parking_lot",
  "reqwest",
  "rustls",
@@ -4165,6 +4168,21 @@ dependencies = [
  "anyhow",
  "mothr-core",
  "parking_lot",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "mothr-update"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tracing",
 ]

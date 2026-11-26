@@ -11,6 +11,8 @@ name = "mothr_client"
 
 [dependencies]
 mothr-core.workspace = true
+mothr-update.workspace = true
+anyhow.workspace = true
 uniffi = "=0.29.4"
 serde.workspace = true
 serde_json.workspace = true
@@ -28,4 +30,3 @@ similar.workspace = true
 
 [dev-dependencies]
 mothr-remote.workspace = true
-anyhow.workspace = true

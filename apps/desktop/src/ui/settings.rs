@@ -6,6 +6,7 @@ use super::tokens;
 use super::theme::{apply_preference, card};
 use crate::remote::{RemoteController, TunnelAvailability, detect_tunnels, generate_token, qr_matrix};
 use crate::store::Store;
+use crate::update::{UpdateState, Updater};
 use gpui_kit::component::{
     ActiveTheme as _, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -22,6 +23,7 @@ use mothr_core::*;
 pub struct SettingsView {
     store: Entity<Store>,
     remote: RemoteController,
+    updater: Entity<Updater>,
     tunnels: TunnelAvailability,
     show_token: bool,
     scroll: ScrollHandle,
@@ -31,11 +33,12 @@ pub struct SettingsView {
 }
 
 impl SettingsView {
-    pub fn new(store: Entity<Store>, remote: RemoteController, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(store: Entity<Store>, remote: RemoteController, updater: Entity<Updater>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let custom = store.read(cx).hub.settings().appearance.custom_accent.unwrap_or_default();
         let accent_input = cx.new(|cx| InputState::new(window, cx).placeholder("#8B7CF6").default_value(custom));
         let subs = vec![
             cx.observe(&store, |_, _, cx| cx.notify()),
+            cx.observe(&updater, |_, _, cx| cx.notify()),
             cx.subscribe(&accent_input, |this, input, ev: &InputEvent, cx| {
                 if let InputEvent::Change = ev {
                     let text = input.read(cx).value().trim().to_string();
@@ -49,7 +52,7 @@ impl SettingsView {
                 }
             }),
         ];
-        Self { store, remote, tunnels: detect_tunnels(), show_token: false, scroll: ScrollHandle::new(), accent_input, _subs: subs }
+        Self { store, remote, updater, tunnels: detect_tunnels(), show_token: false, scroll: ScrollHandle::new(), accent_input, _subs: subs }
     }
 
     fn edit_appearance(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Appearance)) {
@@ -235,6 +238,122 @@ impl SettingsView {
             }
         })
         .detach();
+    }
+
+    /// The running version, whether a newer one exists, and installing it.
+    fn render_updates(&mut self, s: &Settings, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pal = tokens::p(cx);
+        let u = self.updater.read(cx);
+        let state = u.state().clone();
+        let can_install = u.can_install();
+        let release_url = u.release_url().map(str::to_string);
+        let checked = u.checked_at().map(relative_time);
+        let busy_chats = self.store.read(cx).sessions.iter().filter(|c| c.meta.status.is_live()).count();
+
+        let (line, tone) = match &state {
+            UpdateState::Idle => ("Checks for updates shortly after Mothr starts".to_string(), pal.text_muted),
+            UpdateState::Checking => ("Checking for updates…".into(), pal.text_muted),
+            UpdateState::UpToDate => (
+                match checked.as_deref() {
+                    Some("now") | None => "Up to date".into(),
+                    Some(t) => format!("Up to date · checked {t} ago"),
+                },
+                pal.text_muted,
+            ),
+            UpdateState::Available { version, .. } => (format!("Mothr {version} is available"), pal.text),
+            UpdateState::Installing { version } => (format!("Installing Mothr {version}…"), pal.text_muted),
+            UpdateState::Ready { version } => (format!("Mothr {version} is installed"), pal.text),
+            UpdateState::Failed(e) => (format!("Couldn't update: {e}"), pal.warning),
+        };
+
+        let updater = self.updater.clone();
+        let mut actions = h_flex().gap_2().items_center();
+        match &state {
+            UpdateState::Ready { .. } => {
+                let u2 = updater.clone();
+                actions = actions.child(
+                    Button::new("restart-update").small().primary().icon(icon("refresh-cw")).label("Restart to update").on_click(move |_, _, cx| {
+                        Updater::restart(&u2, cx);
+                    }),
+                );
+            }
+            UpdateState::Available { version, .. } if can_install => {
+                let u2 = updater.clone();
+                actions = actions.child(
+                    Button::new("install-update").small().primary().icon(icon("download")).label(format!("Install {version}")).on_click(move |_, _, cx| {
+                        u2.update(cx, |u, cx| u.install(cx));
+                    }),
+                );
+            }
+            _ => {}
+        }
+        if !matches!(state, UpdateState::Checking | UpdateState::Installing { .. }) {
+            let u2 = updater.clone();
+            actions = actions.child(Button::new("check-update").small().outline().icon(icon("refresh-cw")).label("Check now").on_click(move |_, _, cx| {
+                u2.update(cx, |u, cx| u.check(true, cx));
+            }));
+        }
+        if let Some(url) = release_url.filter(|_| matches!(state, UpdateState::Available { .. } | UpdateState::Ready { .. } | UpdateState::UpToDate)) {
+            actions = actions.child(Button::new("release-notes").small().ghost().icon(icon("external-link")).label("What’s new").on_click(move |_, _, cx| cx.open_url(&url)));
+        }
+
+        let mut body = v_flex()
+            .gap_3()
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .child(
+                        v_flex()
+                            .w(sz(220.))
+                            .child(div().text_sm().child(format!("Mothr {}", crate::update::VERSION)))
+                            .child(div().text_xs().text_color(tone).child(line)),
+                    )
+                    .child(actions),
+            );
+        if matches!(state, UpdateState::Ready { .. }) && busy_chats > 0 {
+            body = body.child(div().text_xs().text_color(pal.text_faint).child(format!(
+                "Restarting stops {busy_chats} working {}; you can resume {} afterwards.",
+                if busy_chats == 1 { "chat" } else { "chats" },
+                if busy_chats == 1 { "it" } else { "them" },
+            )));
+        }
+        if can_install {
+            body = body.child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .child(
+                        v_flex()
+                            .w(sz(220.))
+                            .child(div().text_sm().child("Install updates automatically"))
+                            .child(div().text_xs().text_color(pal.text_muted).child("In the background; they start next time")),
+                    )
+                    .child(Switch::new("auto-update").checked(s.auto_update).on_change(cx.listener(|this, v: &bool, _, cx| {
+                        let v = *v;
+                        this.update(cx, |s| s.auto_update = v);
+                        if v {
+                            this.updater.update(cx, |u, cx| u.install(cx));
+                        }
+                    }))),
+            );
+        } else {
+            body = body.child(
+                v_flex()
+                    .gap_1()
+                    .child(div().text_xs().text_color(pal.text_muted).child("This copy wasn’t installed with the Mothr installer, so it doesn’t update itself. To get updates, install Mothr with:"))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().flex_1().text_sm().font_family(cx.theme().mono_font_family.clone()).truncate().child(crate::update::INSTALL_COMMAND))
+                            .child(Button::new("copy-install").ghost().small().icon(icon("copy")).tooltip("Copy").on_click(|_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(crate::update::INSTALL_COMMAND.to_string()))
+                            })),
+                    ),
+            );
+        }
+        body
     }
 
     fn render_remote(&mut self, s: &Settings, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -612,6 +731,7 @@ impl Render for SettingsView {
             );
         }
 
+        let updates = self.render_updates(&s, cx);
         let remote = self.render_remote(&s, cx);
         let store_e = self.store.clone();
 
@@ -769,6 +889,7 @@ impl Render for SettingsView {
                     ),
                     cx,
                 ))
+                .child(group("Updates", "New versions come from Mothr’s GitHub releases.", updates, cx))
                 .child(remote),
         )
     }

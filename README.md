@@ -10,6 +10,95 @@ to 145% for high-resolution screens. The
 visual language is documented in [DESIGN.md](DESIGN.md); type is set in Geist, which is bundled
 with the app.
 
+## Install
+
+| Platform | How | Updates |
+| --- | --- | --- |
+| **Linux** (x86_64) | the install script below | automatic, in the app |
+| **Android** phone app | APK from the [latest release](https://github.com/evolvedmesh/mothr/releases/latest) | in the app |
+| macOS, Windows, iOS | not released yet; [build from source](#running) | — |
+
+Mothr runs the agents you already use. Install and sign in to at least one of
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code), GitHub Copilot CLI, Codex
+(`codex-acp`), OpenCode or Hermes; Mothr finds them on its own.
+
+### Linux
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/evolvedmesh/mothr/main/install.sh | bash
+```
+
+That installs the newest release for your user, without `sudo`:
+
+- the app in `~/.local/lib/mothr`, one folder per version
+- the `mothr` command in `~/.local/bin`
+- a Mothr entry in your application menu
+
+The download is checked against the release's `SHA256SUMS` before anything is installed. To
+read the script first:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/evolvedmesh/mothr/main/install.sh
+less install.sh
+bash install.sh
+```
+
+**Requirements.** A glibc 2.39+ distribution (Ubuntu 24.04+, Debian 13+, Fedora 40+, Arch and
+other rolling releases), a Wayland or X11 desktop, and a working Vulkan driver (Mesa or
+NVIDIA). The installer tells you which packages to add if a library is missing.
+
+**Options.** Pass them after `bash -s --`, e.g.
+`curl -fsSL …/install.sh | bash -s -- --version 0.2.0`:
+
+| Option | Does |
+| --- | --- |
+| `--version <x.y.z>` | install that release instead of the newest |
+| `--dir <path>` | put the app somewhere else (default `~/.local/lib/mothr`, or `MOTHR_INSTALL_DIR`) |
+| `--bin-dir <path>` | put the `mothr` command somewhere else (default `~/.local/bin`, or `MOTHR_BIN_DIR`) |
+| `--no-menu-entry` | don't add Mothr to the application menu |
+| `--uninstall` | remove Mothr; your chats and settings stay |
+
+**Updates.** Mothr checks for a new release shortly after it starts and every 6 hours. When
+there is one, **Update to Mothr x.y.z** appears at the bottom of the sidebar. Click it and
+Mothr downloads the new version, checks it against the release's `SHA256SUMS`, installs it
+next to the running one and restarts into it. If chats are still working, it waits and shows
+**Restart to update** instead, so nothing is cut off. Settings → Updates has the same controls,
+plus **Install updates automatically** (off by default): with it on, new versions download and
+install in the background and the next start uses them. Running the install script again also
+updates (or repairs) an install. Update checks only contact GitHub, and only send Mothr's
+version (as the user agent).
+
+**Uninstall.**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/evolvedmesh/mothr/main/install.sh | bash -s -- --uninstall
+```
+
+Chats and settings stay in `~/.config/mothr` and `~/.local/share/mothr`; delete those folders
+to remove them too.
+
+**Manual install.** Download `mothr_<version>_linux_x64.tar.gz` and `SHA256SUMS` from the
+[latest release](https://github.com/evolvedmesh/mothr/releases/latest), check it with
+`sha256sum -c --ignore-missing SHA256SUMS`, unpack it anywhere and run `./mothr`. A copy
+installed this way doesn't update itself; Settings → Updates tells you when there's a new
+version.
+
+### Android
+
+1. On the phone, open the [latest release](https://github.com/evolvedmesh/mothr/releases/latest)
+   and download `mothr_<version>_android_arm64-v8a.apk`.
+2. Open it and allow your browser to install apps when Android asks.
+3. On the desktop, turn on Settings → Remote, then scan its QR code from the app. See
+   [apps/mobile/README.md](apps/mobile/README.md#pairing) for Tailscale and other options.
+
+**Updates.** The app checks for a new release when it starts and twice a day. When there is
+one, **Update** appears above your chats: tap it and the app downloads the new version, checks
+it against the release's `SHA256SUMS` and hands it to Android's installer. The first update
+asks you to allow installs from Mothr and to confirm; on Android 12 and later, updates after
+that usually install without asking again. The chat list's settings menu has **Check for
+updates**, and **Download updates** (off by default) to download new versions in the
+background so they're ready to install.
+
 ## Features
 
 - **Agent detection.** Finds installed agents on `PATH` and in the usual install locations, and
@@ -246,7 +335,9 @@ version with `scripts/set-version.sh` (the Cargo workspace, and through it the A
 then tags and publishes a GitHub release. Versions start at `0.1.0`; `dev` publishes
 prereleases (`0.1.0-dev.1`, …). Stable releases on `main` also attach the Linux x64 desktop
 build (`mothr_<version>_linux_x64.tar.gz`) and the R8-optimized Android APK
-(`mothr_<version>_android_arm64-v8a.apk`), and `main` is merged back into `dev` afterwards.
+(`mothr_<version>_android_arm64-v8a.apk`) plus `SHA256SUMS`, which `install.sh` and both in-app
+updaters (`crates/mothr-update`) check every download against, and `main` is merged back into
+`dev` afterwards.
 Pull requests into `dev` and `main` must pass CI (`.github/workflows/ci.yml`). The workflow's
 header lists the secrets it needs.
 

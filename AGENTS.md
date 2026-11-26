@@ -51,6 +51,7 @@ workspace's `package.json` just calls cargo or gradle.
 apps/desktop        mothr-app: GPUI desktop app, binary `mothr`
   src/main.rs         startup, dev hooks (MOTHR_OPEN, MOTHR_DEV_PROMPT, …)
   src/store.rs        GPUI-side mirror of the hub: applies HubEvents, dispatches AppCommands
+  src/update.rs       in-app updates (Settings → Updates)
   src/ui/             views: workspace (shell), chat, sidebar, home, settings, changes, diff,
                       terminal, skills, projects/, design/, tokens.rs + theme.rs (design system)
 apps/mobile         Kotlin Multiplatform + Compose phone app over mothr-client (see its README)
@@ -70,8 +71,11 @@ crates/
   mothr-remote      axum server (server.rs) + embedded web client (assets/index.html),
                     auth, tunnels (Tailscale, Dev Tunnels), QR
   mothr-client      remote-API client exported to Kotlin via UniFFI: model.rs (state +
-                    entry_view), views.rs (flat uniffi records), pairing.rs
+                    entry_view), views.rs (flat uniffi records), pairing.rs, update.rs
+  mothr-update      updates: newest GitHub release, SHA256SUMS-checked downloads, the Linux
+                    install layout (install.rs); used by the desktop app and mothr-client
 mothr-design/       Mothr's own design system written in its Design DSL (system.json)
+install.sh          the public Linux installer (raw.githubusercontent.com/…/main/install.sh)
 scripts/            set-version.sh (used by semantic-release)
 .agents/skills/     task skills for agents working on this repo (.claude/skills links here)
 ```
@@ -196,4 +200,5 @@ Task recipes live in `.agents/skills/` (Claude Code sees them through `.claude/s
 - `agent-drivers`: debug or extend the Claude Code and ACP drivers, or add an agent.
 - `desktop-ui`: build or restyle GPUI views with the design tokens, and check them through a
   headless gamescope screenshot loop (`scripts/ui-shot.sh`): look, fix, look again.
-- `release`: how releases are cut and how to fix a failed release run.
+- `release`: how releases are cut, how users get updates (installer, desktop, phone), how to
+  test updates locally, and how to fix a failed release run.

@@ -142,6 +142,15 @@ class AppModel(private val scope: CoroutineScope) {
     var runInBackground: Boolean by mutableStateOf(prefs.getBoolean(KEY_BACKGROUND, true))
         private set
 
+    /** Where updating the app stands (see [Mothr.updates]). */
+    var update: UpdateStatus by mutableStateOf(UpdateStatus.Idle)
+        private set
+
+    /** Download new versions in the background, ready to install with one tap. Off, a new
+     *  version is offered above the chats and downloads when tapped. */
+    var autoUpdate: Boolean by mutableStateOf(prefs.getBoolean(KEY_AUTO_UPDATE, false))
+        private set
+
     /** How the app looks on this phone. */
     var themeMode: ThemeMode by mutableStateOf(ThemeMode.of(prefs.getString(KEY_THEME, "system")))
         private set
@@ -171,6 +180,108 @@ class AppModel(private val scope: CoroutineScope) {
 
     init {
         restore()
+        Mothr.updates?.let { updates ->
+            scope.launch {
+                delay(5_000)
+                while (isActive) {
+                    checkForUpdate(updates, manual = false)
+                    delay(12 * 60 * 60 * 1000L)
+                }
+            }
+        }
+    }
+
+    /** "Check for updates" in the settings menu. */
+    fun checkForUpdate() {
+        val updates = Mothr.updates ?: return
+        scope.launch { checkForUpdate(updates, manual = true) }
+    }
+
+    private suspend fun checkForUpdate(updates: AppUpdates, manual: Boolean) {
+        val now = update
+        if (now is UpdateStatus.Checking || now is UpdateStatus.Downloading) return
+        if (!manual && now is UpdateStatus.Ready) return
+        update = UpdateStatus.Checking
+        val offer = try {
+            updates.check()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // A failed background check keeps quiet; asking explicitly says why.
+            update = if (manual) UpdateStatus.Failed(e.message ?: "Couldn't check for updates") else now.takeUnless { it is UpdateStatus.Checking } ?: UpdateStatus.Idle
+            return
+        }
+        update = when {
+            offer == null -> UpdateStatus.UpToDate
+            updates.isDownloaded(offer) -> UpdateStatus.Ready(offer)
+            else -> UpdateStatus.Available(offer)
+        }
+        if (offer != null && autoUpdate && update is UpdateStatus.Available) downloadUpdate(updates, offer)
+    }
+
+    /** "Update" on the banner: download if needed, then hand it to the installer. */
+    fun updateNow() {
+        val updates = Mothr.updates ?: return
+        when (val u = update) {
+            is UpdateStatus.Ready -> installUpdate()
+            is UpdateStatus.Available -> scope.launch {
+                downloadUpdate(updates, u.offer)
+                installUpdate()
+            }
+            is UpdateStatus.Failed -> retryUpdate()
+            else -> {}
+        }
+    }
+
+    private fun downloadUpdate() {
+        val updates = Mothr.updates ?: return
+        val offer = (update as? UpdateStatus.Available)?.offer ?: (update as? UpdateStatus.Failed)?.offer ?: return
+        scope.launch { downloadUpdate(updates, offer) }
+    }
+
+    private suspend fun downloadUpdate(updates: AppUpdates, offer: UpdateOffer) {
+        update = UpdateStatus.Downloading(offer)
+        update = try {
+            updates.download(offer)
+            UpdateStatus.Ready(offer)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            UpdateStatus.Failed(e.message ?: "Couldn't download the update", offer)
+        }
+    }
+
+    /** "Install" on the update banner. */
+    fun installUpdate() {
+        val offer = (update as? UpdateStatus.Ready)?.offer ?: return
+        Mothr.updates?.install(offer)
+    }
+
+    /** The system installer reported back (Android). */
+    fun updateFailed(message: String?, cancelled: Boolean) {
+        val offer = (update as? UpdateStatus.Ready)?.offer ?: return
+        if (!cancelled) update = UpdateStatus.Failed(message ?: "Couldn't install the update", offer, installFailed = true)
+    }
+
+    /** "Try again" after a failed download or install. */
+    fun retryUpdate() {
+        val failed = update as? UpdateStatus.Failed ?: return
+        val offer = failed.offer ?: return checkForUpdate()
+        if (failed.installFailed) {
+            update = UpdateStatus.Ready(offer)
+            installUpdate()
+        } else {
+            update = UpdateStatus.Available(offer)
+            downloadUpdate()
+        }
+    }
+
+    fun toggleAutoUpdate(on: Boolean) {
+        autoUpdate = on
+        prefs.putBoolean(KEY_AUTO_UPDATE, on)
+        val offer = (update as? UpdateStatus.Available)?.offer
+        val updates = Mothr.updates
+        if (on && offer != null && updates != null) scope.launch { downloadUpdate(updates, offer) }
     }
 
     private fun restore() {
@@ -808,6 +919,7 @@ class AppModel(private val scope: CoroutineScope) {
         private const val KEY_THEME = "theme_mode"
         private const val KEY_ACCENT = "accent"
         private const val KEY_TONE = "tone"
+        private const val KEY_AUTO_UPDATE = "auto_update"
 
         private fun linkKey(id: String) = "computer.$id.link"
         private fun nameKey(id: String) = "computer.$id.name"
@@ -827,4 +939,16 @@ fun Throwable.friendly(): String = when (this) {
     is ClientException.Invalid -> reason
     is ClientException.Unauthorized -> "This phone isn't paired anymore. Pair again from Mothr → Settings → Remote."
     else -> message ?: toString()
+}
+
+/** Where updating the app stands. */
+sealed interface UpdateStatus {
+    data object Idle : UpdateStatus
+    data object Checking : UpdateStatus
+    data object UpToDate : UpdateStatus
+    data class Available(val offer: UpdateOffer) : UpdateStatus
+    data class Downloading(val offer: UpdateOffer) : UpdateStatus
+    /** Downloaded and verified; one tap installs it. */
+    data class Ready(val offer: UpdateOffer) : UpdateStatus
+    data class Failed(val message: String, val offer: UpdateOffer? = null, val installFailed: Boolean = false) : UpdateStatus
 }

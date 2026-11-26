@@ -1,7 +1,7 @@
 //! The window's frame, which lives in the sidebar: its header (the Mothr mark, finding a project,
 //! back/forward, collapsing it) doubles as the window's title bar, and its footer holds what
-//! runs and what's left (live activity, account limits, Mothr Remote) next to light/dark and
-//! Settings. Collapsed, the sidebar becomes a rail of the same controls.
+//! runs and what's left (live activity, a new Mothr version, account limits, Mothr Remote) next
+//! to light/dark and Settings. Collapsed, the sidebar becomes a rail of the same controls.
 
 use super::*;
 use gpui_kit::component::{Disableable as _, Selectable as _, Sizable as _};
@@ -12,6 +12,18 @@ pub(super) const RAIL_W: f32 = 52.;
 
 /// Keyboard hint for the project finder.
 const FINDER_KEYS: &str = if cfg!(target_os = "macos") { "⌘P" } else { "Ctrl+P" };
+
+/// A newer Mothr, offered in the sidebar.
+struct UpdateOffer {
+    label: String,
+    tooltip: String,
+    icon: &'static str,
+    /// Installing: shown, not clickable.
+    busy: bool,
+    failed: bool,
+    /// Clicking installs and restarts (otherwise it opens Settings → Updates).
+    can_update: bool,
+}
 
 /// Chats working, or waiting on you, right now.
 struct Activity {
@@ -64,6 +76,94 @@ impl Workspace {
         }
     }
 
+    fn update_offer(&self, cx: &App) -> Option<UpdateOffer> {
+        let u = self.updater.read(cx);
+        let can = u.can_install();
+        let busy_chats = self.store.read(cx).sessions.iter().filter(|s| s.meta.status.is_live()).count();
+        let stops = match busy_chats {
+            0 => String::new(),
+            1 => " Restarting stops the working chat; you can resume it afterwards.".into(),
+            n => format!(" Restarting stops {n} working chats; you can resume them afterwards."),
+        };
+        let offer = |label: String, tooltip: String, icon, busy, failed, can_update| Some(UpdateOffer { label, tooltip, icon, busy, failed, can_update });
+        match u.state() {
+            UpdateState::Available { version, .. } if can => offer(
+                format!("Update to Mothr {version}"),
+                format!("Downloads Mothr {version}, installs it and restarts.{stops}"),
+                "circle-arrow-down",
+                false,
+                false,
+                true,
+            ),
+            UpdateState::Available { version, .. } => offer(
+                format!("Mothr {version} is available"),
+                "This copy doesn't update itself. See Settings → Updates.".into(),
+                "circle-arrow-down",
+                false,
+                false,
+                false,
+            ),
+            UpdateState::Installing { version } => offer(format!("Updating to Mothr {version}…"), "Downloading and checking the new version".into(), "circle-arrow-down", true, false, false),
+            UpdateState::Ready { version } => offer(
+                "Restart to update".into(),
+                format!("Mothr {version} is installed; restart to use it.{stops}"),
+                "rotate-cw",
+                false,
+                false,
+                true,
+            ),
+            UpdateState::Failed(e) if u.latest_version().is_some_and(|v| v != crate::update::VERSION) => {
+                offer("Couldn't update Mothr".into(), format!("{e}\nClick for details"), "circle-alert", false, true, false)
+            }
+            _ => None,
+        }
+    }
+
+    fn click_update(&mut self, can_update: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if can_update {
+            Updater::update_now(&self.updater, cx);
+        } else {
+            self.navigate(Route::Settings, window, cx);
+        }
+    }
+
+    /// A newer Mothr, just above the footer: click to update.
+    fn render_update_row(&self, offer: UpdateOffer, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pal = tokens::p(cx);
+        let accent = if offer.failed { pal.warning } else { pal.brand };
+        let UpdateOffer { label, tooltip, icon: icon_name, busy, can_update, .. } = offer;
+        div().px_3().pb_2().child(
+            h_flex()
+                .id("sidebar-update")
+                .w_full()
+                .h(sz(30.))
+                .px(sz(10.))
+                .gap(sz(8.))
+                .items_center()
+                .rounded(sz(tokens::radius::MD))
+                .border_1()
+                .border_color(pal.border)
+                .bg(pal.surface_hover.opacity(0.5))
+                .text_size(sz(tokens::text::SM))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(pal.text)
+                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx))
+                .when(!busy, |d| {
+                    d.cursor_pointer()
+                        .hover(|d| d.bg(pal.surface_hover))
+                        .on_click(cx.listener(move |this, _, window, cx| this.click_update(can_update, window, cx)))
+                })
+                .map(|d| if busy { d.child(pulse_dot("sidebar-update-dot", accent)) } else { d.child(icon(icon_name).size(sz(15.)).text_color(accent)) })
+                .child(div().flex_1().min_w_0().truncate().child(label))
+                .when(!busy, |d| d.child(icon("chevron-right").size(sz(13.)).text_color(pal.text_faint)))
+                .with_animation(
+                    "sidebar-update-in",
+                    Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()),
+                    |d, t| d.opacity(t).mt(sz((1.0 - t) * 4.0)),
+                ),
+        )
+    }
+
     /// The open sidebar: header, the chat list, live activity and the footer.
     pub(super) fn render_sidebar_panel(&mut self, right: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
@@ -78,6 +178,7 @@ impl Workspace {
             .child(self.render_sidebar_header(right, cx))
             .child(div().flex_1().min_h_0().child(self.sidebar.clone()))
             .when(!activity.is_empty(), |d| d.child(self.render_activity_row(&activity, cx)))
+            .when_some(self.update_offer(cx), |d, offer| d.child(self.render_update_row(offer, cx)))
             .child(self.render_sidebar_footer(right, cx))
             .with_animation(
                 "sidebar-in",
@@ -311,6 +412,32 @@ impl Workspace {
                         .when_some(target, |d, id| d.on_click(cx.listener(move |this, _, window, cx| this.open_session(id, window, cx))))
                         .child(pulse_dot("rail-activity-dot", color))
                         .child(count.to_string()),
+                )
+            })
+            .when_some(self.update_offer(cx), |d, offer| {
+                let pal = tokens::p(cx);
+                let tip = format!("{}\n{}", offer.label, offer.tooltip);
+                let can_update = offer.can_update;
+                let accent = if offer.failed { pal.warning } else { pal.brand };
+                d.child(
+                    div()
+                        .id("rail-update")
+                        .size(sz(34.))
+                        .flex()
+                        .justify_center()
+                        .items_center()
+                        .rounded(sz(tokens::radius::MD))
+                        .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+                        .map(|d| {
+                            if offer.busy {
+                                d.child(pulse_dot("rail-update-dot", accent))
+                            } else {
+                                d.cursor_pointer()
+                                    .hover(|d| d.bg(pal.surface_hover))
+                                    .on_click(cx.listener(move |this, _, window, cx| this.click_update(can_update, window, cx)))
+                                    .child(icon(offer.icon).size(sz(17.)).text_color(accent))
+                            }
+                        }),
                 )
             })
             .child(

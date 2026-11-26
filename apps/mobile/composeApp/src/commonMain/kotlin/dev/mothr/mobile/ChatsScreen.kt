@@ -59,12 +59,16 @@ import dev.mothr.mobile.resources.ic_search
 import dev.mothr.mobile.resources.ic_settings_2
 import dev.mothr.mobile.resources.ic_wifi_off
 import dev.mothr.mobile.resources.ic_x
+import dev.mothr.mobile.resources.ic_circle_alert
+import dev.mothr.mobile.resources.ic_arrow_down
+import dev.mothr.mobile.resources.ic_refresh_cw
 
 @Composable
 fun ChatsScreen(model: AppModel) {
     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)) {
         Header(model)
         ConnectionBanner(model)
+        UpdateBanner(model)
         SearchField(model)
         val groups = model.groups
         if (groups.isEmpty()) {
@@ -143,6 +147,29 @@ private fun Header(model: AppModel) {
                     trailingIcon = { if (model.runInBackground) Ico(Res.drawable.ic_check, tint = pal.brand) },
                     onClick = { model.toggleBackground(!model.runInBackground) },
                 )
+                if (Mothr.updates != null) {
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("Check for updates", style = type.body)
+                                Text(updateCaption(model), style = type.caption.copy(color = pal.textFaint))
+                            }
+                        },
+                        leadingIcon = { Ico(Res.drawable.ic_refresh_cw) },
+                        onClick = { model.checkForUpdate() },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("Download updates", style = type.body)
+                                Text("In the background, ready to install", style = type.caption.copy(color = pal.textFaint))
+                            }
+                        },
+                        leadingIcon = { Ico(Res.drawable.ic_arrow_down) },
+                        trailingIcon = { if (model.autoUpdate) Ico(Res.drawable.ic_check, tint = pal.brand) },
+                        onClick = { model.toggleAutoUpdate(!model.autoUpdate) },
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("Computers", style = type.body) },
                     leadingIcon = { Ico(Res.drawable.ic_monitor) },
@@ -230,6 +257,48 @@ private fun ConnectionBanner(model: AppModel) {
         Ico(Res.drawable.ic_wifi_off, tint = pal.warning, size = 16.dp)
         Text(text, style = type.body.copy(color = pal.text), modifier = Modifier.weight(1f))
         if (conn.state == ConnectionState.UNAUTHORIZED) Btn("Pair", tone = Tone.Warning) { model.startAdding() }
+    }
+}
+
+private fun updateCaption(model: AppModel): String {
+    val version = "Mothr ${Mothr.updates?.currentVersion ?: ""}".trim()
+    return when (val u = model.update) {
+        UpdateStatus.Idle -> version
+        UpdateStatus.Checking -> "Checking…"
+        UpdateStatus.UpToDate -> "$version · up to date"
+        is UpdateStatus.Available -> "Mothr ${u.offer.version} is available"
+        is UpdateStatus.Downloading -> "Downloading Mothr ${u.offer.version}…"
+        is UpdateStatus.Ready -> "Mothr ${u.offer.version} is ready to install"
+        is UpdateStatus.Failed -> u.message
+    }
+}
+
+/** A new version: download it, install it, or why that didn't work. */
+@Composable
+private fun UpdateBanner(model: AppModel) {
+    val u = model.update
+    val text = when (u) {
+        is UpdateStatus.Available -> "Mothr ${u.offer.version} is available"
+        is UpdateStatus.Downloading -> "Downloading Mothr ${u.offer.version}…"
+        is UpdateStatus.Ready -> "Mothr ${u.offer.version} is ready"
+        is UpdateStatus.Failed -> if (u.offer != null) "Couldn't update: ${u.message}" else return
+        else -> return
+    }
+    val warn = u is UpdateStatus.Failed
+    Row(
+        Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth().clip(Radius.md)
+            .background(if (warn) pal.warning.copy(alpha = 0.12f) else pal.surfaceHover).padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Ico(if (warn) Res.drawable.ic_circle_alert else Res.drawable.ic_arrow_down, tint = if (warn) pal.warning else pal.textMuted, size = 16.dp)
+        Text(text, style = type.body.copy(color = pal.text), modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        when (u) {
+            is UpdateStatus.Available -> Btn("Update", tone = Tone.Primary) { model.updateNow() }
+            is UpdateStatus.Ready -> Btn("Install", tone = Tone.Primary) { model.updateNow() }
+            is UpdateStatus.Failed -> Btn("Try again", tone = Tone.Warning) { model.retryUpdate() }
+            else -> {}
+        }
     }
 }
 

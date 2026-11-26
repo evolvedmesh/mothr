@@ -26,3 +26,5 @@ serde_json.workspace = true
 uuid.workspace = true
 notify.workspace = true
 mothr-terminal.workspace = true
+mothr-update.workspace = true
+semver = "1"

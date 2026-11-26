@@ -16,6 +16,7 @@ use super::usage;
 use super::workspaces::{WorkspacesEvent, WorkspacesPage};
 use super::{theme, tokens};
 use crate::remote::RemoteController;
+use crate::update::{UpdateEvent, UpdateState, Updater};
 use crate::store::{Store, StoreEvent};
 use crate::{
     FocusComposer, GoBack, GoForward, NewChat, NewDesign, NextWorkspace, OpenProjectPalette, OpenProjects, OpenSettings, OpenWorkspaces, PrevWorkspace, SwitchWorkspace,
@@ -90,6 +91,7 @@ enum PickerFor {
 pub struct Workspace {
     store: Entity<Store>,
     remote: RemoteController,
+    updater: Entity<Updater>,
     sidebar: Entity<Sidebar>,
     sidebar_open: bool,
     /// The new-chat box on screen.
@@ -122,7 +124,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(hub: Arc<Hub>, remote: RemoteController, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(hub: Arc<Hub>, remote: RemoteController, updater: Entity<Updater>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let store = cx.new(|cx| Store::new(hub, cx));
         let sidebar = cx.new(|cx| Sidebar::new(store.clone(), window, cx));
         let home = cx.new(|cx| Home::new(0, store.clone(), window, cx));
@@ -178,6 +180,21 @@ impl Workspace {
         }));
         subs.push(cx.observe(&designs, |this, _, cx| this.queue_history_sync(cx)));
         subs.push(Self::watch_home(&home, window, cx));
+        subs.push(cx.subscribe_in(&updater, window, |this, updater, ev: &UpdateEvent, window, cx| match ev {
+            UpdateEvent::Ready { version, restart } => {
+                let busy = this.store.read(cx).sessions.iter().filter(|s| s.meta.status.is_live()).count();
+                if *restart && busy == 0 {
+                    Updater::restart(updater, cx);
+                    return;
+                }
+                let text = if *restart {
+                    format!("Mothr {version} is installed. Restart from the sidebar when your chats are done.")
+                } else {
+                    format!("Mothr {version} is installed. It starts next time, or restart from the sidebar.")
+                };
+                window.push_notification(Notification::info(text), cx);
+            }
+        }));
         subs.push(cx.subscribe_in(&store, window, |this, _, ev: &StoreEvent, window, cx| match ev {
             StoreEvent::Toast(level, text) => {
                 let n = match level {
@@ -218,6 +235,7 @@ impl Workspace {
         let mut this = Self {
             store,
             remote,
+            updater,
             sidebar,
             sidebar_open,
             home,
@@ -429,7 +447,8 @@ impl Workspace {
         if route == Route::Settings && self.settings_view.is_none() {
             let store = self.store.clone();
             let remote = self.remote.clone();
-            self.settings_view = Some(cx.new(|cx| SettingsView::new(store, remote, window, cx)));
+            let updater = self.updater.clone();
+            self.settings_view = Some(cx.new(|cx| SettingsView::new(store, remote, updater, window, cx)));
         }
         let active = match route {
             Route::Session(id) => Some(id),

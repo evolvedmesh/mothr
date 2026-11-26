@@ -10,6 +10,9 @@
 
 uniffi::setup_scaffolding!();
 
+mod update;
+pub use update::{AppUpdate, check_app_update, download_app_update};
+
 pub mod model;
 mod pairing;
 mod views;

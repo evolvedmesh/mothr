@@ -4,6 +4,7 @@ mod assets;
 mod remote;
 mod store;
 mod ui;
+mod update;
 
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
@@ -126,6 +127,7 @@ fn main() {
             ui::init(cx);
 
             let remote = remote::RemoteController::new(rt_handle.clone(), hub.clone());
+            let updater = cx.new(|cx| update::Updater::new(rt_handle.clone(), hub.clone(), cx));
             let hub_for_quit = hub.clone();
             cx.on_app_quit(move |_| {
                 hub_for_quit.shutdown();
@@ -150,7 +152,7 @@ fn main() {
             let hub2: Arc<mothr_hub::Hub> = hub.clone();
             gpui_kit::open_window(options, cx, move |window, cx| {
                 window.set_window_title("Mothr");
-                cx.new(|cx| ui::workspace::Workspace::new(hub2, remote, window, cx))
+                cx.new(|cx| ui::workspace::Workspace::new(hub2, remote, updater, window, cx))
             })
             .expect("failed to open the Mothr window");
             cx.activate(true);
