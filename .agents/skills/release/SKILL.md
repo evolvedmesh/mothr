@@ -21,6 +21,7 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
      -Pmothr.versionCode=<run number>`, R8-minified, signed with `ANDROID_KEYSTORE_*` secrets
      (debug key with a warning if they're missing).
 3. **publish** attaches both to the release.
+4. **sync-dev** (every push to `main`, after the release job) merges `main` into `dev`.
 
 `dev` publishes prereleases (`0.2.0-dev.1`, …) with notes but no binaries, to save storage.
 
@@ -39,9 +40,17 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
 
 - Merge PRs with a merge commit so semantic-release sees every commit. With squash merges, the
   PR title alone decides the release; make it a Conventional Commit.
-- After a release on `main`, bring `dev` up to it (`git push origin main:dev` when `dev` has
-  nothing new). Otherwise `dev` can't see the new tag and computes a prerelease of a version
-  that is already out.
+- Changes reach `dev` and `main` only through pull requests: admins' ruleset bypass is
+  "pull requests only", and the required checks (`rust`, `android`, `pr-title`) must pass or
+  be explicitly bypassed in the merge dialog. Only the release bot pushes directly.
+- Flow: feature → PR into `dev` → PR `dev` into `main`. After every push to `main`, the
+  `sync-dev` job merges `main` back into `dev` (a normal merge commit,
+  `chore: merge main into dev [skip ci]`), so `dev` sees the new release tag. Without it, `dev`
+  would compute a prerelease of a version that's already out.
+- If `sync-dev` fails with "doesn't merge cleanly", open a PR from `main` into `dev` and resolve
+  the conflict there.
+- `v*` tags are protected org-wide ("release tags" ruleset): only the release bot and org
+  admins can create, move or delete them.
 
 ## When a run fails
 

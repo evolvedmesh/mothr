@@ -171,7 +171,9 @@ runs Mothr in a headless gamescope (nothing opens on screen) and writes a PNG to
 ## Git workflow
 
 - Branches: `main` (releases) ← `dev` (integration) ← feature branches. The initial MVP lives on
-  `mvp`, branched from `dev`. Feature branches and PRs target `dev`.
+  `mvp`, branched from `dev`. Feature branches and PRs target `dev`. `dev` and `main` change only
+  through pull requests (only the release bot pushes directly); after each merge into `main`,
+  the release workflow merges `main` back into `dev`.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
   `feat(hub): …`, `fix(desktop): …`, `docs: …`, `refactor(agents): …`, `test(core): …`,
   `ci: …`, `chore: …`. The scope is the crate without the `mothr-` prefix (`desktop` and

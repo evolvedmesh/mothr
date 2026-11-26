@@ -246,7 +246,9 @@ version with `scripts/set-version.sh` (the Cargo workspace, and through it the A
 then tags and publishes a GitHub release. Versions start at `0.1.0`; `dev` publishes
 prereleases (`0.1.0-dev.1`, …). Stable releases on `main` also attach the Linux x64 desktop
 build (`mothr_<version>_linux_x64.tar.gz`) and the R8-optimized Android APK
-(`mothr_<version>_android_arm64-v8a.apk`). The workflow's header lists the secrets it needs.
+(`mothr_<version>_android_arm64-v8a.apk`), and `main` is merged back into `dev` afterwards.
+Pull requests into `dev` and `main` must pass CI (`.github/workflows/ci.yml`). The workflow's
+header lists the secrets it needs.
 
 | Shortcut (Cmd on macOS) | Action                  |
 | ----------------------- | ----------------------- |
