@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -199,41 +201,59 @@ fun ModePickerSheet(modes: List<ModeOption>, selected: String?, onDismiss: () ->
 }
 
 /**
- * Models to pick from. With a [defaultLabel] the first row is the agent's own default and picks
- * null; without one (a running chat) a model is always chosen.
+ * The model and what goes with it (reasoning, context) in one sheet. It stays open, so both can
+ * be changed in one go; the reasoning and context rows follow the model picked. With
+ * [allowDefault] each setting can go back to the agent's own default (a new chat); a running
+ * chat can only switch to a real value.
  */
 @Composable
-fun ModelPickerSheet(
+fun RunSettingsSheet(
     models: List<ModelOption>,
-    selected: String?,
+    model: String?,
+    efforts: List<ChoiceOption>,
+    effort: String?,
+    contexts: List<ChoiceOption>,
+    context: String?,
+    allowDefault: Boolean,
     onDismiss: () -> Unit,
-    defaultLabel: String? = null,
-    onPick: (String?) -> Unit,
+    onModel: (String?) -> Unit,
+    onEffort: (String?) -> Unit,
+    onContext: (String?) -> Unit,
 ) {
     Sheet(onDismiss) {
-        PickerBody("Model") {
-            if (defaultLabel != null) PickRow(defaultLabel, "Let the agent choose", selected == null, onClick = { onPick(null) })
-            models.forEach { m ->
-                PickRow(m.name, m.description, m.id == selected, onClick = { onPick(m.id) })
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp).padding(bottom = 24.dp)) {
+            Row(Modifier.fillMaxWidth().padding(start = 12.dp, top = 4.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Model & reasoning", style = type.title, modifier = Modifier.weight(1f))
+                Text("Done", style = type.label, modifier = Modifier.tap(shape = Radius.full, onClick = onDismiss).padding(horizontal = 12.dp, vertical = 8.dp))
             }
+            // The few-valued settings come first: a long model list would push them off screen.
+            if (efforts.isNotEmpty()) SettingRow("Reasoning", efforts, effort, allowDefault, onEffort)
+            if (contexts.isNotEmpty()) SettingRow("Context", contexts, context, allowDefault, onContext)
+            Text("Model", style = type.caption.copy(color = pal.textFaint), modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 4.dp))
+            if (allowDefault) PickRow("Default", "Let the agent choose", model == null, onClick = { onModel(null) })
+            models.forEach { m -> PickRow(m.name, m.description, m.id == model, onClick = { onModel(m.id) }) }
+            if (models.isEmpty()) Text("Loading models…", style = type.body.copy(color = pal.textMuted), modifier = Modifier.padding(12.dp))
         }
     }
 }
 
-/** A setting with a few values, such as reasoning effort or context size. Same rules as [ModelPickerSheet]. */
+/** One setting's values as wrapping pills, the current one filled. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ChoicePickerSheet(
-    title: String,
-    options: List<ChoiceOption>,
-    selected: String?,
-    onDismiss: () -> Unit,
-    defaultLabel: String? = null,
-    onPick: (String?) -> Unit,
-) {
-    Sheet(onDismiss) {
-        PickerBody(title) {
-            if (defaultLabel != null) PickRow(defaultLabel, null, selected == null, onClick = { onPick(null) })
-            options.forEach { o -> PickRow(o.label, null, o.id == selected, onClick = { onPick(o.id) }) }
+private fun SettingRow(title: String, options: List<ChoiceOption>, selected: String?, allowDefault: Boolean, onPick: (String?) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, style = type.caption.copy(color = pal.textFaint))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            val all = (if (allowDefault) listOf<Pair<String?, String>>(null to "Default") else emptyList()) + options.map { it.id to it.label }
+            all.forEach { (id, label) ->
+                val on = id == selected
+                Text(
+                    label,
+                    style = type.label.copy(color = if (on) pal.bg else pal.text),
+                    modifier = Modifier.clip(Radius.full).background(if (on) pal.text else pal.surfaceHover)
+                        .tap(shape = Radius.full) { onPick(id) }.padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
         }
     }
 }

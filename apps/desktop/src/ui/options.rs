@@ -15,26 +15,8 @@ use gpui_kit::*;
 use mothr_core::{AgentInstall, AgentKind, ChoiceInfo, ModelInfo, effort_label};
 use std::rc::Rc;
 
-/// What `model` can be set to. With no model chosen (the agent's default) the entry the agent
-/// calls "default" is used, else the first model that has the setting.
-pub fn settings_for(models: &[ModelInfo], model: Option<&str>) -> (Vec<String>, Vec<ChoiceInfo>) {
-    let chosen = model.and_then(|m| models.iter().find(|x| x.id == m));
-    let fallback = || models.iter().find(|x| x.id == "default");
-    let efforts = chosen
-        .or_else(fallback)
-        .filter(|m| !m.efforts.is_empty())
-        .or_else(|| if model.is_none() { models.iter().find(|m| !m.efforts.is_empty()) } else { None })
-        .map(|m| m.efforts.clone())
-        .unwrap_or_default();
-    let contexts = chosen
-        .or_else(fallback)
-        .filter(|m| !m.contexts.is_empty())
-        .or_else(|| if model.is_none() { models.iter().find(|m| !m.contexts.is_empty()) } else { None })
-        .map(|m| m.contexts.clone())
-        .unwrap_or_default();
-    (efforts, contexts)
-}
-
+/// What `model` can be set to; shared with the phone app through mothr-client.
+pub use mothr_core::model_settings as settings_for;
 
 /// Applies one [`Pick`] to whatever owns the chip.
 type OnPick = Rc<dyn Fn(Pick, &mut Window, &mut App)>;

@@ -5,8 +5,8 @@
 use crate::views::*;
 use chrono::{DateTime, Local, Utc};
 use mothr_core::{
-    AgentInstall, AgentKind, Entry, HubEvent, HubSnapshot, ModelInfo, NoticeLevel, PermissionMode, PermissionOptionKind,
-    PlanStatus, ProjectRef, permission_modes, ProviderUsage, SessionId, SessionKind, SessionState, SessionStatus, ToolKind,
+    AgentInstall, AgentKind, ChoiceInfo, Entry, HubEvent, HubSnapshot, ModelInfo, NoticeLevel, PermissionMode,
+    PermissionOptionKind, PlanStatus, ProjectRef, model_settings, permission_modes, ProviderUsage, SessionId, SessionKind, SessionState, SessionStatus, ToolKind,
     ToolStatus, UsageLevel,
 };
 use serde::Deserialize;
@@ -348,6 +348,7 @@ impl Store {
         let m = &s.meta;
         let models = if s.models.is_empty() { self.agent_models.get(&m.agent).map(Vec::as_slice).unwrap_or_default() } else { &s.models };
         let ctx = m.context;
+        let (efforts, contexts) = model_settings(models, m.model.as_deref());
         let subagents = {
             let mut subs: Vec<&SessionState> = self.sessions.values().filter(|c| c.meta.parent == Some(id)).collect();
             subs.sort_by_key(|c| c.meta.created_at);
@@ -360,6 +361,8 @@ impl Store {
             modes: permission_modes(m.agent, models, m.model.as_deref()).into_iter().map(mode_option).collect(),
             model: m.model.clone(),
             models: model_options(models),
+            efforts: effort_options(&efforts),
+            contexts: context_options(&contexts),
             effort: m.effort.clone(),
             context_limit: m.context_limit.clone(),
             commands: s
@@ -386,6 +389,11 @@ impl Store {
             can_steer: m.agent.supports_steering(),
             subagents,
         })
+    }
+
+    /// What a new chat with `agent` on `model` (None: its default) can set beside the model.
+    pub fn model_settings(&self, agent: AgentKind, model: Option<&str>) -> ModelSettings {
+        settings_view(self.agent_models.get(&agent).map(Vec::as_slice).unwrap_or_default(), model)
     }
 
     pub fn agents(&self) -> Vec<AgentView> {
@@ -649,7 +657,12 @@ fn tool_kind(k: ToolKind) -> &'static str {
 
 pub fn entry_view(e: &Entry) -> EntryView {
     match e {
-        Entry::User { id, text, at, .. } => EntryView::User { id: id.clone(), text: text.clone(), at_ms: at.timestamp_millis() },
+        Entry::User { id, text, attachments, at, .. } => EntryView::User {
+            id: id.clone(),
+            text: text.clone(),
+            images: attachments.iter().filter_map(|a| stored_image(&a.path)).collect(),
+            at_ms: at.timestamp_millis(),
+        },
         Entry::Assistant { id, text, streaming } => EntryView::Assistant { id: id.clone(), text: text.clone(), streaming: *streaming },
         Entry::Thinking { id, text, streaming } => EntryView::Thinking { id: id.clone(), text: text.clone(), streaming: *streaming },
         Entry::Tool(t) => {
@@ -749,11 +762,10 @@ pub fn entry_view(e: &Entry) -> EntryView {
             answers: q.answers.clone(),
         },
         Entry::Notice { id, level, text } => EntryView::Notice { id: id.clone(), level: level_name(*level).into(), text: text.clone() },
-        // The mobile app doesn't render pictures yet; say one was produced.
-        Entry::Image { id, path, .. } => EntryView::Notice {
+        Entry::Image { id, path, .. } => EntryView::Image {
             id: id.clone(),
-            level: level_name(NoticeLevel::Info).into(),
-            text: format!("Image: {}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+            name: stored_image(path),
+            label: format!("Image: {}", file_name(path)),
         },
         Entry::TurnEnd { id, stop_reason, duration_ms, cost_usd } => {
             let mut parts = Vec::new();
@@ -772,6 +784,40 @@ pub fn entry_view(e: &Entry) -> EntryView {
     }
 }
 
+/// The last part of a desktop path, split on either separator: the desktop may be Windows,
+/// and the phone's `Path` only knows `/`.
+fn file_name(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy();
+    s.rsplit(['/', '\\']).next().unwrap_or_default().to_string()
+}
+
+/// The name the server serves `path` by (`/api/images/{name}`): a raster file directly inside
+/// Mothr's images folder, which is where agent output and pasted screenshots are stored.
+pub fn stored_image(path: &std::path::Path) -> Option<String> {
+    let s = path.to_string_lossy();
+    let mut parts = s.rsplit(['/', '\\']);
+    let name = parts.next()?;
+    if parts.next()? != "images" || name.starts_with('.') {
+        return None;
+    }
+    let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
+    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp").then(|| name.to_string())
+}
+
+/// The settings a new chat on `model` can pick (see [`mothr_core::model_settings`]).
+pub fn settings_view(models: &[ModelInfo], model: Option<&str>) -> ModelSettings {
+    let (efforts, contexts) = model_settings(models, model);
+    ModelSettings { efforts: effort_options(&efforts), contexts: context_options(&contexts) }
+}
+
+fn effort_options(efforts: &[String]) -> Vec<ChoiceOption> {
+    efforts.iter().map(|e| ChoiceOption { id: e.clone(), label: mothr_core::effort_label(e) }).collect()
+}
+
+fn context_options(contexts: &[ChoiceInfo]) -> Vec<ChoiceOption> {
+    contexts.iter().map(|c| ChoiceOption { id: c.id.clone(), label: c.label.clone() }).collect()
+}
+
 fn model_options(models: &[ModelInfo]) -> Vec<ModelOption> {
     models
         .iter()
@@ -779,8 +825,8 @@ fn model_options(models: &[ModelInfo]) -> Vec<ModelOption> {
             id: m.id.clone(),
             name: m.name.clone(),
             description: m.description.clone(),
-            efforts: m.efforts.iter().map(|e| ChoiceOption { id: e.clone(), label: mothr_core::effort_label(e) }).collect(),
-            contexts: m.contexts.iter().map(|c| ChoiceOption { id: c.id.clone(), label: c.label.clone() }).collect(),
+            efforts: effort_options(&m.efforts),
+            contexts: context_options(&m.contexts),
             unsupported_modes: m.unsupported_modes.iter().map(|p| p.id().to_string()).collect(),
         })
         .collect()
@@ -790,6 +836,19 @@ fn model_options(models: &[ModelInfo]) -> Vec<ModelOption> {
 mod tests {
     use super::*;
     use mothr_core::{SessionEvent, SessionMeta};
+
+    #[test]
+    fn images_are_named_by_their_stored_file() {
+        use std::path::Path;
+        assert_eq!(stored_image(Path::new("/home/u/.local/share/mothr/data/images/ab12.png")).as_deref(), Some("ab12.png"));
+        // A Windows desktop sends backslashes.
+        assert_eq!(stored_image(Path::new(r"C:\Users\u\AppData\mothr\images\shot.JPG")).as_deref(), Some("shot.JPG"));
+        assert_eq!(stored_image(Path::new("/home/u/project/out.png")), None);
+        assert_eq!(stored_image(Path::new("/x/images/notes.txt")), None);
+        assert_eq!(stored_image(Path::new("/x/images/.hidden.png")), None);
+        let e = entry_view(&Entry::Image { id: "i".into(), path: "/home/u/project/plot.png".into(), mime: None });
+        assert_eq!(e, EntryView::Image { id: "i".into(), name: None, label: "Image: plot.png".into() });
+    }
 
     fn session(title: &str, status: SessionStatus) -> SessionState {
         let mut m = SessionMeta::new(AgentKind::ClaudeCode, SessionKind::Chat, "/home/u/proj".into(), PermissionMode::Ask);

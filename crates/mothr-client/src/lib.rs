@@ -214,6 +214,13 @@ impl MothrClient {
         self.shared.store.lock().agents()
     }
 
+    /// The reasoning levels and context sizes a new chat with `agent_id` on `model` (None: the
+    /// agent's default) can pick. A running chat has them on [`ChatDetail`].
+    pub fn model_settings(&self, agent_id: String, model: Option<String>) -> ModelSettings {
+        let Some(agent) = AgentKind::from_id(&agent_id) else { return ModelSettings { efforts: vec![], contexts: vec![] } };
+        self.shared.store.lock().model_settings(agent, model.as_deref())
+    }
+
     /// Pinned then recent projects.
     pub fn projects(&self) -> Vec<ProjectView> {
         self.shared.store.lock().projects()
@@ -275,6 +282,21 @@ impl MothrClient {
     pub fn read_file(&self, project_path: String, path: String) -> Result<FileView, ClientError> {
         let file: mothr_core::FileContent = self.get("/api/projects/file", &[("project", &project_path), ("path", &path)])?;
         Ok(model::file_view(file))
+    }
+
+    /// The bytes of a picture in a chat, by the name an [`EntryView`] gives it (PNG, JPEG, GIF
+    /// or WebP).
+    pub fn image(&self, name: String) -> Result<Vec<u8>, ClientError> {
+        let mut url = reqwest::Url::parse(&self.pairing.base).map_err(|e| invalid(e.to_string()))?;
+        url.path_segments_mut().map_err(|_| invalid("Bad server address"))?.pop_if_empty().extend(["api", "images", &name]);
+        self.rt.block_on(async {
+            let res = self.http.get(url).bearer_auth(&self.pairing.token).send().await.map_err(net)?;
+            match res.status() {
+                reqwest::StatusCode::UNAUTHORIZED => Err(ClientError::Unauthorized),
+                reqwest::StatusCode::NOT_FOUND => Err(ClientError::Rejected { reason: "That image is no longer on the computer".into() }),
+                _ => Ok(res.error_for_status().map_err(net)?.bytes().await.map_err(net)?.to_vec()),
+            }
+        })
     }
 
     /// Fuzzy-find files of a project by name or path.

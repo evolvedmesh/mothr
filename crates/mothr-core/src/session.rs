@@ -116,6 +116,19 @@ pub fn permission_modes(agent: AgentKind, models: &[ModelInfo], model: Option<&s
     agent.supported_modes().iter().copied().filter(|m| !unsupported.contains(m)).collect()
 }
 
+/// The reasoning levels and context sizes a chat on `model` (`None`: the agent's default) can
+/// pick from. A model missing from the list (an id the agent reported but didn't offer) counts
+/// as the agent's "default" entry; with no model chosen, the first model that has the setting.
+pub fn model_settings(models: &[ModelInfo], model: Option<&str>) -> (Vec<String>, Vec<ChoiceInfo>) {
+    let chosen = model.and_then(|m| models.iter().find(|x| x.id == m)).or_else(|| models.iter().find(|x| x.id == "default"));
+    let pick = |has: fn(&ModelInfo) -> bool| {
+        chosen.filter(|m| has(m)).or_else(|| if model.is_none() { models.iter().find(|m| has(m)) } else { None })
+    };
+    let efforts = pick(|m| !m.efforts.is_empty()).map(|m| m.efforts.clone()).unwrap_or_default();
+    let contexts = pick(|m| !m.contexts.is_empty()).map(|m| m.contexts.clone()).unwrap_or_default();
+    (efforts, contexts)
+}
+
 /// "xhigh" → "Extra high", for menus.
 pub fn effort_label(effort: &str) -> String {
     match effort {
@@ -895,6 +908,26 @@ pub enum SessionCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_fall_back_to_the_default_model() {
+        let mut default = ModelInfo::new("default", "Default", None);
+        default.efforts = vec!["low".into(), "high".into()];
+        let mut opus = ModelInfo::new("opus", "Opus", None);
+        opus.efforts = vec!["low".into(), "high".into(), "max".into()];
+        opus.contexts = vec![ChoiceInfo::new("1m", "1M")];
+        let haiku = ModelInfo::new("haiku", "Haiku", None);
+        let models = vec![default, opus, haiku];
+        // A listed model uses its own settings, even when it has none.
+        assert_eq!(model_settings(&models, Some("opus")), (vec!["low".into(), "high".into(), "max".into()], vec![ChoiceInfo::new("1m", "1M")]));
+        assert_eq!(model_settings(&models, Some("haiku")), (vec![], vec![]));
+        // An id the agent reported but didn't list (a full model name) is its default entry.
+        assert_eq!(model_settings(&models, Some("claude-opus-5-5")).0, vec!["low".to_string(), "high".into()]);
+        // No model: the default entry, else the first model that has the setting.
+        let (efforts, contexts) = model_settings(&models, None);
+        assert_eq!(efforts, vec!["low".to_string(), "high".into()]);
+        assert_eq!(contexts, vec![ChoiceInfo::new("1m", "1M")]);
+    }
 
     #[test]
     fn modes_follow_the_chosen_model() {

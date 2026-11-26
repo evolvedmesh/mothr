@@ -87,6 +87,12 @@ fn wait_until(client: &MothrClient, what: &str, mut ok: impl FnMut(&MothrClient)
 
 #[test]
 fn pairs_streams_and_sends_commands() {
+    // Images are served from the profile's images folder; keep it throwaway.
+    let home = std::env::temp_dir().join(format!("mothr-client-test-{}", uuid::Uuid::new_v4()));
+    // SAFETY: the only test in this binary, set before any thread reads the environment.
+    unsafe { std::env::set_var("MOTHR_HOME", &home) };
+    std::fs::create_dir_all(images_dir()).unwrap();
+    std::fs::write(images_dir().join("shot.png"), b"\x89PNG fake").unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let hub = FakeHub::new();
     let token = generate_token();
@@ -111,6 +117,15 @@ fn pairs_streams_and_sends_commands() {
     wait_until(&client, "streamed text", |c| {
         c.chat(id.to_string()).is_some_and(|d| matches!(d.entries.last(), Some(EntryView::Assistant { text, .. }) if text == "Hi there"))
     });
+
+    // A picture the agent produced: the phone fetches it by name.
+    let path = images_dir().join("shot.png");
+    let _ = hub.tx.send(HubEvent::Session { id, event: SessionEvent::Upsert { entry: Entry::Image { id: "img".into(), path, mime: Some("image/png".into()) } } });
+    wait_until(&client, "image entry", |c| {
+        c.chat(id.to_string()).is_some_and(|d| matches!(d.entries.last(), Some(EntryView::Image { name: Some(n), .. }) if n == "shot.png"))
+    });
+    assert_eq!(client.image("shot.png".into()).unwrap(), b"\x89PNG fake");
+    assert!(matches!(client.image("gone.png".into()), Err(ClientError::Rejected { .. })));
 
     // Commands reach the hub as AppCommands.
     client.send(id.to_string(), "hello".into(), Delivery::Steer).unwrap();
@@ -157,4 +172,5 @@ fn pairs_streams_and_sends_commands() {
 
     drop(client);
     rt.block_on(server.stop());
+    let _ = std::fs::remove_dir_all(home);
 }

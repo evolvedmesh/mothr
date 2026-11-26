@@ -42,21 +42,20 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.mothr.client.ProjectView
 import dev.mothr.mobile.resources.Res
 import dev.mothr.mobile.resources.ic_arrow_up
-import dev.mothr.mobile.resources.ic_brain
 import dev.mothr.mobile.resources.ic_folder
 import dev.mothr.mobile.resources.ic_globe
-import dev.mothr.mobile.resources.ic_layers
 import dev.mothr.mobile.resources.ic_shield_alert
 import dev.mothr.mobile.resources.ic_sparkles
 import dev.mothr.mobile.resources.ic_x
 import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.DrawableResource
 
-private enum class Picker { Agent, Project, Mode, Model, Effort, Context }
+private enum class Picker { Agent, Project, Mode, Model }
 
 /** A project choice; a null [project] means General, not tied to any project. */
 private data class ProjectPick(val project: ProjectView?)
@@ -98,8 +97,12 @@ fun NewChatScreen(model: AppModel) {
     var contextChoice by remember { mutableStateOf<Choice?>(null) }
     val agentKey = agent?.agent?.id
     val modelOption = agent?.models?.firstOrNull { it.id == (modelChoice ?: Choice(agentKey?.let(model::lastModel))).id }
-    val effort = modelOption?.efforts?.firstOrNull { it.id == (effortChoice ?: Choice(agentKey?.let(model::lastEffort))).id }
-    val context = modelOption?.contexts?.firstOrNull { it.id == (contextChoice ?: Choice(agentKey?.let(model::lastContext))).id }
+    // What the model takes beside it; Default uses the agent's own default entry.
+    val settings = remember(agentKey, modelOption?.id, agent?.models) {
+        agentKey?.let { model.modelSettings(it, modelOption?.id) }
+    }
+    val effort = settings?.efforts?.firstOrNull { it.id == (effortChoice ?: Choice(agentKey?.let(model::lastEffort))).id }
+    val context = settings?.contexts?.firstOrNull { it.id == (contextChoice ?: Choice(agentKey?.let(model::lastContext))).id }
 
     // The mode list depends on the agent and the model (Default: the agent's "default" entry);
     // fall back to its closest supported mode.
@@ -227,18 +230,9 @@ fun NewChatScreen(model: AppModel) {
                     ChipIcon(if (project == null) Res.drawable.ic_globe else Res.drawable.ic_folder, pal.textMuted)
                 }
                 if (agent != null) {
-                    Chip(modelOption?.name ?: "Model", onClick = { open(Picker.Model) }) {
+                    val label = listOfNotNull(modelOption?.name ?: "Default model", effort?.label, context?.label).joinToString(" · ")
+                    Chip(label, maxWidth = 190.dp, onClick = { open(Picker.Model) }) {
                         ChipIcon(Res.drawable.ic_sparkles, pal.textMuted)
-                    }
-                    if (modelOption?.efforts?.isNotEmpty() == true) {
-                        Chip(effort?.label ?: "Reasoning", onClick = { open(Picker.Effort) }) {
-                            ChipIcon(Res.drawable.ic_brain, pal.textMuted)
-                        }
-                    }
-                    if (modelOption?.contexts?.isNotEmpty() == true) {
-                        Chip(context?.label ?: "Context", onClick = { open(Picker.Context) }) {
-                            ChipIcon(Res.drawable.ic_layers, pal.textMuted)
-                        }
                     }
                 }
                 mode?.let { m ->
@@ -281,18 +275,19 @@ fun NewChatScreen(model: AppModel) {
             modeId = it
             picker = null
         }
-        Picker.Model -> ModelPickerSheet(agent?.models.orEmpty(), modelOption?.id, onDismiss = { picker = null }, defaultLabel = "Default") {
-            modelChoice = Choice(it)
-            picker = null
-        }
-        Picker.Effort -> ChoicePickerSheet("Reasoning", modelOption?.efforts.orEmpty(), effort?.id, onDismiss = { picker = null }, defaultLabel = "Default") {
-            effortChoice = Choice(it)
-            picker = null
-        }
-        Picker.Context -> ChoicePickerSheet("Context", modelOption?.contexts.orEmpty(), context?.id, onDismiss = { picker = null }, defaultLabel = "Default") {
-            contextChoice = Choice(it)
-            picker = null
-        }
+        Picker.Model -> RunSettingsSheet(
+            models = agent?.models.orEmpty(),
+            model = modelOption?.id,
+            efforts = settings?.efforts.orEmpty(),
+            effort = effort?.id,
+            contexts = settings?.contexts.orEmpty(),
+            context = context?.id,
+            allowDefault = true,
+            onDismiss = { picker = null },
+            onModel = { modelChoice = Choice(it) },
+            onEffort = { effortChoice = Choice(it) },
+            onContext = { contextChoice = Choice(it) },
+        )
         null -> {}
     }
 }
@@ -304,7 +299,7 @@ private fun ChipIcon(icon: DrawableResource, tint: Color) {
 
 /** A filled pill, so it reads as a button and as cut off when the row scrolls past the edge. */
 @Composable
-private fun Chip(label: String, color: Color = pal.text, onClick: () -> Unit, leading: @Composable () -> Unit) {
+private fun Chip(label: String, color: Color = pal.text, maxWidth: Dp = 120.dp, onClick: () -> Unit, leading: @Composable () -> Unit) {
     Row(
         Modifier.clip(Radius.full).background(pal.surfaceHover).tap(shape = Radius.full, onClick = onClick)
             .padding(start = 7.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
@@ -312,6 +307,6 @@ private fun Chip(label: String, color: Color = pal.text, onClick: () -> Unit, le
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         leading()
-        Text(label, style = type.label.copy(color = color), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp))
+        Text(label, style = type.label.copy(color = color), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = maxWidth))
     }
 }
