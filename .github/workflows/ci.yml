@@ -27,6 +27,12 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
+      # Cargo.toml optimizes the dev profile, every dependency at opt-level 3, so the app runs
+      # well from debug builds. Clippy still fully compiles build scripts and proc-macros
+      # (serde_derive, syn, GPUI's macros…), and at opt-level 3 that triples the run (measured
+      # 8m14s vs 2m54s). Linting doesn't need any of it.
+      CARGO_PROFILE_DEV_OPT_LEVEL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -48,4 +54,4 @@ jobs:
           key: clippy
 
       - name: clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked --config 'profile.dev.package."*".opt-level=0' -- -D warnings
