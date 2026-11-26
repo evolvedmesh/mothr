@@ -19,7 +19,8 @@
 #   -h, --help          show this help
 #
 # Everything is wrapped in main(), so a download cut short runs nothing. It sticks to what
-# macOS's bash 3.2 and BSD tools understand.
+# macOS's bash 3.2 and BSD tools understand. Brace a variable that touches non-ASCII text
+# ("${version}…"): in the C locale bash 3.2 reads the UTF-8 bytes as part of the name.
 
 set -euo pipefail
 
@@ -73,7 +74,7 @@ main() {
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" EXIT
 
-    say "Downloading Mothr $version…"
+    say "Downloading Mothr ${version}…"
     fetch "$releases/download/v$version/$name.tar.gz" "$tmp/$name.tar.gz" \
         || die "couldn't download Mothr $version for $(platform_label "$platform"). Is it a released version? See $releases"
     fetch "$releases/download/v$version/SHA256SUMS" "$tmp/SHA256SUMS" \
@@ -202,7 +203,7 @@ latest_version() {
 # Layout::Versions). Sets PREVIOUS to the version it replaced.
 install_linux() {
     local tmp="$1" name="$2" version="$3" root="$4" bin_dir="$5" apps_dir="$6" menu="$7"
-    say "Installing to $root…"
+    say "Installing to ${root}…"
     mkdir -p "$root/versions" "$bin_dir"
     local staging="$root/versions/.staging-$version"
     rm -rf "$staging"
@@ -244,7 +245,7 @@ install_linux() {
 install_macos() {
     local tmp="$1" name="$2" root="$3" bin_dir="$4"
     local dest="$root/Mothr.app"
-    say "Installing to $dest…"
+    say "Installing to ${dest}…"
     mkdir -p "$tmp/unpacked"
     tar -xzf "$tmp/$name.tar.gz" -C "$tmp/unpacked"
     local new="$tmp/unpacked/$name/Mothr.app"

@@ -88,7 +88,9 @@ Users get releases these ways, all from the same GitHub release and all checked 
   `mothr_<v>_macos_<arch>.tar.gz`. It runs under macOS's bash 3.2 with BSD tools: no arrays
   under `set -u`, no `mv -T`/`sed -i`/`readlink -f` outside the Linux-only function, and
   `shasum -a 256` where there's no `sha256sum`. Don't run its functions in `$(…)`: bash
-  drops `set -e` there.
+  drops `set -e` there. Write `${version}…`, not `$version…`: macOS's bash 3.2 in the C
+  locale takes the `…` bytes as part of the name (`version�: unbound variable`); the
+  `bash:3.2` Docker image doesn't show this, only a Mac does.
 - The desktop updater (`apps/desktop/src/update.rs` on `crates/mothr-update`): checks 20 s
   after start and every 6 h, and offers a newer release in the sidebar (`ui/workspace/frame.rs`)
   and Settings → Updates. Clicking stages the new version next to the running one, swaps
