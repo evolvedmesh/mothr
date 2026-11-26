@@ -270,10 +270,12 @@ install_macos() {
 
     # curl doesn't quarantine what it downloads, but a copy that came through a browser may be.
     command -v xattr >/dev/null && xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
-    local lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-    [ -x "$lsregister" ] && "$lsregister" -f "$dest" 2>/dev/null || true
+    # Register it with Launchpad and have Spotlight index it now, so searching "Mothr" finds it
+    # straight away (Spotlight usually notices on its own within seconds, but not on a busy Mac).
+    lsregister -f "$dest"
+    command -v mdimport >/dev/null && mdimport "$dest" >/dev/null 2>&1 || true
 
-    ln -sfn "$dest/Contents/MacOS/mothr" "$bin_dir/mothr"
+    write_macos_command "$dest/Contents/MacOS/mothr" "$bin_dir/mothr"
 
     if [ "$dest" != /Applications/Mothr.app ] && [ -d /Applications/Mothr.app ] && is_mothr_app /Applications/Mothr.app; then
         say "There's another Mothr in /Applications. Delete it so Spotlight and Launchpad open this one."
@@ -283,6 +285,44 @@ install_macos() {
 
 is_mothr_app() {
     grep -q '<string>dev.mothr.Mothr</string>' "$1/Contents/Info.plist" 2>/dev/null
+}
+
+# LaunchServices' tool (Launchpad, Spotlight's app results, "Open With"); quiet, and fine without.
+lsregister() {
+    local tool=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+    [ -x "$tool" ] || return 0
+    "$tool" "$@" >/dev/null 2>&1 || true
+}
+
+# The macOS `mothr` command at <path> for the bundle's binary <binary>: a script that runs the
+# binary by its own path. Not a symlink: started through one, the process isn't Mothr.app to
+# macOS (no bundle id), so the Dock and the menu bar call it "mothr" and its settings go astray.
+write_macos_command() {
+    local binary="$1" path="$2"
+    {
+        printf '#!/bin/sh\n'
+        printf '# Starts Mothr.app (written by install.sh; run it again to repair this).\n'
+        # shellcheck disable=SC2016
+        printf 'exec %s "$@"\n' "$(sh_quote "$binary")"
+    } > "$path.new"
+    chmod 755 "$path.new"
+    # Renamed into place, so an old symlink into the bundle is replaced, not written through.
+    mv -f "$path.new" "$path"
+}
+
+# Whether <command> is the `mothr` command for <binary>: that script, or the symlink older
+# versions of this installer made.
+is_macos_command() {
+    if [ -L "$1" ]; then
+        [ "$(readlink "$1")" = "$2" ]
+    else
+        [ -f "$1" ] && grep -qxF "exec $(sh_quote "$2") \"\$@\"" "$1" 2>/dev/null
+    fi
+}
+
+# <text> in single quotes for sh.
+sh_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
 
 # CFBundleShortVersionString from an XML Info.plist.
@@ -337,11 +377,13 @@ remove_linux() {
 remove_macos() {
     local root="$1" bin_dir="$2"
     local app="$root/Mothr.app"
-    if [ -L "$bin_dir/mothr" ] && [ "$(readlink "$bin_dir/mothr")" = "$app/Contents/MacOS/mothr" ]; then
+    if is_macos_command "$bin_dir/mothr" "$app/Contents/MacOS/mothr"; then
         rm -f "$bin_dir/mothr"
     fi
     if [ -e "$app" ]; then
         is_mothr_app "$app" || die "$app isn't Mothr; not removing it."
+        # Out of Launchpad and Spotlight's app results first; once it's gone, it can't be.
+        lsregister -u "$app"
         rm -rf "${app:?}"
     fi
     rm -rf "${root:?}/.mothr-update"

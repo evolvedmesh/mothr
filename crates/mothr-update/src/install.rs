@@ -93,7 +93,8 @@ impl Install {
             // Not canonicalized: that gives a `\\?\` path, which child processes can't start in.
             Self::in_place_for_binary(&exe)
         } else if cfg!(target_os = "macos") {
-            // Resolved, so `~/.local/bin/mothr` (a symlink into the bundle) finds the bundle.
+            // Resolved, so a symlink into the bundle (what install.sh made `~/.local/bin/mothr`
+            // before it became a script) finds the bundle.
             Self::bundle_for_binary(&exe.canonicalize().ok()?)
         } else {
             Self::for_binary(&exe.canonicalize().ok()?)
