@@ -112,7 +112,9 @@ async fn fetch(lib: &Library, source: &SkillSource, stage: &Path) -> anyhow::Res
         }
         SkillSource::Git { url, path } => {
             let checkout = stage.join("repo");
-            let out = tokio::process::Command::new("git")
+            let mut git = tokio::process::Command::new("git");
+            mothr_core::process::no_window(git.as_std_mut());
+            let out = git
                 .args(["clone", "--depth", "1", "--quiet", "--", url])
                 .arg(&checkout)
                 .env("GIT_TERMINAL_PROMPT", "0")

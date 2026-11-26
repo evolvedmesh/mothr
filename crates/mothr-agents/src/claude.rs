@@ -101,6 +101,7 @@ struct Driver {
 pub async fn run(program: PathBuf, spec: SessionSpec, mut commands: mpsc::UnboundedReceiver<SessionCommand>, out: OutputTx) {
     let em = Emitter::new(spec.id, out);
     let mut cmd = Command::new(&program);
+    mothr_core::process::no_window(cmd.as_std_mut());
     cmd.args([
         "-p",
         "--input-format",

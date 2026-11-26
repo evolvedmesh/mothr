@@ -1062,7 +1062,9 @@ impl Hub {
         let (Some(program), Some(hub)) = (program, self.me.upgrade()) else { return };
         self.rt.spawn(async move {
             let excerpt: String = first_message.chars().take(1200).collect();
-            let run = tokio::process::Command::new(&program)
+            let mut cmd = tokio::process::Command::new(&program);
+            mothr_core::process::no_window(cmd.as_std_mut());
+            let run = cmd
                 .args([
                     "-p",
                     &excerpt,

@@ -204,7 +204,7 @@ fn version_of(binary: &Path) -> Option<String> {
 }
 
 fn run_with_timeout(program: &Path, args: &[&str], timeout: Duration) -> Option<String> {
-    let mut child = Command::new(program)
+    let mut child = mothr_core::process::no_window(&mut Command::new(program))
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

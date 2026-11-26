@@ -109,7 +109,9 @@ async fn lookup_token() -> Option<String> {
             return Some(t.trim().to_string());
         }
     }
-    let out = tokio::process::Command::new("gh").args(["auth", "token"]).stdin(std::process::Stdio::null()).output().await.ok()?;
+    let mut gh = tokio::process::Command::new("gh");
+    mothr_core::process::no_window(gh.as_std_mut());
+    let out = gh.args(["auth", "token"]).stdin(std::process::Stdio::null()).output().await.ok()?;
     let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !t.is_empty()).then_some(t)
 }

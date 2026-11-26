@@ -5,6 +5,7 @@ pub mod config;
 pub mod diff;
 pub mod files;
 pub mod hub;
+pub mod process;
 pub mod session;
 pub mod skill;
 pub mod terminal;

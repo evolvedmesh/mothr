@@ -6,8 +6,8 @@ over its machine protocol and never shows the agent's terminal UI. A companion A
 web client let you follow and answer your chats from your phone.
 
 Built in Rust with [GPUI](https://gpui.rs) via [`gpui-kit`](https://gpui-kit.com). Mothr is
-released for Linux (x86_64, X11 and Wayland) and Android. GPUI also runs on macOS and Windows,
-but Mothr isn't built or tested there yet. Dark and light themes follow your system live, and
+released for Linux (x86_64, X11 and Wayland), Windows (x64, 10 version 1903 and later) and
+Android. GPUI also runs on macOS, but Mothr isn't built or tested there yet. Dark and light themes follow your system live, and
 the interface size can be set from 100% to 145% for high-resolution screens. The visual
 language is documented in [DESIGN.md](DESIGN.md); type is set in Geist, which is bundled with
 the app.
@@ -17,8 +17,9 @@ the app.
 | Platform | How | Updates |
 | --- | --- | --- |
 | **Linux** (x86_64) | the install script below | automatic, in the app |
+| **Windows** (x64) | installer from the [latest release](https://github.com/evolvedmesh/mothr/releases/latest) | automatic, in the app |
 | **Android** phone app | APK from the [latest release](https://github.com/evolvedmesh/mothr/releases/latest) | in the app |
-| macOS, Windows, iOS | not released yet; see [Building from source](#building-from-source) | — |
+| macOS, iOS | not released yet; see [Building from source](#building-from-source) | — |
 
 Mothr runs the agents you already use. Install and sign in to at least one of
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code), GitHub Copilot CLI, Codex
@@ -84,6 +85,28 @@ to remove them too.
 `sha256sum -c --ignore-missing SHA256SUMS`, unpack it anywhere and run `./mothr`. A copy
 installed this way doesn't update itself; Settings → Updates tells you when there's a new
 version.
+
+### Windows
+
+Download `mothr_<version>_windows_x64_setup.exe` from the
+[latest release](https://github.com/evolvedmesh/mothr/releases/latest) and run it. It installs
+for your account only (no administrator rights) into `%LOCALAPPDATA%\Programs\Mothr` and adds
+Mothr to the Start menu. The installer isn't code-signed yet, so SmartScreen may ask you to
+confirm it (**More info → Run anyway**). To check the download first, compare
+`Get-FileHash mothr_<version>_windows_x64_setup.exe` in PowerShell with its line in
+`SHA256SUMS`. Windows 10 version 1903 or later, or Windows 11, is needed.
+
+**Updates** work as on Linux: Mothr checks shortly after it starts and every 6 hours, and
+**Update to Mothr x.y.z** in the sidebar downloads the new version, checks it against
+`SHA256SUMS`, puts it in place and restarts (Settings → Updates has the same controls and
+**Install updates automatically**). Running a newer installer also updates.
+
+**Uninstall** from Settings → Apps → Installed apps → Mothr. Chats and settings stay in
+`%APPDATA%\mothr`; delete that folder to remove them too.
+
+**Portable.** `mothr_<version>_windows_x64.zip` holds the same app: unzip it anywhere and run
+`mothr.exe`. A copy used this way doesn't update itself; Settings → Updates says when there's a
+new version and links its installer.
 
 ### Android
 
@@ -354,7 +377,17 @@ sudo apt install clang pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayla
   libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libvulkan-dev
 ```
 
-macOS and Windows builds aren't set up or tested yet.
+Windows builds natively with the stable MSVC toolchain (Visual Studio Build Tools with the
+Windows SDK, whose `fxc.exe` compiles GPUI's shaders in release builds):
+`cargo build --release -p mothr-app`. `.cargo/config.toml` links the C runtime statically.
+From Linux, `cargo xwin build --target x86_64-pc-windows-msvc -p mothr-app`
+([cargo-xwin](https://github.com/rust-cross/cargo-xwin)) cross-compiles a debug build, which is
+enough to type-check and to try under Wine; release builds need a Windows host for the shaders.
+The installer is built from `apps/desktop/windows/mothr.iss` with Inno Setup:
+`apps/desktop/windows/build-installer.ps1 -Version <x.y.z> -Source <release folder>`.
+The `release` agent skill has the Wine recipe and its gaps.
+
+macOS builds aren't set up or tested yet.
 
 ### Releases
 
@@ -363,7 +396,9 @@ Every push to `main` or `dev` runs `.github/workflows/release.yml`. semantic-rel
 version with `scripts/set-version.sh` (the Cargo workspace, and through it the Android app),
 then tags and publishes a GitHub release. Versions start at `0.1.0`; `dev` publishes
 prereleases (`0.1.0-dev.1`, …). Stable releases on `main` also attach the Linux x64 desktop
-build (`mothr_<version>_linux_x64.tar.gz`) and the R8-optimized Android APK
+build (`mothr_<version>_linux_x64.tar.gz`), the Windows x64 build
+(`mothr_<version>_windows_x64_setup.exe`, and the same app as a portable `.zip`) and the
+R8-optimized Android APK
 (`mothr_<version>_android_arm64-v8a.apk`) plus `SHA256SUMS`, which `install.sh` and both in-app
 updaters (`crates/mothr-update`) check every download against, and `main` is merged back into
 `dev` afterwards. Pull requests into `dev` and `main` must pass a lint-only CI (clippy, PR title,
@@ -408,6 +443,9 @@ The release workflow's header lists the secrets it needs.
   - **Hermes** connects, creates sessions, and lists its models and modes. A full turn wasn't
     verified because its configured model endpoint wasn't responding on the development machine.
   - **Codex and OpenCode** weren't installed there, so they're untested against real binaries.
+- Windows: the app, its updater and the installer's install layout were tried under Wine on
+  Linux, not on real Windows, and no agent has been run on Windows yet. The installer and the
+  app aren't code-signed.
 - Edit & resend and Steer need Claude Code. Other agents can queue messages or interrupt and
   send, but they can't rewind or take input mid-turn.
 - Subagent tracking needs Claude Code. The ACP agents don't expose subagents in a form Mothr

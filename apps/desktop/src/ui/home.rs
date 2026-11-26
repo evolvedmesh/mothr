@@ -248,7 +248,7 @@ impl Home {
     fn terminal_dir(&self) -> PathBuf {
         match &self.project {
             Some(p) if !self.general => p.path.clone(),
-            _ => std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+            _ => mothr_core::config::home_dir(),
         }
     }
 
