@@ -334,6 +334,7 @@ impl HubApi for DemoHub {
                         },
                     ),
                     SessionCommand::SetMode { mode } => this.emit(id, SessionEvent::Mode { mode }),
+                    SessionCommand::SetModel { model } => this.emit(id, SessionEvent::Model { model }),
                     SessionCommand::RespondPermission {
                         entry_id,
                         option_id,
@@ -522,6 +523,10 @@ fn demo_sessions() -> Vec<SessionState> {
             }
         })
         .collect();
+    // The small model can't run auto mode, so the mode picker drops it there.
+    let mut small = ModelInfo::new("demo-small", "Demo small", Some("Fast, no auto mode".into()));
+    small.unsupported_modes = vec![PermissionMode::Auto];
+    a.models = vec![ModelInfo::new("demo-model", "Demo model", None), small];
     a.entries = vec![
         Entry::User { id: "u1".into(), text: "Add a remote-control server.\nUse axum.".into(), attachments: vec![], at: Utc::now() , agent_ref: None, prev_ref: None},
         Entry::Thinking { id: "th".into(), text: "The user wants **axum**. Let me check the workspace.".into(), streaming: false },

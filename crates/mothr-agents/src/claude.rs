@@ -508,6 +508,10 @@ impl Driver {
                                 if supports_effort {
                                     info.contexts = vec![ChoiceInfo::new("1m", "1M"), ChoiceInfo::new("200k", "200k")];
                                 }
+                                // Claude Code refuses auto mode on a model without it.
+                                if !m["supportsAutoMode"].as_bool().unwrap_or(false) {
+                                    info.unsupported_modes = vec![PermissionMode::Auto];
+                                }
                                 Some(info)
                             })
                             .collect()

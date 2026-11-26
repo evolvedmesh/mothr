@@ -80,6 +80,8 @@ pub struct ModelOption {
     pub efforts: Vec<ChoiceOption>,
     /// Context window sizes this model can run with; empty when it has one fixed size.
     pub contexts: Vec<ChoiceOption>,
+    /// Ids of the agent's permission modes this model can't run.
+    pub unsupported_modes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]

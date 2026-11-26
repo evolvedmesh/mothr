@@ -258,7 +258,11 @@ impl PermissionMode {
 
     /// The closest mode `agent` supports (the app-wide default may not exist for every agent).
     pub fn for_agent(self, agent: AgentKind) -> PermissionMode {
-        let supported = agent.supported_modes();
+        self.closest_in(agent.supported_modes())
+    }
+
+    /// The closest of `supported`: this mode when it's there, else the nearest safer one.
+    pub fn closest_in(self, supported: &[PermissionMode]) -> PermissionMode {
         let chain: &[PermissionMode] = match self {
             PermissionMode::Auto => &[PermissionMode::Auto, PermissionMode::AcceptEdits, PermissionMode::Ask],
             PermissionMode::AcceptEdits => &[PermissionMode::AcceptEdits, PermissionMode::Ask],

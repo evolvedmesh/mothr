@@ -96,12 +96,24 @@ pub struct ModelInfo {
     /// Context window sizes this model can run with; empty = a single fixed size.
     #[serde(default)]
     pub contexts: Vec<ChoiceInfo>,
+    /// Permission modes the agent offers that this model can't run (Claude's auto mode needs
+    /// a model that supports it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_modes: Vec<PermissionMode>,
 }
 
 impl ModelInfo {
     pub fn new(id: impl Into<String>, name: impl Into<String>, description: Option<String>) -> Self {
         Self { id: id.into(), name: name.into(), description, ..Default::default() }
     }
+}
+
+/// The permission modes `agent` offers with `model` (`None`: the agent's default), given the
+/// models it reported. A model missing from the list counts as the agent's "default" entry.
+pub fn permission_modes(agent: AgentKind, models: &[ModelInfo], model: Option<&str>) -> Vec<PermissionMode> {
+    let info = model.and_then(|m| models.iter().find(|x| x.id == m)).or_else(|| models.iter().find(|x| x.id == "default"));
+    let unsupported = info.map(|i| i.unsupported_modes.as_slice()).unwrap_or_default();
+    agent.supported_modes().iter().copied().filter(|m| !unsupported.contains(m)).collect()
 }
 
 /// "xhigh" → "Extra high", for menus.
@@ -662,6 +674,11 @@ impl SessionState {
         self.entries.iter().rposition(|e| e.id() == id)
     }
 
+    /// The permission modes this chat can switch to with its current model.
+    pub fn permission_modes(&self) -> Vec<PermissionMode> {
+        permission_modes(self.meta.agent, &self.models, self.meta.model.as_deref())
+    }
+
     pub fn pending_inputs(&self) -> impl Iterator<Item = &Entry> {
         self.entries.iter().filter(|e| e.is_pending_input())
     }
@@ -878,6 +895,22 @@ pub enum SessionCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modes_follow_the_chosen_model() {
+        let mut haiku = ModelInfo::new("claude-haiku-4-5", "Haiku 4.5", None);
+        haiku.unsupported_modes = vec![PermissionMode::Auto];
+        let models = vec![ModelInfo::new("default", "Default", None), haiku];
+        let all = AgentKind::ClaudeCode.supported_modes().to_vec();
+        assert_eq!(permission_modes(AgentKind::ClaudeCode, &models, None), all);
+        assert_eq!(permission_modes(AgentKind::ClaudeCode, &models, Some("claude-opus-5-5")), all);
+        let modes = permission_modes(AgentKind::ClaudeCode, &models, Some("claude-haiku-4-5"));
+        assert!(!modes.contains(&PermissionMode::Auto) && modes.contains(&PermissionMode::AllowAll));
+        assert_eq!(PermissionMode::Auto.closest_in(&modes), PermissionMode::AcceptEdits);
+        // Older transcripts have no such field; nothing is left out.
+        let old: ModelInfo = serde_json::from_str(r#"{"id":"x","name":"X","description":null}"#).unwrap();
+        assert!(old.unsupported_modes.is_empty());
+    }
 
     #[test]
     fn extra_projects_are_deduplicated_and_labelled() {
