@@ -11,12 +11,15 @@ name: Release (Linux x64, Android)
 # After every push to main, sync-dev merges main back into dev (a normal merge commit).
 # Other desktop platforms come later.
 #
+# Every stable release also carries SHA256SUMS; install.sh and the in-app updaters (desktop
+# and phone) only install files that match it.
+#
 # Secrets:
-#   RELEASE_APP_ID, RELEASE_APP_PRIVATE_KEY  the evolvedmesh release bot GitHub App (required)
-#   ANDROID_KEYSTORE_BASE64                  release keystore, base64 encoded (optional)
+#   RELEASE_APP_ID, RELEASE_APP_PRIVATE_KEY  the evolvedmesh release bot GitHub App
+#   ANDROID_KEYSTORE_BASE64                  Mothr's release keystore, base64 encoded
 #   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
-# Without the keystore the APK is signed with a throwaway debug key, so it won't install over
-# a previous release.
+# The android job fails without the keystore: phones only accept an update signed with the
+# same key as the installed app.
 
 on:
   push:
@@ -228,12 +231,14 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "MOTHR_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
-          else
-            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set; the APK is signed with a debug key."
+          # Phones only install an update signed with the same key, so never ship a release
+          # signed with anything else.
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set. Release APKs must be signed with Mothr's release key."
+            exit 1
           fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "MOTHR_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 
       # Release build: R8 minify + resource shrinking, Rust client built with --release. Only
       # arm64-v8a, which covers practically every real phone.
@@ -270,6 +275,10 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      # install.sh and the in-app updaters only accept files listed here.
+      - name: Checksums
+        run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
 
       - name: Upload to release
         env:
