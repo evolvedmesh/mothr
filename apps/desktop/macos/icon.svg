@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Mothr's macOS app icon: the phone app's monogram (apps/mobile/.../ic_launcher_foreground.xml)
+     on macOS's icon grid, a 824 px rounded square on a 1024 px canvas. Mothr.icns is made from
+     this file with make-icns.py. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#0B0C0F"/>
+  <!-- The launcher's 72 dp safe zone (18..90 of 108) fills the square. -->
+  <g transform="translate(100 100) scale(11.4444) translate(-18 -18)">
+    <path d="M38,68 L38,40 L54,58 L70,40 L70,68" fill="none" stroke="#ECECF1" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="54" cy="72" r="3.5" fill="#8B7CF6"/>
+  </g>
+</svg>

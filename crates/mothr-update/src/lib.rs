@@ -5,8 +5,8 @@
 //!
 //! - [`Client::latest`] finds the newest stable release (prereleases are never offered).
 //! - [`Client::download_verified`] downloads one asset and checks it against `SHA256SUMS`.
-//! - [`install`] is the Linux desktop layout the install script creates, and how a new
-//!   version is put in place next to the running one.
+//! - [`install`] is the desktop install layouts (Linux, Windows, macOS) and how a new version
+//!   is put in place next to the running one.
 //!
 //! `MOTHR_UPDATE_API` points everything at another releases API (tests, a mirror).
 
@@ -70,6 +70,23 @@ pub fn windows_asset(version: &semver::Version) -> String {
 /// The Windows installer for a version (`apps/desktop/windows/mothr.iss`).
 pub fn windows_setup_asset(version: &semver::Version) -> String {
     format!("mothr_{version}_windows_x64_setup.exe")
+}
+
+/// The macOS desktop tarball for a version and an architecture ([`macos_arch`]): one folder
+/// holding `Mothr.app`. `install.sh` and the updater install it.
+pub fn macos_asset(version: &semver::Version, arch: &str) -> String {
+    format!("mothr_{version}_macos_{arch}.tar.gz")
+}
+
+/// The macOS disk image for a version and an architecture: `Mothr.app` to drag to Applications.
+pub fn macos_dmg_asset(version: &semver::Version, arch: &str) -> String {
+    format!("mothr_{version}_macos_{arch}.dmg")
+}
+
+/// This build's macOS architecture as release assets name it: `arm64` (Apple silicon) or `x64`
+/// (Intel).
+pub fn macos_arch() -> &'static str {
+    if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" }
 }
 
 /// The phone APK for a version and an Android ABI (`arm64-v8a`, `x86_64`, …).
@@ -244,6 +261,8 @@ mod tests {
         assert_eq!(linux_asset(&v), "mothr_1.2.3_linux_x64.tar.gz");
         assert_eq!(windows_asset(&v), "mothr_1.2.3_windows_x64.zip");
         assert_eq!(windows_setup_asset(&v), "mothr_1.2.3_windows_x64_setup.exe");
+        assert_eq!(macos_asset(&v, "arm64"), "mothr_1.2.3_macos_arm64.tar.gz");
+        assert_eq!(macos_dmg_asset(&v, "x64"), "mothr_1.2.3_macos_x64.dmg");
         assert_eq!(android_asset(&v, "arm64-v8a"), "mothr_1.2.3_android_arm64-v8a.apk");
     }
 }

@@ -286,8 +286,9 @@ impl SettingsView {
                     }),
                 );
             }
-            // The portable Windows zip: the new version's installer is a download.
-            UpdateState::Available { version, .. } if cfg!(windows) => {
+            // The portable Windows zip, or a Mac app that can't replace itself: the new version's
+            // installer or disk image is a download.
+            UpdateState::Available { version, .. } if cfg!(any(windows, target_os = "macos")) => {
                 if let Some(url) = download_url {
                     actions = actions.child(
                         Button::new("download-update").small().primary().icon(icon("download")).label(format!("Download {version}")).on_click(move |_, _, cx| cx.open_url(&url)),
@@ -355,7 +356,12 @@ impl SettingsView {
             body = body.child(
                 v_flex()
                     .gap_1()
-                    .child(div().text_xs().text_color(pal.text_muted).child("This copy wasn’t installed with the Mothr installer, so it doesn’t update itself. To get updates, install Mothr with:"))
+                    .child(div().text_xs().text_color(pal.text_muted).child(if cfg!(target_os = "macos") {
+                        // Read-only or translocated: started from Downloads or the disk image.
+                        "Mothr can’t replace itself where it is, so it doesn’t update itself. Move it to Applications, or install it with:"
+                    } else {
+                        "This copy wasn’t installed with the Mothr installer, so it doesn’t update itself. To get updates, install Mothr with:"
+                    }))
                     .child(
                         h_flex()
                             .gap_2()

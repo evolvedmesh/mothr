@@ -7,12 +7,14 @@
 //!   install.json                 marker: this copy was installed by the installer and updates itself
 //!   current -> versions/0.2.0    what `~/.local/bin/mothr` and the menu entry start
 //!   versions/0.1.0/  versions/0.2.0/
-//!     mothr  dev.mothr.Mothr.desktop  licenses/
+//!     mothr  dev.mothr.Mothr.desktop  dev.mothr.Mothr.svg  licenses/
 //! ```
 //!
 //! An update unpacks next to the running version and then swaps `current` in one rename, so
 //! the running app is never touched and the next start runs the new one. The version that is
-//! running and the new one are kept; older ones are removed.
+//! running and the new one are kept; older ones are removed. The menu entry install.sh wrote
+//! (`~/.local/share/applications/dev.mothr.Mothr.desktop`) is brought up to date by the new
+//! version's first start ([`Install::refresh_menu_entry`]).
 //!
 //! **Windows** ([`Layout::InPlace`], made by the setup, `apps/desktop/windows/mothr.iss`):
 //!
@@ -27,8 +29,27 @@
 //! release zip next to it, renames the running `mothr.exe` to `mothr.exe.<n>.old`, moves the new
 //! one in and records its version (in `install.json` and the Apps & features entry). The next
 //! start runs it and deletes the `.old` files ([`Install::clean_up`]).
+//!
+//! **macOS** ([`Layout::Bundle`], made by `install.sh` or by dragging `Mothr.app` from the disk
+//! image to Applications):
+//!
+//! ```text
+//! ~/Applications/Mothr.app/        the install root (install.sh's --dir; any folder the user can write)
+//!   Contents/Info.plist            CFBundleShortVersionString: the version installed
+//!   Contents/MacOS/mothr           what Launchpad, the Dock and `~/.local/bin/mothr` start
+//!   Contents/Resources/            icon, licenses
+//! ~/Applications/.mothr-update/    while updating: the download, the new bundle, the one it replaced
+//! ```
+//!
+//! Mac apps are installed by copying the bundle, so every `Mothr.app` in a folder the user can
+//! write updates itself; one that can't be replaced (in a read-only or translocated folder, or on
+//! the disk image) doesn't. An update unpacks the release tarball into `.mothr-update/` next to
+//! the bundle, moves the running bundle aside into it and the new one into its place (macOS lets a
+//! running app's bundle move). The next start runs the new one and deletes `.mothr-update/`.
+//! A restart runs the bundle's binary directly, not through `open`, so it keeps Mothr's
+//! environment (`MOTHR_HOME` and the like) as on Linux.
 
-use crate::{Client, Release, linux_asset, windows_asset};
+use crate::{Client, Release, linux_asset, macos_arch, macos_asset, windows_asset};
 use anyhow::{Context as _, bail};
 use std::path::{Path, PathBuf};
 
@@ -36,6 +57,15 @@ pub const MARKER: &str = "install.json";
 pub const BINARY: &str = "mothr";
 /// The binary in a Windows install.
 pub const WINDOWS_BINARY: &str = "mothr.exe";
+/// The binary inside a macOS app bundle.
+pub const MACOS_BINARY: &str = "Contents/MacOS/mothr";
+/// Next to a macOS bundle while it updates (see the module docs).
+pub const MACOS_WORK_DIR: &str = ".mothr-update";
+/// Linux: a release's menu entry. install.sh copies it into `$XDG_DATA_HOME/applications`
+/// (unless `--no-menu-entry`) with `Exec=` and `Icon=` pointing into the install.
+pub const MENU_ENTRY: &str = "dev.mothr.Mothr.desktop";
+/// Linux: the menu entry's icon in a release.
+pub const MENU_ICON: &str = "dev.mothr.Mothr.svg";
 /// The setup's Apps & features entry (`HKCU`). Keep the GUID in step with `AppId` in
 /// `apps/desktop/windows/mothr.iss`.
 pub const WINDOWS_UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{0E591738-8A65-45C8-8C9B-61E1FE0ECC9E}_is1";
@@ -47,6 +77,8 @@ pub enum Layout {
     Versions,
     /// Windows: one folder whose `mothr.exe` an update replaces.
     InPlace,
+    /// macOS: `root` is the `.app` bundle, which an update replaces as a whole.
+    Bundle,
 }
 
 /// An installer-made copy of Mothr.
@@ -60,13 +92,17 @@ pub struct Install {
 
 impl Install {
     /// The install the running binary belongs to, or `None` when it wasn't installed by the
-    /// installer (`cargo run`, a distro package, a copied binary, the portable Windows zip):
-    /// those don't update themselves.
+    /// installer (`cargo run`, a distro package, a copied binary, the portable Windows zip, a
+    /// Mac app the user can't replace): those don't update themselves.
     pub fn detect() -> Option<Self> {
         let exe = std::env::current_exe().ok()?;
         if cfg!(windows) {
             // Not canonicalized: that gives a `\\?\` path, which child processes can't start in.
             Self::in_place_for_binary(&exe)
+        } else if cfg!(target_os = "macos") {
+            // Resolved, so a symlink into the bundle (what install.sh made `~/.local/bin/mothr`
+            // before it became a script) finds the bundle.
+            Self::bundle_for_binary(&exe.canonicalize().ok()?)
         } else {
             Self::for_binary(&exe.canonicalize().ok()?)
         }
@@ -94,6 +130,17 @@ impl Install {
             .then(|| Self { root: root.to_path_buf(), running: None, layout: Layout::InPlace })
     }
 
+    /// The macOS app `exe` (a resolved path) is the binary of: `<name>.app/Contents/MacOS/mothr`,
+    /// when the bundle can be replaced (it and its folder are writable).
+    pub fn bundle_for_binary(exe: &Path) -> Option<Self> {
+        let macos = exe.parent()?;
+        let contents = macos.parent()?;
+        let bundle = contents.parent()?;
+        let shaped = macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && bundle.extension()? == "app";
+        (shaped && writable(bundle.parent()?) && writable(bundle))
+            .then(|| Self { root: bundle.to_path_buf(), running: None, layout: Layout::Bundle })
+    }
+
     /// The version the next start runs.
     pub fn current_version(&self) -> Option<String> {
         match self.layout {
@@ -105,6 +152,7 @@ impl Install {
                 let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(self.root.join(MARKER)).ok()?).ok()?;
                 marker.get("version")?.as_str().map(str::to_string)
             }
+            Layout::Bundle => plist_string(&self.root.join("Contents/Info.plist"), "CFBundleShortVersionString"),
         }
     }
 
@@ -113,14 +161,26 @@ impl Install {
         match self.layout {
             Layout::Versions => self.root.join("current").join(BINARY),
             Layout::InPlace => self.root.join(WINDOWS_BINARY),
+            Layout::Bundle => self.root.join(MACOS_BINARY),
         }
     }
 
+    /// Where a macOS update works: `.mothr-update/` next to the bundle, on the same volume so
+    /// the bundles move by renaming.
+    fn work_dir(&self) -> PathBuf {
+        self.root.parent().unwrap_or(&self.root).join(MACOS_WORK_DIR)
+    }
+
     /// Remove what earlier updates left behind: the binaries they replaced (in use until that
-    /// Mothr exited) and interrupted downloads. Windows only; Linux prunes while staging.
+    /// Mothr exited) and interrupted downloads. Windows and macOS; Linux prunes while staging.
     pub fn clean_up(&self) {
-        if self.layout != Layout::InPlace {
-            return;
+        match self.layout {
+            Layout::Versions => return,
+            Layout::Bundle => {
+                let _ = std::fs::remove_dir_all(self.work_dir());
+                return;
+            }
+            Layout::InPlace => {}
         }
         let _ = std::fs::remove_dir_all(self.root.join("downloads"));
         let Ok(entries) = std::fs::read_dir(&self.root) else { return };
@@ -134,11 +194,53 @@ impl Install {
         }
     }
 
+    /// Linux: rewrite the menu entry install.sh made from the release that starts now, as
+    /// install.sh would. An update is put in place by the version it replaces, which can't know
+    /// what the new release changes in the entry (its icon, at first); this start does. Only an
+    /// entry that starts this install is touched, and none is made.
+    pub fn refresh_menu_entry(&self) {
+        if self.layout != Layout::Versions {
+            return;
+        }
+        let Some(apps) = applications_dir() else { return };
+        match self.refresh_menu_entry_in(&apps) {
+            Ok(true) => tracing::info!("updated the menu entry in {}", apps.display()),
+            Ok(false) => {}
+            Err(e) => tracing::info!("couldn't update the menu entry: {e:#}"),
+        }
+    }
+
+    /// [`Self::refresh_menu_entry`] for the entry in `apps`; whether it changed.
+    fn refresh_menu_entry_in(&self, apps: &Path) -> anyhow::Result<bool> {
+        let path = apps.join(MENU_ENTRY);
+        let Ok(old) = std::fs::read_to_string(&path) else { return Ok(false) };
+        // install.sh wrote `Exec=<root>/current/mothr` in the spelling it was given (`/home`
+        // may be a symlink, say), so it's ours if it resolves to this install's binary.
+        let Some(exec) = old.lines().find_map(|l| l.strip_prefix("Exec=")).map(|e| PathBuf::from(e.trim())) else { return Ok(false) };
+        let ours = matches!((exec.canonicalize(), self.current_binary().canonicalize()), (Ok(a), Ok(b)) if a == b);
+        if !ours {
+            return Ok(false);
+        }
+        let Some(current) = exec.parent() else { return Ok(false) };
+        let template = std::fs::read_to_string(current.join(MENU_ENTRY)).context("the release has no menu entry")?;
+        let icon = current.join(MENU_ICON);
+        let new = menu_entry(&template, &exec, icon.is_file().then_some(icon.as_path()));
+        if new == old {
+            return Ok(false);
+        }
+        let tmp = apps.join(format!(".{MENU_ENTRY}.new"));
+        std::fs::write(&tmp, &new)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(true)
+    }
+
     /// Download `release`, check it and put it in place. Returns once the next start will run
     /// it.
     pub async fn stage(&self, client: &Client, release: &Release) -> anyhow::Result<()> {
-        if self.layout == Layout::InPlace {
-            return self.stage_in_place(client, release).await;
+        match self.layout {
+            Layout::InPlace => return self.stage_in_place(client, release).await,
+            Layout::Bundle => return self.stage_bundle(client, release).await,
+            Layout::Versions => {}
         }
         let version = release.version.to_string();
         let name = linux_asset(&release.version);
@@ -256,6 +358,62 @@ impl Install {
         self.record_version(version)
     }
 
+    async fn stage_bundle(&self, client: &Client, release: &Release) -> anyhow::Result<()> {
+        let version = release.version.to_string();
+        let name = macos_asset(&release.version, macos_arch());
+        let archive = self.work_dir().join("downloads").join(&name);
+        client.download_verified(release, &name, &archive).await?;
+        let this = self.clone();
+        let tarball = archive.clone();
+        let result = tokio::task::spawn_blocking(move || this.swap_bundle(&tarball, &version)).await;
+        let _ = tokio::fs::remove_file(&archive).await;
+        result??;
+        Ok(())
+    }
+
+    /// Unpack a release tarball and replace this install's app bundle with its one (macOS). The
+    /// running bundle moves aside into the work folder; the next start deletes it.
+    pub fn swap_bundle(&self, archive: &Path, version: &str) -> anyhow::Result<()> {
+        let staging = self.work_dir().join(format!("staging-{version}"));
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging)?;
+        let result = self.swap_bundle_from(archive, &staging, version);
+        let _ = std::fs::remove_dir_all(&staging);
+        result
+    }
+
+    fn swap_bundle_from(&self, archive: &Path, staging: &Path, version: &str) -> anyhow::Result<()> {
+        let out = std::process::Command::new("tar")
+            .arg("-xzf")
+            .arg(archive)
+            .arg("-C")
+            .arg(staging)
+            .output()
+            .context("couldn't run tar")?;
+        if !out.status.success() {
+            bail!("couldn't unpack the update: {}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        // The tarball holds one folder, `mothr_<version>_macos_<arch>/`, with `Mothr.app` in it.
+        let unpacked = single_dir(staging).unwrap_or_else(|| staging.to_path_buf());
+        let new_bundle = find_app(&unpacked).context("the update has no Mothr.app")?;
+        let binary = new_bundle.join(MACOS_BINARY);
+        if !binary.is_file() {
+            bail!("the update has no {MACOS_BINARY}");
+        }
+        set_executable(&binary)?;
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+        let aside = self.work_dir().join(format!("replaced-{nonce}"));
+        std::fs::rename(&self.root, &aside).context("couldn't move the running Mothr aside")?;
+        if let Err(e) = std::fs::rename(&new_bundle, &self.root) {
+            let _ = std::fs::rename(&aside, &self.root);
+            return Err(anyhow::Error::from(e).context("couldn't put the new Mothr in place"));
+        }
+        if self.current_version().as_deref() != Some(version) {
+            tracing::warn!("the update's Info.plist doesn't say version {version}");
+        }
+        Ok(())
+    }
+
     /// Note the installed version: in the marker (what the next start runs) and in Apps &
     /// features.
     fn record_version(&self, version: &str) -> anyhow::Result<()> {
@@ -294,6 +452,33 @@ impl Install {
     }
 }
 
+/// Where install.sh puts the menu entry: `${XDG_DATA_HOME:-$HOME/.local/share}/applications`.
+fn applications_dir() -> Option<PathBuf> {
+    let set = |name| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let data = set("XDG_DATA_HOME").or_else(|| set("HOME").map(|h| h.join(".local/share")))?;
+    Some(data.join("applications"))
+}
+
+/// A release's menu entry as install.sh writes it: `Exec=` starts `exec` and `Icon=` shows
+/// `icon`, or goes without one. Keep in step with `install_linux` in install.sh.
+fn menu_entry(template: &str, exec: &Path, icon: Option<&Path>) -> String {
+    let mut out = String::with_capacity(template.len() + 160);
+    for line in template.lines() {
+        if line.starts_with("Exec=") {
+            out.push_str("Exec=");
+            out.push_str(&exec.to_string_lossy());
+        } else if line.starts_with("Icon=") {
+            let Some(icon) = icon else { continue };
+            out.push_str("Icon=");
+            out.push_str(&icon.to_string_lossy());
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// Copy everything in `from` into `to`, replacing files that exist.
 fn copy_over(from: &Path, to: &Path) -> anyhow::Result<()> {
     for e in std::fs::read_dir(from)?.flatten() {
@@ -323,6 +508,32 @@ pub fn wait_for_exit(pid: u32, timeout: std::time::Duration) {
         WaitForSingleObject(handle, u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX));
         CloseHandle(handle);
     }
+}
+
+/// A string value from an XML property list (the `Info.plist` the release workflow writes).
+fn plist_string(path: &Path, key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let (_, after) = text.split_once(&format!("<key>{key}</key>"))?;
+    let value = after.trim_start().strip_prefix("<string>")?;
+    Some(value.split_once("</string>")?.0.trim().to_string())
+}
+
+/// `dir` itself when it's an `.app` bundle, else the first one in it.
+fn find_app(dir: &Path) -> Option<PathBuf> {
+    let is_app = |p: &Path| p.is_dir() && p.extension().is_some_and(|e| e == "app");
+    if is_app(dir) {
+        return Some(dir.to_path_buf());
+    }
+    std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| is_app(p))
+}
+
+/// Whether this process can create files in `dir` (permissions alone don't tell: a read-only
+/// volume, App Translocation).
+fn writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".mothr-write-test-{}", std::process::id()));
+    let ok = std::fs::File::create(&probe).is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
 }
 
 fn single_dir(dir: &Path) -> Option<PathBuf> {
@@ -406,6 +617,62 @@ mod tests {
         assert!(root.join("versions/0.1.0").is_dir(), "the running version stays");
         assert!(!root.join("versions/0.0.9").exists(), "older ones go");
         assert!(install.switch_to("9.9.9").is_err());
+    }
+
+    const RELEASE_ENTRY: &str = include_str!("../../../apps/desktop/linux/dev.mothr.Mothr.desktop");
+
+    /// An install (at its resolved path, as `detect` finds it) whose current release has a menu
+    /// entry and icon, and an `applications` folder.
+    fn with_release_entry(name: &str) -> (PathBuf, PathBuf, Install) {
+        let root = scratch(name).canonicalize().unwrap();
+        std::fs::write(root.join(MARKER), "{}").unwrap();
+        let dir = root.join("versions/0.2.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(BINARY), "").unwrap();
+        std::fs::write(dir.join(MENU_ENTRY), RELEASE_ENTRY).unwrap();
+        std::fs::write(dir.join(MENU_ICON), "<svg/>").unwrap();
+        let install = Install { root: root.clone(), running: Some("0.2.0".into()), layout: Layout::Versions };
+        install.switch_to("0.2.0").unwrap();
+        let apps = root.join("applications");
+        std::fs::create_dir_all(&apps).unwrap();
+        (root, apps, install)
+    }
+
+    #[test]
+    fn an_update_brings_the_menu_entry_its_icon() {
+        let (root, apps, install) = with_release_entry("menu");
+        assert!(RELEASE_ENTRY.contains("\nIcon=dev.mothr.Mothr\n"));
+        // install.sh was given another spelling of the root (`/home` as a symlink, say) and
+        // installed a release without an icon.
+        let alias = root.parent().unwrap().join(format!("{}-alias", root.file_name().unwrap().to_string_lossy()));
+        let _ = std::fs::remove_file(&alias);
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let exec = alias.join("current").join(BINARY);
+        std::fs::write(apps.join(MENU_ENTRY), menu_entry(RELEASE_ENTRY, &exec, None)).unwrap();
+
+        assert!(install.refresh_menu_entry_in(&apps).unwrap());
+        let entry = std::fs::read_to_string(apps.join(MENU_ENTRY)).unwrap();
+        assert!(entry.contains(&format!("\nExec={}\n", exec.display())), "{entry}");
+        assert!(entry.contains(&format!("\nIcon={}\n", alias.join("current").join(MENU_ICON).display())), "{entry}");
+        assert!(entry.starts_with("[Desktop Entry]\n") && entry.contains("\nName=Mothr\n"));
+        assert!(!install.refresh_menu_entry_in(&apps).unwrap(), "up to date: left as it is");
+
+        // A release without the icon drops the line rather than pointing at nothing.
+        std::fs::remove_file(root.join("versions/0.2.0").join(MENU_ICON)).unwrap();
+        assert!(install.refresh_menu_entry_in(&apps).unwrap());
+        assert!(!std::fs::read_to_string(apps.join(MENU_ENTRY)).unwrap().contains("Icon="));
+    }
+
+    #[test]
+    fn other_menu_entries_are_left_alone() {
+        let (_root, apps, install) = with_release_entry("menu-other");
+        assert!(!install.refresh_menu_entry_in(&apps).unwrap());
+        assert!(!apps.join(MENU_ENTRY).exists(), "installed with --no-menu-entry: none is made");
+
+        let packaged = "[Desktop Entry]\nName=Mothr\nExec=/usr/bin/mothr\n";
+        std::fs::write(apps.join(MENU_ENTRY), packaged).unwrap();
+        assert!(!install.refresh_menu_entry_in(&apps).unwrap());
+        assert_eq!(std::fs::read_to_string(apps.join(MENU_ENTRY)).unwrap(), packaged, "another install's entry");
     }
 }
 
@@ -496,5 +763,109 @@ mod in_place_tests {
         assert_eq!(std::fs::read_to_string(install.current_binary()).unwrap(), "mothr 0.1.0");
         assert_eq!(install.current_version().as_deref(), Some("0.1.0"));
         assert!(!root.join(".staging-0.2.0").exists());
+    }
+}
+
+/// The macOS layout is plain renames and `tar`, so it's tested on every Unix.
+#[cfg(all(test, unix))]
+mod bundle_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mothr-update-mac-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A bundle like `apps/desktop/macos/bundle.sh` makes.
+    fn bundle(at: &Path, version: &str) {
+        std::fs::create_dir_all(at.join("Contents/MacOS")).unwrap();
+        std::fs::create_dir_all(at.join("Contents/Resources")).unwrap();
+        std::fs::write(at.join(MACOS_BINARY), format!("mothr {version}")).unwrap();
+        std::fs::write(
+            at.join("Contents/Info.plist"),
+            format!("<plist version=\"1.0\">\n<dict>\n\t<key>CFBundleIdentifier</key>\n\t<string>dev.mothr.Mothr</string>\n\t<key>CFBundleShortVersionString</key>\n\t<string>{version}</string>\n</dict>\n</plist>\n"),
+        )
+        .unwrap();
+    }
+
+    /// A tarball shaped like the release workflow's: `mothr_<v>_macos_arm64/Mothr.app`.
+    fn tarball(dir: &Path, version: &str) -> PathBuf {
+        let top = format!("mothr_{version}_macos_arm64");
+        let src = dir.join("src").join(&top);
+        bundle(&src.join("Mothr.app"), version);
+        let out = dir.join(format!("{top}.tar.gz"));
+        let ok = std::process::Command::new("tar").arg("-czf").arg(&out).arg("-C").arg(src.parent().unwrap()).arg(&top).status().unwrap().success();
+        assert!(ok);
+        out
+    }
+
+    fn installed(name: &str) -> (PathBuf, Install) {
+        let dir = scratch(name);
+        let app = dir.join("Applications/Mothr.app");
+        bundle(&app, "0.1.0");
+        let install = Install::bundle_for_binary(&app.join(MACOS_BINARY)).expect("a bundle in a writable folder");
+        (dir, install)
+    }
+
+    #[test]
+    fn only_replaceable_bundles_are_detected() {
+        let (dir, install) = installed("detect");
+        assert_eq!((install.root.as_path(), install.layout), (dir.join("Applications/Mothr.app").as_path(), Layout::Bundle));
+        assert_eq!(install.current_version().as_deref(), Some("0.1.0"));
+        assert_eq!(Install::bundle_for_binary(&dir.join("target/release/mothr")), None, "not in a bundle");
+        let loose = dir.join("Mothr/Contents/MacOS/mothr");
+        std::fs::create_dir_all(loose.parent().unwrap()).unwrap();
+        std::fs::write(&loose, "").unwrap();
+        assert_eq!(Install::bundle_for_binary(&loose), None, "not an .app");
+
+        use std::os::unix::fs::PermissionsExt as _;
+        let apps = dir.join("Applications");
+        std::fs::set_permissions(&apps, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root writes anywhere; the check only means something for a normal user.
+        if !writable(&apps) {
+            assert_eq!(Install::bundle_for_binary(&install.current_binary()), None, "a folder the user can't write");
+        }
+        std::fs::set_permissions(&apps, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn swaps_the_bundle_and_cleans_up_next_start() {
+        let (dir, install) = installed("swap");
+        install.swap_bundle(&tarball(&dir, "0.2.0"), "0.2.0").unwrap();
+        assert_eq!(install.current_version().as_deref(), Some("0.2.0"));
+        assert_eq!(std::fs::read_to_string(install.current_binary()).unwrap(), "mothr 0.2.0");
+        let work = dir.join("Applications").join(MACOS_WORK_DIR);
+        let replaced: Vec<_> = std::fs::read_dir(&work).unwrap().flatten().map(|e| e.path()).collect();
+        assert_eq!(replaced.len(), 1, "only the replaced bundle is left: {replaced:?}");
+        assert_eq!(std::fs::read_to_string(replaced[0].join(MACOS_BINARY)).unwrap(), "mothr 0.1.0");
+
+        // A second update before a restart.
+        install.swap_bundle(&tarball(&dir, "0.3.0"), "0.3.0").unwrap();
+        assert_eq!(install.current_version().as_deref(), Some("0.3.0"));
+
+        install.clean_up();
+        assert!(!work.exists());
+        assert!(install.current_binary().is_file());
+    }
+
+    #[test]
+    fn a_broken_update_leaves_the_bundle_alone() {
+        let (dir, install) = installed("broken");
+        let bad = dir.join("bad.tar.gz");
+        std::fs::write(&bad, "not a tarball").unwrap();
+        assert!(install.swap_bundle(&bad, "0.2.0").is_err());
+
+        let src = dir.join("empty/mothr_0.2.0_macos_arm64");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("README"), "").unwrap();
+        let empty = dir.join("empty.tar.gz");
+        assert!(std::process::Command::new("tar").arg("-czf").arg(&empty).arg("-C").arg(dir.join("empty")).arg("mothr_0.2.0_macos_arm64").status().unwrap().success());
+        assert!(install.swap_bundle(&empty, "0.2.0").is_err(), "no Mothr.app in it");
+
+        assert_eq!(std::fs::read_to_string(install.current_binary()).unwrap(), "mothr 0.1.0");
+        assert_eq!(install.current_version().as_deref(), Some("0.1.0"));
+        assert!(!dir.join("Applications").join(MACOS_WORK_DIR).join("staging-0.2.0").exists());
     }
 }
