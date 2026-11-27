@@ -22,7 +22,7 @@
           "Cargo.toml",
           "Cargo.lock"
         ],
-        "message": "ci(release): ${nextRelease.version} [skip ci]"
+        "message": "ci(release): ${nextRelease.version}"
       }
     ],
     "@semantic-release/github"
