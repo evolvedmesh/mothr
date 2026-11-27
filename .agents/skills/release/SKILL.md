@@ -5,7 +5,9 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
 
 # Releases
 
-`.github/workflows/release.yml` runs on every push to `main` and `dev`:
+`.github/workflows/release.yml` runs on every push to `main` and `dev`, and by hand
+(Actions → Release → Run workflow, or `gh workflow run release.yml --ref main`) when a push
+didn't start it:
 
 1. **release** job: semantic-release (`.releaserc.json`) reads the Conventional Commits since
    the last `v*` tag, runs `scripts/set-version.sh <version>` (rewrites `[workspace.package]
