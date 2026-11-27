@@ -200,7 +200,7 @@ runs Mothr in a headless gamescope (nothing opens on screen) and writes a PNG to
   `ci: …`, `chore: …`. The scope is the crate without the `mothr-` prefix (`desktop` and
   `mobile` for the apps); list several, comma-separated, when a change spans them.
 - Releases are cut by semantic-release from those commit types (`.github/workflows/release.yml`,
-  `.releaserc.json`): `feat` → minor, `fix`/`perf` → patch, `!`/`BREAKING CHANGE` → major.
+  `release.config.cjs`): `feat` → minor, `fix`/`perf` → patch, `!`/`BREAKING CHANGE` → major.
   Don't bump versions by hand; it owns `version` in Cargo.toml (the Android app reads it from
   there). See the `release` skill.
 - Don't commit `target/`, `.codegraph/` contents, `apps/mobile/**/build`, or anything from a
