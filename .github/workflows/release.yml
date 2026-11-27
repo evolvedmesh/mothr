@@ -1,9 +1,10 @@
 name: Release (Linux x64, Windows x64, macOS, Android)
 
-# Every push to main or dev runs semantic-release: it reads the Conventional Commits since the
-# last release, bumps the version (scripts/set-version.sh), commits it, tags it and publishes a
-# GitHub release with notes. dev publishes prereleases (0.1.0-dev.1, …); main publishes stable
-# releases.
+# Every push to main or dev runs semantic-release (release.config.cjs): it reads the Conventional
+# Commits since the last release, bumps the version (scripts/set-version.sh), commits it, tags it
+# and creates a GitHub release with notes. dev publishes prereleases (0.1.0-dev.1, …) right
+# away; main's stable release starts as a draft, and the publish job publishes it once the
+# binaries are attached (the repo has immutable releases: nothing can be added after that).
 #
 # Only a stable release on main is built and gets binaries attached:
 #   mothr_<version>_linux_x64.tar.gz       the desktop app for Linux
@@ -400,9 +401,13 @@ jobs:
       - name: Checksums
         run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
 
-      - name: Upload to release
+      # semantic-release left the release as a draft (release.config.cjs): the repo has immutable
+      # releases, so files can only be added before it's published. If a build job failed, the
+      # draft stays unpublished; re-run the failed jobs and this finishes it.
+      - name: Upload to the draft release and publish it
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
         run: |
-          gh release upload "${{ needs.release.outputs.tag }}" dist/* \
-            --clobber --repo "${{ github.repository }}"
+          gh release upload "$TAG" dist/* --clobber --repo "${{ github.repository }}"
+          gh release edit "$TAG" --draft=false --latest --repo "${{ github.repository }}"

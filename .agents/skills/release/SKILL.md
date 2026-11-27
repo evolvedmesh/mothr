@@ -9,11 +9,13 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
 (Actions → Release → Run workflow, or `gh workflow run release.yml --ref main`) when a push
 didn't start it:
 
-1. **release** job: semantic-release (`.releaserc.json`) reads the Conventional Commits since
+1. **release** job: semantic-release (`release.config.cjs`) reads the Conventional Commits since
    the last `v*` tag, runs `scripts/set-version.sh <version>` (rewrites `[workspace.package]
    version` in `Cargo.toml` and the `mothr*` entries in `Cargo.lock`), commits
-   `ci(release): <version>`, tags `v<version>` and publishes a GitHub release with
-   notes. It runs as the release bot GitHub App (`RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`)
+   `ci(release): <version>`, tags `v<version>` and creates a GitHub release with notes. On
+   `dev` the prerelease is published right away; on `main` it's a **draft** until **publish**
+   (below) has attached the binaries, because the repo has immutable releases and a published
+   release can't take new files. It runs as the release bot GitHub App (`RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`)
    because only that App may push to the protected branches.
 2. **linux**, **windows**, **macos** and **android** jobs (only on `main`, only when a release was published) build
    from the tag:
@@ -44,7 +46,9 @@ didn't start it:
    - `mothr_<v>_android_arm64-v8a.apk`: `assembleRelease -Pmothr.abis=arm64-v8a
      -Pmothr.versionCode=<run number>`, R8-minified, signed with `ANDROID_KEYSTORE_*` secrets
      (debug key with a warning if they're missing).
-3. **publish** attaches them all to the release.
+3. **publish** attaches them all to the draft, with `SHA256SUMS`, then publishes it and marks it
+   latest. If a build job fails, the draft stays unpublished (users see nothing): re-run the
+   failed jobs and **publish** finishes it.
 4. **sync-dev** (every push to `main`, after the release job) merges `main` into `dev`.
 
 `dev` publishes prereleases (`0.2.0-dev.1`, …) with notes but no binaries, to save storage.
@@ -176,7 +180,9 @@ gh run view <id> --log-failed
 | windows job: `Failed to find fxc.exe` | the runner image lost the Windows SDK; set `GPUI_FXC_PATH` to an `fxc.exe` |
 | `--locked` fails in the linux job | `Cargo.lock` out of date on the branch; run `cargo update -w` and commit |
 | APK can't be installed over the previous one | signed with a different key (missing or rotated `ANDROID_KEYSTORE_*`) |
-| release exists but has no assets | a build job failed after the release job; fix and re-run the failed jobs (`gh run rerun <id> --failed`), `publish` uses `--clobber` |
+| a draft release sits unpublished | a build job (or `publish`) failed; fix and re-run the failed jobs (`gh run rerun <id> --failed`), `publish` uses `--clobber` and then publishes the draft |
+| `HTTP 422: Cannot upload assets to an immutable release` | the release was published before `publish` ran: it wasn't created as a draft (`draftRelease` in `release.config.cjs`, which keys off `GITHUB_REF`). The release is locked and its tag can't be reused; fix the config and ship the next patch version |
+| push to `main`/`dev` started no Release run | the head commit message has a skip-ci marker (a merge commit listing old bot commits can carry one); start it by hand: `gh workflow run release.yml --ref <branch>` |
 
 A failed release job after the tag was pushed leaves a tag without a GitHub release; delete the
 tag (`git push origin :refs/tags/v<x>`) only if no release was published from it, then re-run.
