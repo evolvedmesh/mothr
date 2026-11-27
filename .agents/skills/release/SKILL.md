@@ -52,8 +52,10 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
   4. **sync-dev** merges `main` into `dev` (a normal merge commit, `chore: merge main into dev`)
      as the release bot. `dev` gets the version change and the tag, so the next release branch
      doesn't conflict with `main` on the version lines and git-cliff counts from the new tag. If
-     it doesn't merge cleanly it opens a `main` → `dev` pull request to resolve by hand. Nothing
-     runs on pushes to `dev`, so the merge starts no workflow.
+     it doesn't merge cleanly it pushes `sync/main-into-dev-<sha>` (a copy of `main`) and opens a
+     pull request from it into `dev`: conflicts are resolved on a pull request's head branch, and
+     `main` and `dev` are both protected. Nothing runs on pushes to `dev`, so the merge starts no
+     workflow.
 - **nightly.yml** (03:00 UTC daily, or by hand): if `dev` moved since the last dev build, tags
   `dev` as `v<next>-dev.<n>` (`<next>`: the version the next release would get, or the next patch
   if there's nothing releasable; `<n>` counts up), builds it with that version stamped in (not
@@ -114,8 +116,8 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
   `main` and `dev` share history and the merge back stays clean. Keep the default message.
 - Changes reach `dev` and `main` only through pull requests: admins' ruleset bypass is
   "pull requests only", and the required checks (`rust`, `pr-title`, `pr-checklist`) must pass or
-  be explicitly bypassed in the merge dialog. The release bot pushes `release/*` and `hotfix/*`
-  branches, `v*` tags and sync-dev's merge into `dev`; it never pushes to `main`.
+  be explicitly bypassed in the merge dialog. The release bot pushes `release/*`, `hotfix/*` and
+  `sync/*` branches, `v*` tags and sync-dev's merge into `dev`; it never pushes to `main`.
 - Never write the bracketed skip-ci marker in a commit message or PR title, even quoted: GitHub
   then skips every workflow for that commit, including a pull request's checks.
 - `v*` tags are protected org-wide ("release tags" ruleset): only the release bot and org
@@ -219,7 +221,7 @@ gh run view <id> --log-failed
 | Prepare release: "release/x.y.z already exists" | a release branch is open; merge or close its pull request and delete the branch |
 | Release run: "v… is already released; nothing to release" | the push to `main` didn't change `Cargo.toml`'s version (not a release pull request); expected |
 | push of the tag, a `release/*` branch or sync-dev's merge rejected | the App isn't a bypass actor on the tag/`dev` ruleset, or isn't installed on the repo |
-| sync-dev: "main doesn't merge cleanly into dev" | it opened a `main` → `dev` pull request; resolve the conflict there (merge commit) before the next release |
+| sync-dev: "main doesn't merge cleanly into dev" | it opened a pull request from `sync/main-into-dev-<sha>` into `dev`. Resolve the conflicts on that branch (GitHub's **Resolve conflicts**, or locally `git switch sync/…`, `git merge origin/dev`, push), then merge it into `dev` with a merge commit before the next release. Never resolve them on `main` |
 | `cargoBuildAndroidArm64Release` fails reading `target/release/build/<crate>/<hash>/output` | Gobley 0.3.7 vs Cargo 1.100+'s new build-dir layout; the job pins `RUSTUP_TOOLCHAIN` 1.93.0. Keep it until Gobley supports the new layout |
 | windows job: `Inno Setup … doesn't match its checksum` | the pinned download changed upstream; check the release on jrsoftware/issrc before updating `$InnoSha256` |
 | windows job: `Failed to find fxc.exe` | the runner image lost the Windows SDK; set `GPUI_FXC_PATH` to an `fxc.exe` |

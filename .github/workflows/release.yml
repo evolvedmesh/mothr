@@ -11,7 +11,8 @@ name: Release
 #    release. The repo has immutable releases, so nothing can be added after that. If a build
 #    fails, the draft stays unpublished: re-run the failed jobs and publish finishes it.
 # 4. sync-dev: merge main back into dev, so dev has the new version and tag and the next
-#    release branch merges cleanly. If it doesn't merge cleanly, it opens a pull request.
+#    release branch merges cleanly. If it doesn't merge cleanly, it opens a pull request from
+#    sync/main-into-dev-<sha> (a copy of main) into dev, where the conflicts can be resolved.
 #
 # A push to main that doesn't change the version (nothing to tag) only runs sync-dev.
 # install.sh and the in-app updaters only install files listed in SHA256SUMS.
@@ -179,11 +180,21 @@ jobs:
             fi
             if ! git merge --no-ff --no-edit -m "chore: merge main into dev" origin/main; then
               git merge --abort
-              if [ -z "$(gh pr list --base dev --head main --json number --jq '.[].number')" ]; then
-                gh pr create --base dev --head main --title "chore: merge main into dev" \
-                  --body "main doesn't merge cleanly into dev. Resolve the conflicts here (merge commit, not squash), so the next release branch merges cleanly into main."
+              # Both main and dev are protected, and a pull request's conflicts are resolved on
+              # its head branch, so the pull request comes from a copy of main that can take
+              # the resolution.
+              branch="sync/main-into-dev-$(git rev-parse --short origin/main)"
+              git push origin "origin/main:refs/heads/$branch"
+              if [ -z "$(gh pr list --base dev --head "$branch" --json number --jq '.[].number')" ]; then
+                printf '%s\n' \
+                  "main doesn't merge cleanly into dev. Resolve the conflicts on this branch, then merge it into dev with a merge commit (not a squash), so the next release branch merges cleanly into main." \
+                  "" \
+                  "- On GitHub: **Resolve conflicts** below (it merges dev into \`$branch\` and commits the resolution there)." \
+                  "- Or locally: \`git fetch && git switch $branch && git merge origin/dev\`, fix the conflicts, commit and push." \
+                  > body.md
+                gh pr create --base dev --head "$branch" --title "chore: merge main into dev" --body-file body.md
               fi
-              echo "::warning::main doesn't merge cleanly into dev; opened a pull request to merge it by hand."
+              echo "::warning::main doesn't merge cleanly into dev; opened a pull request from $branch to merge it by hand."
               exit 0
             fi
             if git push origin HEAD:dev; then
