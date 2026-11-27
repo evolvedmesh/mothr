@@ -85,8 +85,9 @@ jobs:
             exit 1
           fi
           branch="$KIND/$version"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            echo "::error::$branch already exists. Finish or delete it first."
+          # Either kind: a hotfix and a release can work out the same version.
+          if open=$(git ls-remote --exit-code --heads origin "release/$version" "hotfix/$version"); then
+            echo "::error::${open##*refs/heads/} already exists. Finish or delete it first."
             exit 1
           fi
           echo "Last release $last; preparing $version on $branch"

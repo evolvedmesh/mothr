@@ -40,11 +40,13 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
     release uses), and `pr-checklist` lets the bot's release pull requests through without the
     local-build boxes.
 - **release.yml** (every push to `main`, or by hand):
-  1. **release**: reads the version from `Cargo.toml`. If `v<version>` is already tagged there's
-     nothing to release (only sync-dev runs). Otherwise it takes the notes from the merged pull
-     request (`commits/<sha>/pulls`), falls back to `git cliff --unreleased`, pushes the tag and
-     creates a **draft** release. Drafts because the repo has immutable releases: once published,
-     a release takes no new files.
+  1. **release**: reads the version from `Cargo.toml`. If `v<version>` is already published
+     there's nothing to release (only sync-dev runs). Otherwise it takes the notes from the merged
+     pull request (`commits/<sha>/pulls`), falls back to git-cliff from the previous stable tag,
+     pushes the tag and creates a **draft** release. Drafts because the repo has immutable
+     releases: once published, a release takes no new files. It picks up where an earlier run
+     stopped: a pushed tag or an unpublished draft is reused, so running Release again (or
+     `gh run rerun <id> --failed`) finishes a half-done release.
   2. **build** (`build.yml`, below) from the tag.
   3. **publish** attaches the files and `SHA256SUMS`, then publishes the draft as latest. If a
      build failed, the draft stays unpublished (users see nothing): re-run the failed jobs and
@@ -55,7 +57,11 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
      it doesn't merge cleanly it pushes `sync/main-into-dev-<sha>` (a copy of `main`) and opens a
      pull request from it into `dev`: conflicts are resolved on a pull request's head branch, and
      `main` and `dev` are both protected. Nothing runs on pushes to `dev`, so the merge starts no
-     workflow.
+     workflow. Then it merges `main` into every open `release/*` and `hotfix/*` branch whose
+     version is above `main`'s (a hotfix shipped while a release was being prepared), keeping
+     that branch's version, as one `chore: merge main into <branch>` commit. A real conflict
+     leaves the branch alone with a warning (merge `main` into it by hand); a branch at or below
+     the new release is flagged to be prepared again.
 - **nightly.yml** (03:00 UTC daily, or by hand): if `dev` moved since the last dev build, tags
   `dev` as `v<next>-dev.<n>` (`<next>`: the version the next release would get, or the next patch
   if there's nothing releasable; `<n>` counts up), builds it with that version stamped in (not
@@ -109,11 +115,15 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
 
 ## Merging
 
-- Feature and fix pull requests target `dev` (or a `hotfix/*` branch). Squash or merge: the
-  version comes from the Conventional Commit messages that land, so a squash's PR title must be
-  one (`pr-title` checks it).
-- Merge release and hotfix pull requests into `main` with a **merge commit**, not a squash, so
-  `main` and `dev` share history and the merge back stays clean. Keep the default message.
+- Feature and fix pull requests target `dev` (or a `release/*` / `hotfix/*` branch) and are
+  **squash-merged**: the PR title (checked by `pr-title`) becomes the one commit git-cliff reads.
+  With a merge commit git-cliff only sees the PR's own commits (the "Merge pull request" subject
+  isn't a Conventional Commit), so "wip" commits would drop the change from the version and the
+  notes.
+- Release and hotfix pull requests into `main` take a **merge commit**, never a squash. A squash
+  cuts `dev`'s commits off from the release tag, so the next release counts them again (a wrong
+  version and repeated notes). Keep the default merge message. `main`'s ruleset should allow
+  merge commits only, and `dev`'s squash only.
 - Changes reach `dev` and `main` only through pull requests: admins' ruleset bypass is
   "pull requests only", and the required checks (`rust`, `pr-title`, `pr-checklist`) must pass or
   be explicitly bypassed in the merge dialog. The release bot pushes `release/*`, `hotfix/*` and
@@ -218,7 +228,10 @@ gh run view <id> --log-failed
 | Symptom | Cause |
 | --- | --- |
 | Prepare release: "dev has no feat, fix or perf commits since v…" | nothing releasable on `dev`; expected. Pass `-f version=x.y.z` to release anyway |
-| Prepare release: "release/x.y.z already exists" | a release branch is open; merge or close its pull request and delete the branch |
+| Prepare release: "release/x.y.z already exists" (or `hotfix/x.y.z`) | a release or hotfix branch with that version is open; merge or close its pull request and delete the branch |
+| sync-dev: "main doesn't merge cleanly into release/x.y.z" | a hotfix and the release branch changed the same lines. `git switch release/x.y.z && git merge origin/main`, keep the branch's version (`scripts/set-version.sh x.y.z` if needed), push |
+| sync-dev: "release/x.y.z isn't above the release on main" | a hotfix took that version or a newer one shipped. Close the pull request, delete the branch, run Prepare release again |
+| the next release repeats already released commits / has a too-high version | the previous release pull request was squash-merged. Edit the notes in the release PR (and pass `-f version=` to Prepare release); set `main` to merge commits only |
 | Release run: "v… is already released; nothing to release" | the push to `main` didn't change `Cargo.toml`'s version (not a release pull request); expected |
 | push of the tag, a `release/*` branch or sync-dev's merge rejected | the App isn't a bypass actor on the tag/`dev` ruleset, or isn't installed on the repo |
 | sync-dev: "main doesn't merge cleanly into dev" | it opened a pull request from `sync/main-into-dev-<sha>` into `dev`. Resolve the conflicts on that branch (GitHub's **Resolve conflicts**, or locally `git switch sync/…`, `git merge origin/dev`, push), then merge it into `dev` with a merge commit before the next release. Never resolve them on `main` |

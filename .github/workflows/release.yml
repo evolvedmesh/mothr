@@ -13,6 +13,10 @@ name: Release
 # 4. sync-dev: merge main back into dev, so dev has the new version and tag and the next
 #    release branch merges cleanly. If it doesn't merge cleanly, it opens a pull request from
 #    sync/main-into-dev-<sha> (a copy of main) into dev, where the conflicts can be resolved.
+#    Then it merges main into open release/hotfix branches (a hotfix shipped meanwhile).
+#
+# Running it again (by hand, or re-running failed jobs) finishes a half-done release: a pushed
+# tag or an unpublished draft is picked up where it was left.
 #
 # A push to main that doesn't change the version (nothing to tag) only runs sync-dev.
 # install.sh and the in-app updaters only install files listed in SHA256SUMS.
@@ -26,8 +30,8 @@ on:
   push:
     branches:
       - main
-  # By hand (Actions → Release → Run workflow, on main), e.g. to finish a release whose run
-  # failed before the tag was pushed.
+  # By hand (Actions → Release → Run workflow, on main): finishes a release an earlier run left
+  # half done (tag pushed, or the draft created but not published), from where it stopped.
   workflow_dispatch:
 
 concurrency:
@@ -57,56 +61,75 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
+      # Picks up where an earlier run stopped: the tag may already be pushed, or the draft
+      # created (a failed build, or a run that died). Only a published release is done.
       - name: Version
         id: version
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           tag="v$version"
           case "$version" in
             *-*) echo "::error::main's Cargo.toml has a prerelease version ($version)."; exit 1 ;;
           esac
-          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+          draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || echo none)
+          tagged=false
+          git rev-parse -q --verify "refs/tags/$tag" >/dev/null && tagged=true
+          if [ "$draft" = false ]; then
             echo "$tag is already released; nothing to release."
             echo "released=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Releasing $tag"
+            echo "Releasing $tag (tag pushed: $tagged, draft: $draft)"
             echo "released=true" >> "$GITHUB_OUTPUT"
           fi
+          # The commit to release: the tag's, if an earlier run pushed it.
+          if [ "$tagged" = true ]; then sha=$(git rev-list -n 1 "$tag"); else sha=$GITHUB_SHA; fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tagged=$tagged" >> "$GITHUB_OUTPUT"
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
 
       - uses: taiki-e/install-action@v2
-        if: steps.version.outputs.released == 'true'
+        if: steps.version.outputs.released == 'true' && steps.version.outputs.draft == 'none'
         with:
           tool: git-cliff@2.14.2
 
       # The notes between the markers in the merged pull request's description, without HTML
-      # comments. prepare-release.yml writes them there for you to edit before merging.
+      # comments. prepare-release.yml writes them there for you to edit before merging. Empty,
+      # git-cliff writes them from the commits since the previous release.
       - name: Release notes
-        if: steps.version.outputs.released == 'true'
+        if: steps.version.outputs.released == 'true' && steps.version.outputs.draft == 'none'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ steps.version.outputs.sha }}
         run: |
-          gh api "repos/${{ github.repository }}/commits/$GITHUB_SHA/pulls" \
+          gh api "repos/${{ github.repository }}/commits/$SHA/pulls" \
             --jq '[.[] | select(.base.ref == "main")][0].body // ""' > body.md
           awk '/<!-- notes:start -->/ { on = 1; next } /<!-- notes:end -->/ { on = 0 } on' body.md \
             | perl -0pe 's/<!--.*?-->//gs' > notes.md
           if ! grep -q '[^[:space:]]' notes.md; then
             echo "The pull request has no release notes; writing them from the commits."
-            git cliff --unreleased --tag "$TAG" --strip all > notes.md
+            prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' --exclude "$TAG" "$SHA" 2>/dev/null || true)
+            git cliff ${prev:+"$prev..$SHA"} --tag "$TAG" --strip all > notes.md
           fi
           cat notes.md
 
       # The tag first (git-cliff and the next release count from it), then the draft on it.
       - name: Tag and create the draft release
-        if: steps.version.outputs.released == 'true'
+        if: steps.version.outputs.released == 'true' && steps.version.outputs.draft == 'none'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ steps.version.outputs.sha }}
+          TAGGED: ${{ steps.version.outputs.tagged }}
         run: |
-          git tag "$TAG" "$GITHUB_SHA"
-          git push origin "refs/tags/$TAG"
+          if [ "$TAGGED" = false ]; then
+            git tag "$TAG" "$SHA"
+            git push origin "refs/tags/$TAG"
+          fi
           gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md
 
   build:
@@ -203,3 +226,46 @@ jobs:
             echo "dev moved during the merge (attempt $attempt); retrying"
           done
           exit 1
+
+      # A hotfix released while a release branch is open: both changed the version lines, so
+      # the release pull request would conflict with main. Merge main into each open release
+      # or hotfix branch, keeping that branch's version: merge with main's version in place
+      # (so only real conflicts can remain), then put the branch's version back, as one
+      # ordinary merge commit.
+      - name: Merge main into open release branches
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git fetch origin main '+refs/heads/release/*:refs/remotes/origin/release/*' \
+            '+refs/heads/hotfix/*:refs/remotes/origin/hotfix/*'
+          main_version=$(git show origin/main:Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+          for ref in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin/release refs/remotes/origin/hotfix); do
+            branch=${ref#origin/}
+            if git merge-base --is-ancestor origin/main "$ref" || git merge-base --is-ancestor "$ref" origin/main; then
+              continue  # already has main, or already merged (released)
+            fi
+            version=$(git show "$ref:Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+            if [ "$(printf '%s\n%s\n' "$version" "$main_version" | sort -V | tail -n 1)" != "$version" ] || \
+               [ "$version" = "$main_version" ]; then
+              echo "::warning::$branch ($version) isn't above the release on main ($main_version). Close its pull request, delete the branch and run Prepare release again."
+              continue
+            fi
+            # A throwaway local commit with main's version; the pushed merge commit's parents
+            # are the branch and main, so it never shows up.
+            git checkout -q --detach "$ref"
+            sh scripts/set-version.sh "$main_version"
+            git commit -q -am "temporary: main's version"
+            if ! git merge -q --no-commit --no-ff origin/main; then
+              git merge --abort
+              echo "::warning::main doesn't merge cleanly into $branch. Merge it there by hand (git switch $branch && git merge origin/main), keeping version $version."
+              git checkout -q --detach origin/main
+              continue
+            fi
+            sh scripts/set-version.sh "$version"
+            git add -A
+            commit=$(git commit-tree "$(git write-tree)" -p "$ref" -p origin/main -m "chore: merge main into $branch")
+            git push origin "$commit:refs/heads/$branch"
+            echo "Merged main into $branch (kept $version)"
+            git reset -q --hard
+            git checkout -q --detach origin/main
+          done
