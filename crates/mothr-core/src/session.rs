@@ -96,12 +96,37 @@ pub struct ModelInfo {
     /// Context window sizes this model can run with; empty = a single fixed size.
     #[serde(default)]
     pub contexts: Vec<ChoiceInfo>,
+    /// Permission modes the agent offers that this model can't run (Claude's auto mode needs
+    /// a model that supports it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_modes: Vec<PermissionMode>,
 }
 
 impl ModelInfo {
     pub fn new(id: impl Into<String>, name: impl Into<String>, description: Option<String>) -> Self {
         Self { id: id.into(), name: name.into(), description, ..Default::default() }
     }
+}
+
+/// The permission modes `agent` offers with `model` (`None`: the agent's default), given the
+/// models it reported. A model missing from the list counts as the agent's "default" entry.
+pub fn permission_modes(agent: AgentKind, models: &[ModelInfo], model: Option<&str>) -> Vec<PermissionMode> {
+    let info = model.and_then(|m| models.iter().find(|x| x.id == m)).or_else(|| models.iter().find(|x| x.id == "default"));
+    let unsupported = info.map(|i| i.unsupported_modes.as_slice()).unwrap_or_default();
+    agent.supported_modes().iter().copied().filter(|m| !unsupported.contains(m)).collect()
+}
+
+/// The reasoning levels and context sizes a chat on `model` (`None`: the agent's default) can
+/// pick from. A model missing from the list (an id the agent reported but didn't offer) counts
+/// as the agent's "default" entry; with no model chosen, the first model that has the setting.
+pub fn model_settings(models: &[ModelInfo], model: Option<&str>) -> (Vec<String>, Vec<ChoiceInfo>) {
+    let chosen = model.and_then(|m| models.iter().find(|x| x.id == m)).or_else(|| models.iter().find(|x| x.id == "default"));
+    let pick = |has: fn(&ModelInfo) -> bool| {
+        chosen.filter(|m| has(m)).or_else(|| if model.is_none() { models.iter().find(|m| has(m)) } else { None })
+    };
+    let efforts = pick(|m| !m.efforts.is_empty()).map(|m| m.efforts.clone()).unwrap_or_default();
+    let contexts = pick(|m| !m.contexts.is_empty()).map(|m| m.contexts.clone()).unwrap_or_default();
+    (efforts, contexts)
 }
 
 /// "xhigh" → "Extra high", for menus.
@@ -265,6 +290,26 @@ impl SessionMeta {
 
     pub fn is_subagent(&self) -> bool {
         self.parent.is_some()
+    }
+
+    /// Mid-turn, starting, or waiting on the user.
+    pub fn is_busy(&self) -> bool {
+        matches!(self.status, SessionStatus::Starting | SessionStatus::Working | SessionStatus::NeedsInput)
+    }
+
+    /// The order chat lists show chats in: busy chats first, newest chat first; then the rest by
+    /// last activity, most recent first.
+    ///
+    /// Every event a chat applies bumps `updated_at`, so ordering busy chats by it makes two
+    /// streaming chats trade the top spot on each reply. Their creation time holds still until
+    /// the turn ends.
+    pub fn list_order(a: &SessionMeta, b: &SessionMeta) -> std::cmp::Ordering {
+        match (a.is_busy(), b.is_busy()) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (true, true) => b.created_at.cmp(&a.created_at).then_with(|| a.id.cmp(&b.id)),
+            (false, false) => b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)),
+        }
     }
 
     pub fn project_name(&self) -> String {
@@ -662,6 +707,11 @@ impl SessionState {
         self.entries.iter().rposition(|e| e.id() == id)
     }
 
+    /// The permission modes this chat can switch to with its current model.
+    pub fn permission_modes(&self) -> Vec<PermissionMode> {
+        permission_modes(self.meta.agent, &self.models, self.meta.model.as_deref())
+    }
+
     pub fn pending_inputs(&self) -> impl Iterator<Item = &Entry> {
         self.entries.iter().filter(|e| e.is_pending_input())
     }
@@ -878,6 +928,68 @@ pub enum SessionCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_fall_back_to_the_default_model() {
+        let mut default = ModelInfo::new("default", "Default", None);
+        default.efforts = vec!["low".into(), "high".into()];
+        let mut opus = ModelInfo::new("opus", "Opus", None);
+        opus.efforts = vec!["low".into(), "high".into(), "max".into()];
+        opus.contexts = vec![ChoiceInfo::new("1m", "1M")];
+        let haiku = ModelInfo::new("haiku", "Haiku", None);
+        let models = vec![default, opus, haiku];
+        // A listed model uses its own settings, even when it has none.
+        assert_eq!(model_settings(&models, Some("opus")), (vec!["low".into(), "high".into(), "max".into()], vec![ChoiceInfo::new("1m", "1M")]));
+        assert_eq!(model_settings(&models, Some("haiku")), (vec![], vec![]));
+        // An id the agent reported but didn't list (a full model name) is its default entry.
+        assert_eq!(model_settings(&models, Some("claude-opus-5-5")).0, vec!["low".to_string(), "high".into()]);
+        // No model: the default entry, else the first model that has the setting.
+        let (efforts, contexts) = model_settings(&models, None);
+        assert_eq!(efforts, vec!["low".to_string(), "high".into()]);
+        assert_eq!(contexts, vec![ChoiceInfo::new("1m", "1M")]);
+    }
+
+    #[test]
+    fn busy_chats_keep_their_places_while_they_stream() {
+        let chat = |status: SessionStatus, created: i64, updated: i64| {
+            let mut m = SessionMeta::new(AgentKind::ClaudeCode, SessionKind::Chat, PathBuf::from("/p"), PermissionMode::Ask);
+            m.status = status;
+            m.created_at = DateTime::from_timestamp(created, 0).unwrap();
+            m.updated_at = DateTime::from_timestamp(updated, 0).unwrap();
+            m
+        };
+        let older = chat(SessionStatus::Working, 100, 900);
+        let newer = chat(SessionStatus::Working, 200, 800);
+        let idle = chat(SessionStatus::Idle, 300, 1000);
+        let mut list = vec![idle.clone(), older.clone(), newer.clone()];
+        list.sort_by(SessionMeta::list_order);
+        assert_eq!(list.iter().map(|m| m.id).collect::<Vec<_>>(), vec![newer.id, older.id, idle.id]);
+        // The older chat replies (its `updated_at` jumps ahead): nothing moves.
+        list[1].updated_at = DateTime::from_timestamp(2000, 0).unwrap();
+        list.sort_by(SessionMeta::list_order);
+        assert_eq!(list.iter().map(|m| m.id).collect::<Vec<_>>(), vec![newer.id, older.id, idle.id]);
+        // Idle chats go by last activity.
+        let recent = chat(SessionStatus::Ended, 50, 1500);
+        list.push(recent.clone());
+        list.sort_by(SessionMeta::list_order);
+        assert_eq!(list.iter().map(|m| m.id).collect::<Vec<_>>(), vec![newer.id, older.id, recent.id, idle.id]);
+    }
+
+    #[test]
+    fn modes_follow_the_chosen_model() {
+        let mut haiku = ModelInfo::new("claude-haiku-4-5", "Haiku 4.5", None);
+        haiku.unsupported_modes = vec![PermissionMode::Auto];
+        let models = vec![ModelInfo::new("default", "Default", None), haiku];
+        let all = AgentKind::ClaudeCode.supported_modes().to_vec();
+        assert_eq!(permission_modes(AgentKind::ClaudeCode, &models, None), all);
+        assert_eq!(permission_modes(AgentKind::ClaudeCode, &models, Some("claude-opus-5-5")), all);
+        let modes = permission_modes(AgentKind::ClaudeCode, &models, Some("claude-haiku-4-5"));
+        assert!(!modes.contains(&PermissionMode::Auto) && modes.contains(&PermissionMode::AllowAll));
+        assert_eq!(PermissionMode::Auto.closest_in(&modes), PermissionMode::AcceptEdits);
+        // Older transcripts have no such field; nothing is left out.
+        let old: ModelInfo = serde_json::from_str(r#"{"id":"x","name":"X","description":null}"#).unwrap();
+        assert!(old.unsupported_modes.is_empty());
+    }
 
     #[test]
     fn extra_projects_are_deduplicated_and_labelled() {

@@ -4,6 +4,8 @@
 //! cargo run -p mothr-remote --example demo            # prints the pairing URL
 //! MOTHR_DEMO_TOKEN=devtoken-devtoken-devtoken cargo run -p mothr-remote --example demo
 //! ```
+//!
+//! With `MOTHR_HOME` set (a temp dir), the Claude chat's picture is written there and served.
 
 use chrono::Utc;
 use mothr_core::*;
@@ -13,6 +15,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, broadcast};
+
+/// The picture in the demo's Claude chat, served from the images folder.
+const DEMO_IMAGE: &str = "demo-chart.png";
 
 /// Terminals with a new screen to send, and the wake-up for the task that sends them.
 type Dirty = Arc<(Mutex<HashSet<TerminalId>>, Notify)>;
@@ -275,6 +280,7 @@ impl HubApi for DemoHub {
                 project("/home/me/projects/api"),
             ],
             terminals: self.terminals.screens(),
+            agent_models: [(AgentKind::ClaudeCode, claude_models())].into(),
             ..Default::default()
         }
     }
@@ -334,6 +340,15 @@ impl HubApi for DemoHub {
                         },
                     ),
                     SessionCommand::SetMode { mode } => this.emit(id, SessionEvent::Mode { mode }),
+                    SessionCommand::SetModel { model } => this.emit(id, SessionEvent::Model { model }),
+                    SessionCommand::SetEffort { effort } => {
+                        let context = this.session(id).and_then(|s| s.meta.context_limit);
+                        this.emit(id, SessionEvent::Options { effort: Some(effort), context });
+                    }
+                    SessionCommand::SetContext { context } => {
+                        let effort = this.session(id).and_then(|s| s.meta.effort);
+                        this.emit(id, SessionEvent::Options { effort, context: Some(context) });
+                    }
                     SessionCommand::RespondPermission {
                         entry_id,
                         option_id,
@@ -522,6 +537,11 @@ fn demo_sessions() -> Vec<SessionState> {
             }
         })
         .collect();
+    // Like Claude Code: the chat reports a full model id that isn't in the list, so its
+    // reasoning levels come from the "default" entry.
+    a.models = claude_models();
+    a.meta.model = Some("claude-opus-5-5".into());
+    a.meta.effort = Some("high".into());
     a.entries = vec![
         Entry::User { id: "u1".into(), text: "Add a remote-control server.\nUse axum.".into(), attachments: vec![], at: Utc::now() , agent_ref: None, prev_ref: None},
         Entry::Thinking { id: "th".into(), text: "The user wants **axum**. Let me check the workspace.".into(), streaming: false },
@@ -534,6 +554,7 @@ fn demo_sessions() -> Vec<SessionState> {
             diffs: vec![FileDiff { path: "src/lib.rs".into(), old_text: Some("fn a() {}\nfn b() {}\nfn c() {}".into()), new_text: "fn a() {}\nfn b() -> u8 { 1 }\nfn c() {}\nfn d() {}".into(), start_line: None }], locations: vec![] }),
         Entry::Tool(ToolCall { id: "t2".into(), name: "Bash".into(), title: "cargo test".into(), kind: ToolKind::Execute, status: ToolStatus::Failed, input: Some("cargo test -p mothr-remote".into()), output: Some("error[E0308]: mismatched types\n  --> src/lib.rs:2:20".into()), diffs: vec![], locations: vec![] }),
         Entry::Assistant { id: "a1".into(), text: "I'll fix the type error. See [axum docs](https://docs.rs/axum) and `Router::new()`.\n\n| step | state |\n|---|---|\n| build | ok |".into(), streaming: false },
+        Entry::Image { id: "img1".into(), path: images_dir().join(DEMO_IMAGE), mime: Some("image/png".into()) },
         Entry::Notice { id: "n1".into(), level: NoticeLevel::Warning, text: "Context window is 76% full".into() },
         Entry::Permission(PermissionRequest { id: "p1".into(), tool_call_id: None, title: "Run `rm -rf target/`".into(), detail: Some("rm -rf target/".into()), kind: ToolKind::Execute, options: vec![
             PermissionOption { id: "allow".into(), label: "Allow once".into(), kind: PermissionOptionKind::AllowOnce },
@@ -619,6 +640,12 @@ async fn main() -> anyhow::Result<()> {
         terminals,
     });
     let _ = HUB.set(hub.clone());
+    // The chart the Claude chat "produced". Only with a throwaway profile: never write into
+    // the real one (without it the chat shows the image's name instead).
+    if std::env::var_os("MOTHR_HOME").is_some() {
+        std::fs::create_dir_all(images_dir())?;
+        std::fs::write(images_dir().join(DEMO_IMAGE), include_bytes!("demo-chart.png"))?;
+    }
     tokio::spawn(hub.clone().terminal_loop(dirty));
     let token = std::env::var("MOTHR_DEMO_TOKEN").unwrap_or_else(|_| generate_token());
     let port = std::env::var("MOTHR_DEMO_PORT")
@@ -641,6 +668,20 @@ async fn main() -> anyhow::Result<()> {
     server.stop().await;
     hub.terminals.close_all();
     Ok(())
+}
+
+/// Claude Code's models in the demo: reasoning levels on most, a choice of context on Opus, and
+/// a small model that can't run auto mode (the mode picker drops it there).
+fn claude_models() -> Vec<ModelInfo> {
+    let efforts: Vec<String> = ["low", "medium", "high", "xhigh", "max"].map(String::from).to_vec();
+    let mut default = ModelInfo::new("default", "Default (Opus)", Some("The agent's own choice".into()));
+    default.efforts = efforts.clone();
+    let mut opus = ModelInfo::new("opus", "Opus", Some("Most capable".into()));
+    opus.efforts = efforts;
+    opus.contexts = vec![ChoiceInfo::new("200k", "200k"), ChoiceInfo::new("1m", "1M")];
+    let mut small = ModelInfo::new("demo-small", "Demo small", Some("Fast, no auto mode".into()));
+    small.unsupported_modes = vec![PermissionMode::Auto];
+    vec![default, opus, small]
 }
 
 /// The folder the demo serves for a project: this repository for "mothr", nothing else.

@@ -32,6 +32,9 @@ struct PendingPermission {
     question: bool,
     /// Set when the question came from Mothr's own MCP tool rather than an ACP request.
     ask: Option<(Vec<Question>, tokio::sync::oneshot::Sender<crate::ask_mcp::Answers>)>,
+    /// For a tool permission: what the tool does and the agent's options, so a mode change can
+    /// answer it.
+    tool: Option<(ToolKind, Vec<(String, PermissionOptionKind)>)>,
 }
 
 struct Driver {
@@ -129,6 +132,7 @@ pub async fn run(
             args.extend(["--context".to_string(), tier.to_string()]);
         }
     let mut cmd = Command::new(&program);
+    mothr_core::process::no_window(cmd.as_std_mut());
     cmd.args(&args)
         .envs(env)
         .current_dir(&spec.cwd)
@@ -549,6 +553,7 @@ impl Driver {
 
     fn apply_mode(&mut self, mode: PermissionMode) {
         self.mode = mode;
+        self.release_allowed();
         // Mothr enforces the policy client-side; also move the agent's own mode if it has one.
         if let Some(id) = policy::match_mode(mode, &self.modes) {
             if self.current_mode_id.as_deref() == Some(id.as_str()) {
@@ -563,6 +568,26 @@ impl Driver {
             }
         } else {
             self.em.emit(SessionEvent::Mode { mode });
+        }
+    }
+
+    /// Mothr's policy answers permission requests as they arrive; one already waiting on the
+    /// user when the mode changes is answered now if the new mode lets it through.
+    fn release_allowed(&mut self) {
+        let mode = self.mode;
+        let allowed: Vec<(EntryId, String)> = self
+            .permissions
+            .iter()
+            .filter_map(|(eid, p)| {
+                let (kind, options) = p.tool.as_ref()?;
+                if policy::decide(mode, *kind) != AutoDecision::Allow {
+                    return None;
+                }
+                Some((eid.clone(), policy::pick_option(AutoDecision::Allow, options)?.to_string()))
+            })
+            .collect();
+        for (entry_id, option_id) in allowed {
+            self.on_command(SessionCommand::RespondPermission { entry_id, option_id });
         }
     }
 
@@ -1348,7 +1373,7 @@ impl Driver {
         let proposed: Vec<FileDiff> = tc["content"].as_array().into_iter().flatten().filter(|c| c["type"] == "diff").map(file_diff).collect();
         let diffs = if proposed.is_empty() { known.map(|k| k.diffs.clone()).unwrap_or_default() } else { proposed };
         let entry_id = new_entry_id();
-        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: false, ask: None });
+        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: false, ask: None, tool: Some((kind, pairs)) });
         self.out(
             &target,
             SessionEvent::Upsert {
@@ -1364,7 +1389,7 @@ impl Driver {
     /// The agent called Mothr's question tool: show a question card and hold the call open.
     fn on_ask(&mut self, req: crate::ask_mcp::AskRequest) {
         let entry_id = new_entry_id();
-        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: Value::Null, question: true, ask: Some((req.questions.clone(), req.reply)) });
+        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: Value::Null, question: true, ask: Some((req.questions.clone(), req.reply)), tool: None });
         self.em.emit(SessionEvent::Upsert { entry: Entry::Question(QuestionRequest { id: entry_id, questions: req.questions, answers: None }) });
     }
 
@@ -1392,7 +1417,7 @@ impl Driver {
                 .unwrap_or_else(|| vec![Question { header: None, question: message.clone(), options: vec![], multi_select: false }]);
         }
         let entry_id = new_entry_id();
-        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: true, ask: None });
+        self.permissions.insert(entry_id.clone(), PendingPermission { rpc_id: id, question: true, ask: None, tool: None });
         self.em.emit(SessionEvent::Upsert { entry: Entry::Question(QuestionRequest { id: entry_id, questions, answers: None }) });
     }
 }

@@ -43,12 +43,29 @@ impl EventEmitter<ChatEvent> for ChatView {}
 /// Placeholder of the free-text answer under every question.
 const OTHER_HINT: &str = "None of these? Type your own answer";
 
+/// How long an entry that arrives while the chat is open takes to rise and fade into place.
+const ENTRY_IN: Duration = Duration::from_millis(260);
+
+/// How streamed agent text comes in: each chunk's words light up a few milliseconds apart and
+/// reach full color over 320 ms (DESIGN.md's slowest step), so a reply flows in instead of
+/// popping onto the screen a chunk at a time.
+fn stream_motion() -> gpui_kit::component::text::TextViewMotion {
+    gpui_kit::component::text::TextViewMotion::default()
+        .with_stream_fade(Duration::from_millis(320))
+        .with_stream_fade_stagger(Duration::from_millis(12))
+        .with_stream_fade_easing(gpui_kit::base::Easing::EaseOut)
+}
+
 pub struct ChatView {
     id: SessionId,
     store: Entity<Store>,
     input: Entity<TextareaState>,
     attachments: Vec<PathBuf>,
     markdown: HashMap<EntryId, (Entity<TextViewState>, usize)>,
+    /// Every entry this view has seen; the ones it has not seen yet arrived since the last frame.
+    known: HashSet<EntryId>,
+    /// Entries that arrived while the chat was open, and when: they ease in ([`ENTRY_IN`]).
+    arrived: HashMap<EntryId, Instant>,
     expanded: HashSet<EntryId>,
     /// Selected answers per question entry: one list per question.
     answers: HashMap<EntryId, Vec<Vec<String>>>,
@@ -141,6 +158,8 @@ impl ChatView {
             input,
             attachments: vec![],
             markdown: HashMap::new(),
+            known: HashSet::new(),
+            arrived: HashMap::new(),
             expanded: HashSet::new(),
             answers: HashMap::new(),
             other_inputs: HashMap::new(),
@@ -160,6 +179,10 @@ impl ChatView {
             change_summary: (0, ChangeSummary::default()),
             _subs: subs,
         };
+        // What is already in the transcript shows as it is; only what arrives later eases in.
+        if let Some(s) = this.store.read(cx).session(id) {
+            this.known = s.entries.iter().map(|e| e.id().to_string()).collect();
+        }
         // Inputs for questions that already exist (e.g. after a restart).
         let pending: Vec<(EntryId, usize)> = this
             .store
@@ -449,7 +472,10 @@ impl ChatView {
     }
 
     /// Keep a markdown state per assistant entry, syncing streamed text incrementally.
-    fn markdown_for(&mut self, id: &str, text: &str, cx: &mut Context<Self>) -> Entity<TextViewState> {
+    ///
+    /// `streamed` text fades in as it arrives, its first chunk included: the state starts empty
+    /// and takes the text as an append, which is what the fade follows.
+    fn markdown_for(&mut self, id: &str, text: &str, streamed: bool, cx: &mut Context<Self>) -> Entity<TextViewState> {
         if let Some((state, len)) = self.markdown.get_mut(id) {
             if *len != text.len() {
                 let state = state.clone();
@@ -465,7 +491,13 @@ impl ChatView {
             return state.clone();
         }
         let t = text.to_string();
-        let state = cx.new(|cx| TextViewState::markdown(&t, cx).selectable(true));
+        let state = if streamed {
+            let state = cx.new(|cx| TextViewState::markdown("", cx).selectable(true).motion(stream_motion()));
+            state.update(cx, |s, cx| s.push_str(&t, cx));
+            state
+        } else {
+            cx.new(|cx| TextViewState::markdown(&t, cx).selectable(true))
+        };
         self.markdown.insert(id.to_string(), (state.clone(), text.len()));
         state
     }
@@ -785,7 +817,7 @@ impl ChatView {
                             .gap_1()
                             .items_end()
                             .child({
-                                let state = self.markdown_for(id, &user_markdown(text), cx);
+                                let state = self.markdown_for(id, &user_markdown(text), false, cx);
                                 div()
                                     .max_w_full()
                                     .min_w_0()
@@ -830,7 +862,7 @@ impl ChatView {
             }
             Entry::Assistant { id, text, streaming } => {
                 let pal = tokens::p(cx);
-                let state = self.markdown_for(id, text, cx);
+                let state = self.markdown_for(id, text, *streaming, cx);
                 let group: SharedString = format!("msg-{id}").into();
                 let copy_text = text.clone();
                 v_flex()
@@ -842,7 +874,7 @@ impl ChatView {
                             .w_full()
                             .text_size(sz(tokens::text::READ))
                             .line_height(relative(tokens::text::READ_LEADING))
-                            .child(TextView::new(&state).selectable(true).stream_fade(true).style(markdown_style(cx))),
+                            .child(TextView::new(&state).selectable(true).motion(stream_motion()).style(markdown_style(cx))),
                     )
                     .when(!*streaming, |d| {
                         d.child(
@@ -1581,6 +1613,12 @@ impl ChatView {
         let weak = cx.entity().downgrade();
         let agent = s.meta.agent;
         let mode = s.meta.permission_mode;
+        // Only what the chat's model can run (Claude's auto mode needs a model with it).
+        let modes = if s.models.is_empty() {
+            permission_modes(agent, &self.store.read(cx).known_models(agent), s.meta.model.as_deref())
+        } else {
+            s.permission_modes()
+        };
         let attachments = self.attachments.clone();
         let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         let has_text = !self.input.read(cx).value().trim().is_empty();
@@ -1772,7 +1810,7 @@ impl ChatView {
                             .tooltip("Attach files or images (drop or paste them too)")
                             .on_click(cx.listener(|this, _, window, cx| this.attach(window, cx))),
                     )
-                    .child(mode_menu("chat-mode", Some(agent), mode, Some(format!("{} — {}", mode.label(), mode.description())), weak, |this: &mut ChatView, m, window, cx| {
+                    .child(mode_menu("chat-mode", modes, mode, Some(format!("{} — {}", mode.label(), mode.description())), weak, |this: &mut ChatView, m, window, cx| {
                         this.dispatch(SessionCommand::SetMode { mode: m }, window, cx);
                     }))
                     .child(div().flex_1())
@@ -1851,6 +1889,18 @@ impl Render for ChatView {
             let Some(full) = self.store.read(cx).session(self.id) else {
                 return div().size_full().child(empty_state("message-square", "Chat not found", "It may have been deleted.", cx)).into_any_element();
             };
+            // New entries land at the end; stop at the first one already seen. A batch larger
+            // than a turn produces at once is a transcript loading, and shows as it is.
+            let now = Instant::now();
+            let fresh: Vec<EntryId> = full.entries.iter().rev().take_while(|e| !self.known.contains(e.id())).map(|e| e.id().to_string()).collect();
+            let animate = fresh.len() <= 8;
+            for id in fresh {
+                if animate {
+                    self.arrived.insert(id.clone(), now);
+                }
+                self.known.insert(id);
+            }
+            self.arrived.retain(|_, at| now.duration_since(*at) < ENTRY_IN);
             let total = full.entries.len();
             let mut start = total.saturating_sub(self.shown);
             // A question or permission waiting on you is never tucked away.
@@ -1935,7 +1985,18 @@ impl Render for ChatView {
                 continue;
             }
             let el = self.render_entry(e, live, cx);
-            transcript = transcript.child(div().id(ElementId::Name(format!("e-{}", e.id()).into())).child(el));
+            // A new entry rises into place as it fades in. Played by hand rather than with
+            // `with_animation`, so the element tree is the same before, during and after.
+            let t = self.arrived.get(e.id()).filter(|_| !cx.reduce_motion()).map(|at| {
+                window.request_animation_frame();
+                ease_out_quint()((at.elapsed().as_secs_f32() / ENTRY_IN.as_secs_f32()).min(1.0))
+            });
+            transcript = transcript.child(
+                div()
+                    .id(ElementId::Name(format!("e-{}", e.id()).into()))
+                    .when_some(t, |d, t| d.relative().top(sz((1.0 - t) * 8.0)).opacity(t))
+                    .child(el),
+            );
         }
         if s.meta.status == SessionStatus::Working {
             let streaming_text = s.entries.last().is_some_and(|e| matches!(e, Entry::Assistant { streaming: true, .. }));

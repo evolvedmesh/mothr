@@ -248,7 +248,7 @@ impl Home {
     fn terminal_dir(&self) -> PathBuf {
         match &self.project {
             Some(p) if !self.general => p.path.clone(),
-            _ => std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default(),
+            _ => mothr_core::config::home_dir(),
         }
     }
 
@@ -598,13 +598,12 @@ pub fn agent_menu<T: 'static>(
 /// description as its tooltip); in Settings it reads as a form control.
 pub fn mode_menu<T: 'static>(
     id: &'static str,
-    agent: Option<AgentKind>,
+    modes: Vec<PermissionMode>,
     mode: PermissionMode,
     chip: Option<String>,
     weak: WeakEntity<T>,
     set: impl Fn(&mut T, PermissionMode, &mut Window, &mut Context<T>) + Clone + 'static,
 ) -> impl IntoElement {
-    let modes: Vec<PermissionMode> = agent.map(|a| a.supported_modes().to_vec()).unwrap_or_else(|| PermissionMode::ALL.to_vec());
     let danger = mode.is_dangerous();
     Button::new(id)
         .ghost()
@@ -661,10 +660,11 @@ impl Render for Home {
         let weak = cx.entity().downgrade();
         let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         let default_mode = self.default_mode(cx);
-        let effective_mode = self.agent.map(|a| default_mode.for_agent(a)).unwrap_or(default_mode);
-        // An agent without the default mode runs in its nearest one; say so on hover.
+        // What the chosen agent and model can run; without the default mode they run its nearest.
+        let modes = self.agent.map(|a| permission_modes(a, &store.known_models(a), self.model.as_deref())).unwrap_or_else(|| PermissionMode::ALL.to_vec());
+        let effective_mode = default_mode.closest_in(&modes);
         let mode_tip = if effective_mode != default_mode {
-            format!("{} — {}. This agent runs it as {}.", default_mode.label(), default_mode.description(), effective_mode.label())
+            format!("{} — {}. This agent and model run it as {}.", default_mode.label(), default_mode.description(), effective_mode.label())
         } else {
             format!("{} — {}", default_mode.label(), default_mode.description())
         };
@@ -775,7 +775,7 @@ impl Render for Home {
                                     .tooltip("Attach files or images (drop or paste them too)")
                                     .on_click(cx.listener(|this, _, _, cx| this.attach(cx))),
                             )
-                            .child(mode_menu("home-mode", None, default_mode, Some(mode_tip), weak.clone(), |h: &mut Home, m, _, cx| h.set_default_mode(m, cx)))
+                            .child(mode_menu("home-mode", modes, default_mode, Some(mode_tip), weak.clone(), |h: &mut Home, m, _, cx| h.set_default_mode(m, cx)))
                             .child(div().flex_1())
                             .child(run_chip),
                     )

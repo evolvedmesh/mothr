@@ -72,10 +72,12 @@ crates/
                     auth, tunnels (Tailscale, Dev Tunnels), QR
   mothr-client      remote-API client exported to Kotlin via UniFFI: model.rs (state +
                     entry_view), views.rs (flat uniffi records), pairing.rs, update.rs
-  mothr-update      updates: newest GitHub release, SHA256SUMS-checked downloads, the Linux
-                    install layout (install.rs); used by the desktop app and mothr-client
+  mothr-update      updates: newest GitHub release, SHA256SUMS-checked downloads, the Linux,
+                    Windows and macOS install layouts (install.rs); used by the desktop app
+                    and mothr-client
 mothr-design/       Mothr's own design system written in its Design DSL (system.json)
-install.sh          the public Linux installer (raw.githubusercontent.com/…/main/install.sh)
+install.sh          the public Linux and macOS installer (raw.githubusercontent.com/…/main/install.sh);
+                    keep it to bash 3.2 and BSD tools (macOS's)
 scripts/            set-version.sh (used by semantic-release)
 .agents/skills/     task skills for agents working on this repo (.claude/skills links here)
 ```
@@ -94,6 +96,15 @@ scripts/            set-version.sh (used by semantic-release)
 - **Capabilities are explicit.** Per-agent features are gated by `AgentKind::supports_*`
   (`supports_edit`, `supports_steering`, `supports_remote_control`) and `supported_modes`.
   Don't branch on the agent kind in the UI for something a capability should say.
+- **Windows is a release target.** Start child processes through
+  `mothr_core::process::no_window` (tokio: `no_window(cmd.as_std_mut())`), or every agent,
+  `git` or probe flashes a console window from the GUI app. Get the home directory from
+  `mothr_core::config::home_dir()`, never `$HOME` (Windows doesn't set it), and gate
+  Unix-only code with `cfg(unix)`.
+- **macOS is a release target too.** The app ships as `Mothr.app` (`apps/desktop/macos/`), so
+  it starts from Launchpad with launchd's minimal `PATH`; agent detection adds the usual bin
+  folders (`detect.rs`). Keyboard shortcuts use `cmd` there (`k!` in `main.rs`). From Linux,
+  macOS-only code can't be compiled; CI's `macos` job lints it (see the `release` skill).
 - **Persisted data stays readable.** Transcripts (`<data>/sessions/<id>.json`) and
   `settings.toml` are serde of the core types. New fields get `#[serde(default)]` (or
   `skip_serializing_if`) so files from older versions still load; see
@@ -133,6 +144,10 @@ cargo clippy --workspace --all-targets        # keep it warning-free
   (in `apps/mobile`), `cargo test --workspace`, and clippy.
 - Debug builds use `opt-level = 1` (dependencies at 3); release uses thin LTO and one codegen
   unit, so `cargo build --release` takes several minutes. Don't use it as an edit loop.
+- Windows code paths compile only for a Windows target. From Linux, check them with
+  `XWIN_ACCEPT_LICENSE=1 cargo xwin clippy --target x86_64-pc-windows-msvc --workspace --all-targets`
+  (CI's `windows` job runs the same, but only on pull requests into `main`); the `release` skill
+  has the Wine recipe.
 - Linux needs the GPUI system libraries: Vulkan, xkbcommon (+x11), wayland, x11-xcb,
   fontconfig, freetype (the release workflow's apt list is the reference).
 - **Mobile** needs JDK 17, the Android SDK and NDK r28. Gotchas:

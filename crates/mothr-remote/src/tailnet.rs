@@ -346,7 +346,9 @@ impl CmdOutput {
 
 /// Run a command, capturing output; kill it after `timeout`.
 async fn run_cmd(program: &Path, args: &[&str], timeout: Duration) -> std::io::Result<CmdOutput> {
-    let mut child = Command::new(program)
+    let mut cmd = Command::new(program);
+    mothr_core::process::no_window(cmd.as_std_mut());
+    let mut child = cmd
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -491,6 +493,7 @@ mod tests {
         assert!(cli_failure(&out("boom")).contains("boom"));
     }
 
+    #[cfg(unix)]
     fn free_port() -> u16 {
         std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
@@ -499,6 +502,7 @@ mod tests {
             .port()
     }
 
+    #[cfg(unix)]
     fn config(program: PathBuf, port: u16) -> TailnetConfig {
         TailnetConfig {
             program: Some(program),

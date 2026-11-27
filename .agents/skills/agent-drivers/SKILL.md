@@ -40,6 +40,9 @@ cargo run -p mothr-agents --example drive -- <agent_id> <cwd> "<prompt>" [model]
 It prints the detected install and every `SessionEvent`. Knobs:
 
 - `DRIVE_PERMISSION=allow|always|reject`: how permission requests are answered (default allow).
+- `DRIVE_SET_MODE=<mode id>` (`allow_all`, `accept_edits`, …): switch to that mode when the
+  first permission request arrives instead of answering it; the driver should answer the
+  requests the new mode allows. Ask for a command the agent asks about (`touch x.txt`).
 - `DRIVE_ANSWER_DELAY=<secs>`: answer late, to exercise timeouts.
 - `DRIVE_RESUME=<agent session id>`: resume a conversation and show its history.
 - `DRIVE_ATTACH=<image>`, `DRIVE_EFFORT=…`, `DRIVE_CONTEXT=…`.

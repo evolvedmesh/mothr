@@ -936,7 +936,9 @@ impl Hub {
             std::fs::create_dir_all(&project)?;
         }
         anyhow::ensure!(project.is_dir(), "{} is not a folder", project.display());
-        let mut meta = SessionMeta::new(agent, kind, project.clone(), mode.for_agent(agent));
+        // The nearest mode the agent runs with this model (Claude's auto needs a model with it).
+        let modes = permission_modes(agent, self.state.read().models.get(&agent).map(Vec::as_slice).unwrap_or_default(), model.as_deref());
+        let mut meta = SessionMeta::new(agent, kind, project.clone(), mode.closest_in(&modes));
         meta.model = model;
         meta.effort = effort.filter(|e| !e.is_empty());
         meta.context_limit = context.filter(|c| !c.is_empty());
@@ -1062,7 +1064,9 @@ impl Hub {
         let (Some(program), Some(hub)) = (program, self.me.upgrade()) else { return };
         self.rt.spawn(async move {
             let excerpt: String = first_message.chars().take(1200).collect();
-            let run = tokio::process::Command::new(&program)
+            let mut cmd = tokio::process::Command::new(&program);
+            mothr_core::process::no_window(cmd.as_std_mut());
+            let run = cmd
                 .args([
                     "-p",
                     &excerpt,

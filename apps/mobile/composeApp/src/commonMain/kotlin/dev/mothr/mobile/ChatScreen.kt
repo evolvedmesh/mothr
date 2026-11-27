@@ -1,7 +1,22 @@
 package dev.mothr.mobile
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -51,6 +66,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.mikepenz.markdown.model.rememberMarkdownState
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -92,7 +111,6 @@ import dev.mothr.mobile.resources.ic_circle_alert
 import dev.mothr.mobile.resources.ic_corner_down_right
 import dev.mothr.mobile.resources.ic_globe
 import dev.mothr.mobile.resources.ic_info
-import dev.mothr.mobile.resources.ic_layers
 import dev.mothr.mobile.resources.ic_list_checks
 import dev.mothr.mobile.resources.ic_message_circle_question_mark
 import dev.mothr.mobile.resources.ic_pencil
@@ -255,7 +273,11 @@ private fun Transcript(model: AppModel, chat: ChatDetail) {
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
             ) {
-                items(entries.asReversed(), key = { entryId(it) }) { e -> EntryItem(model, chat, e) }
+                items(entries.asReversed(), key = { entryId(it) }) { e ->
+                    // What arrives while the chat is open fades in; nothing slides, since the newest
+                    // entry grows as it streams and the ones above would trail it.
+                    Box(Modifier.animateItem(fadeInSpec = tween(260), placementSpec = null, fadeOutSpec = null)) { EntryItem(model, chat, e) }
+                }
             }
         }
         AnimatedVisibility(
@@ -285,28 +307,31 @@ private fun entryId(e: EntryView): String = when (e) {
     is EntryView.Permission -> e.id
     is EntryView.Question -> e.id
     is EntryView.Notice -> e.id
+    is EntryView.Image -> e.id
     is EntryView.TurnEnd -> e.id
 }
 
 @Composable
 private fun EntryItem(model: AppModel, chat: ChatDetail, e: EntryView) {
     when (e) {
-        is EntryView.User -> Row(Modifier.fillMaxWidth().padding(start = 44.dp), horizontalArrangement = Arrangement.End) {
-            Box(
+        is EntryView.User -> Column(
+            Modifier.fillMaxWidth().padding(start = 44.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            e.images.forEach { ChatImage(model, it, "Attached image", maxWidth = 220.dp) }
+            if (e.text.isNotEmpty() || e.images.isEmpty()) Box(
                 Modifier.clip(Radius.xl).background(pal.surfaceHover).padding(horizontal = 15.dp, vertical = 11.dp),
             ) { Text(e.text, style = type.reading) }
         }
-        is EntryView.Assistant -> MarkdownText(e.text)
+        is EntryView.Assistant -> MarkdownText(revealed(e.id, e.text, e.streaming), Modifier.animateContentSize(tween(200)))
         is EntryView.Thinking -> Thinking(e)
         is EntryView.Tool -> ToolCard(e)
         is EntryView.Plan -> PlanCard(e)
         is EntryView.Permission -> PermissionCard(model, chat, e)
         is EntryView.Question -> QuestionCard(e)
-        is EntryView.Notice -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-            val color = when (e.level) { "error" -> pal.danger; "warning" -> pal.warning; else -> pal.textMuted }
-            Ico(if (e.level == "info") Res.drawable.ic_info else Res.drawable.ic_circle_alert, tint = color, size = 16.dp)
-            Text(e.text, style = type.body.copy(color = color))
-        }
+        is EntryView.Notice -> Notice(e.level, e.text)
+        is EntryView.Image -> ChatImage(model, e.name, e.label)
         is EntryView.TurnEnd -> if (e.summary.isNotEmpty()) {
             Text(e.summary, style = type.caption.copy(color = pal.textFaint), modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         }
@@ -314,11 +339,127 @@ private fun EntryItem(model: AppModel, chat: ChatDetail, e: EntryView) {
 }
 
 @Composable
-fun MarkdownText(text: String) {
+private fun Notice(level: String, text: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+        val color = when (level) { "error" -> pal.danger; "warning" -> pal.warning; else -> pal.textMuted }
+        Ico(if (level == "info") Res.drawable.ic_info else Res.drawable.ic_circle_alert, tint = color, size = 16.dp)
+        Text(text, style = type.body.copy(color = color))
+    }
+}
+
+private sealed interface Pic {
+    data object Loading : Pic
+    data object Missing : Pic
+    class Ready(val bitmap: ImageBitmap) : Pic
+}
+
+/**
+ * A picture in the transcript, fetched from the desktop by its stored [name]. Very tall or wide
+ * ones are cropped to a sane shape here; tapping opens the whole picture full screen.
+ */
+@Composable
+private fun ChatImage(model: AppModel, name: String?, label: String, maxWidth: Dp = 320.dp) {
+    val pic by produceState<Pic>(Pic.Loading, name, model.current) {
+        value = name?.let { model.image(it) }?.let { Pic.Ready(it) } ?: Pic.Missing
+    }
+    var viewing by remember { mutableStateOf(false) }
+    when (val p = pic) {
+        Pic.Loading -> Box(Modifier.size(width = maxWidth * 0.6f, height = maxWidth * 0.45f).clip(Radius.lg).background(pal.surfaceHover))
+        Pic.Missing -> Notice("info", label)
+        is Pic.Ready -> {
+            val aspect = (p.bitmap.width.toFloat() / p.bitmap.height.coerceAtLeast(1)).coerceIn(0.6f, 2.4f)
+            Image(
+                p.bitmap,
+                contentDescription = label,
+                contentScale = ContentScale.Crop,
+                alignment = Alignment.TopCenter,
+                modifier = Modifier.widthIn(max = maxWidth).fillMaxWidth().aspectRatio(aspect)
+                    .clip(Radius.lg).border(1.dp, pal.border, Radius.lg).tap(shape = Radius.lg) { viewing = true },
+            )
+            if (viewing) ImageViewer(p.bitmap, label) { viewing = false }
+        }
+    }
+}
+
+/** The whole picture on black: pinch or double-tap to zoom, drag to pan, tap to close. */
+@Composable
+private fun ImageViewer(bitmap: ImageBitmap, label: String, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        var scale by remember { mutableStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+        var size by remember { mutableStateOf(IntSize.Zero) }
+        // Keep the zoomed picture over the screen: it can pan at most its overflow.
+        fun clamp(o: Offset, s: Float): Offset {
+            val maxX = size.width * (s - 1f) / 2f
+            val maxY = size.height * (s - 1f) / 2f
+            return Offset(o.x.coerceIn(-maxX, maxX), o.y.coerceIn(-maxY, maxY))
+        }
+        Box(
+            Modifier.fillMaxSize().background(Color.Black).onSizeChanged { size = it }
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = { if (scale > 1f) { scale = 1f; offset = Offset.Zero } else scale = 2.5f },
+                        onTap = { if (scale <= 1f) onDismiss() },
+                    )
+                }
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 6f)
+                        offset = clamp(offset + pan, scale)
+                    }
+                },
+        ) {
+            Image(
+                bitmap,
+                contentDescription = label,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offset.x
+                    translationY = offset.y
+                },
+            )
+            Box(Modifier.align(Alignment.TopEnd).windowInsetsPadding(WindowInsets.statusBars).padding(8.dp)) {
+                IconBtn(Res.drawable.ic_x, tint = Color.White, bg = Color.Black.copy(alpha = 0.45f), onClick = onDismiss)
+            }
+        }
+    }
+}
+
+/**
+ * Streamed text as it shows this frame. An agent's text lands a dozen words at a time; revealing
+ * each chunk word by word over about a quarter of a second reads as writing, not popping in.
+ * Text that is already there when the entry first shows (an older message) shows at once.
+ */
+@Composable
+private fun revealed(id: String, text: String, streaming: Boolean): String {
+    var shown by rememberSaveable(id) { mutableIntStateOf(if (streaming) 0 else text.length) }
+    LaunchedEffect(id, text) {
+        while (shown < text.length) {
+            delay(REVEAL_TICK_MS)
+            // Close what is left in REVEAL_STEPS ticks, however large, and end on a word.
+            var next = minOf(text.length, shown + maxOf(4, (text.length - shown) / REVEAL_STEPS))
+            while (next < text.length && !text[next].isWhitespace()) next++
+            shown = next
+        }
+    }
+    return if (shown >= text.length) text else text.substring(0, shown)
+}
+
+private const val REVEAL_TICK_MS = 32L
+private const val REVEAL_STEPS = 8
+
+@Composable
+fun MarkdownText(text: String, modifier: Modifier = Modifier) {
     val p = pal
     val t = type
+    // Keep the last render while new text parses, or every streamed chunk blanks the message
+    // for a frame.
+    val state = rememberMarkdownState(text, retainState = true)
     Markdown(
-        content = text,
+        state,
+        modifier = modifier,
         colors = markdownColor(text = p.text, codeBackground = p.codeBg, inlineCodeBackground = p.surfaceHover, dividerColor = p.border),
         typography = markdownTypography(
             h1 = t.title, h2 = t.title, h3 = t.heading, h4 = t.heading, h5 = t.label, h6 = t.label,
@@ -714,52 +855,49 @@ private fun ModeMenu(model: AppModel, chat: ChatDetail) {
     }
 }
 
-private enum class ChatSheet { Model, Effort, Context }
-
-/** The model, reasoning and context of a running chat, each only when the agent offers it. */
+/**
+ * The model, reasoning and context of a running chat behind one chip. Reasoning comes from the
+ * chat's model, or the agent's default entry when the model isn't one it listed.
+ */
 @Composable
 private fun ChatSettings(model: AppModel, chat: ChatDetail) {
-    var sheet by remember { mutableStateOf<ChatSheet?>(null) }
+    if (chat.models.isEmpty()) return
+    var open by remember { mutableStateOf(false) }
     val id = chat.summary.id
-    val current = chat.models.firstOrNull { it.id == chat.model }
-    if (chat.models.isNotEmpty()) {
-        SettingChip(Res.drawable.ic_sparkles, current?.name ?: chat.model ?: "Model") { sheet = ChatSheet.Model }
-    }
-    val efforts = current?.efforts.orEmpty()
-    if (efforts.isNotEmpty()) {
-        SettingChip(Res.drawable.ic_brain, efforts.firstOrNull { it.id == chat.effort }?.label ?: "Reasoning") { sheet = ChatSheet.Effort }
-    }
-    val contexts = current?.contexts.orEmpty()
-    if (contexts.isNotEmpty()) {
-        SettingChip(Res.drawable.ic_layers, contexts.firstOrNull { it.id == chat.contextLimit }?.label ?: "Context") { sheet = ChatSheet.Context }
-    }
-    when (sheet) {
-        ChatSheet.Model -> ModelPickerSheet(chat.models, chat.model, onDismiss = { sheet = null }) { m ->
-            sheet = null
-            if (m != null && m != chat.model) model.act { setModel(id, m) }
-        }
-        ChatSheet.Effort -> ChoicePickerSheet("Reasoning", efforts, chat.effort, onDismiss = { sheet = null }) { e ->
-            sheet = null
-            if (e != null && e != chat.effort) model.act { setEffort(id, e) }
-        }
-        ChatSheet.Context -> ChoicePickerSheet("Context", contexts, chat.contextLimit, onDismiss = { sheet = null }) { c ->
-            sheet = null
+    val name = chat.models.firstOrNull { it.id == chat.model }?.name ?: chat.model ?: "Default model"
+    val label = listOfNotNull(
+        name,
+        chat.efforts.firstOrNull { it.id == chat.effort }?.label,
+        chat.contexts.firstOrNull { it.id == chat.contextLimit }?.label,
+    ).joinToString(" · ")
+    SettingChip(Res.drawable.ic_sparkles, label, maxWidth = 190.dp) { open = true }
+    if (open) {
+        RunSettingsSheet(
+            models = chat.models,
+            model = chat.model,
+            efforts = chat.efforts,
+            effort = chat.effort,
+            contexts = chat.contexts,
+            context = chat.contextLimit,
+            allowDefault = false,
+            onDismiss = { open = false },
+            onModel = { m -> if (m != null && m != chat.model) model.act { setModel(id, m) } },
+            onEffort = { e -> if (e != null && e != chat.effort) model.act { setEffort(id, e) } },
             // The desktop restarts the agent for this and refuses mid-turn; act() shows why.
-            if (c != null && c != chat.contextLimit) model.act { setContext(id, c) }
-        }
-        null -> {}
+            onContext = { c -> if (c != null && c != chat.contextLimit) model.act { setContext(id, c) } },
+        )
     }
 }
 
 @Composable
-private fun SettingChip(icon: DrawableResource, label: String, onClick: () -> Unit) {
+private fun SettingChip(icon: DrawableResource, label: String, maxWidth: Dp = 110.dp, onClick: () -> Unit) {
     Row(
         Modifier.clip(Radius.full).tap(shape = Radius.full, onClick = onClick).padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         Ico(icon, size = 15.dp, tint = pal.textMuted)
-        Text(label, style = type.caption.copy(color = pal.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 110.dp))
+        Text(label, style = type.caption.copy(color = pal.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = maxWidth))
         Ico(Res.drawable.ic_chevron_down, size = 13.dp, tint = pal.textFaint)
     }
 }

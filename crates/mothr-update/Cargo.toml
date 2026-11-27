@@ -3,7 +3,7 @@ name = "mothr-update"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Mothr's updates: the newest GitHub release, checksum-verified downloads, and the Linux install layout."
+description = "Mothr's updates: the newest GitHub release, checksum-verified downloads, and the Linux, Windows and macOS install layouts."
 
 [dependencies]
 anyhow.workspace = true
@@ -15,6 +15,12 @@ tracing.workspace = true
 semver = "1"
 sha2 = "0.10"
 hex = "0.4"
+# Unpacks the Windows release zip when updating.
+zip = { version = "9.8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
+
+[target."cfg(windows)".dependencies]
+windows-registry = "0.6"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }

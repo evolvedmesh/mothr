@@ -80,6 +80,15 @@ pub struct ModelOption {
     pub efforts: Vec<ChoiceOption>,
     /// Context window sizes this model can run with; empty when it has one fixed size.
     pub contexts: Vec<ChoiceOption>,
+    /// Ids of the agent's permission modes this model can't run.
+    pub unsupported_modes: Vec<String>,
+}
+
+/// What a new chat on one model can set beside it.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ModelSettings {
+    pub efforts: Vec<ChoiceOption>,
+    pub contexts: Vec<ChoiceOption>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -135,7 +144,8 @@ pub struct QuestionView {
 /// One transcript item.
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum EntryView {
-    User { id: String, text: String, at_ms: i64 },
+    /// `images`: attached pictures Mothr stored, by file name ([`crate::MothrClient::image`]).
+    User { id: String, text: String, images: Vec<String>, at_ms: i64 },
     Assistant { id: String, text: String, streaming: bool },
     Thinking { id: String, text: String, streaming: bool },
     Tool {
@@ -166,6 +176,9 @@ pub enum EntryView {
         answers: Option<Vec<Vec<String>>>,
     },
     Notice { id: String, level: String, text: String },
+    /// A picture the agent produced. `name` is the stored file to fetch with
+    /// [`crate::MothrClient::image`]; None when it lives outside Mothr's images folder.
+    Image { id: String, name: Option<String>, label: String },
     TurnEnd { id: String, summary: String },
 }
 
@@ -176,6 +189,10 @@ pub struct ChatDetail {
     pub modes: Vec<ModeOption>,
     pub model: Option<String>,
     pub models: Vec<ModelOption>,
+    /// Reasoning levels the chat's model accepts (its listed entry, else the agent's default).
+    pub efforts: Vec<ChoiceOption>,
+    /// Context window sizes the chat's model can run with, by the same rule.
+    pub contexts: Vec<ChoiceOption>,
     /// The reasoning effort the chat runs with, a [`ChoiceOption::id`]; None = the agent's default.
     pub effort: Option<String>,
     /// The context window the chat runs with, a [`ChoiceOption::id`]; None = the agent's default.

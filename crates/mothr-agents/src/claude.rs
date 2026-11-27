@@ -1,5 +1,6 @@
 //! Claude Code driver over the native `--input-format stream-json` control protocol.
 
+use crate::policy::{self, AutoDecision};
 use crate::{edits, summarize_input, CommandTx, Emitter, OutputTx, SessionSpec};
 use serde_json::{json, Value};
 use mothr_core::*;
@@ -101,6 +102,7 @@ struct Driver {
 pub async fn run(program: PathBuf, spec: SessionSpec, mut commands: mpsc::UnboundedReceiver<SessionCommand>, out: OutputTx) {
     let em = Emitter::new(spec.id, out);
     let mut cmd = Command::new(&program);
+    mothr_core::process::no_window(cmd.as_std_mut());
     cmd.args([
         "-p",
         "--input-format",
@@ -405,8 +407,7 @@ impl Driver {
             "allow_always" => {
                 // A suggestion can switch the session's mode ("accept all edits"): show it.
                 if let Some(mode) = suggested_mode(&inc.suggestions) {
-                    self.mode = mode;
-                    self.out(&None, SessionEvent::Mode { mode });
+                    self.mode_changed(mode);
                 }
                 json!({"behavior": "allow", "updatedInput": inc.input, "updatedPermissions": inc.suggestions})
             }
@@ -423,6 +424,24 @@ impl Driver {
         };
         self.respond(&inc.request_id, response);
         self.out(&inc.target, SessionEvent::Resolved { entry_id, choice: Some(option_id), answers: None });
+    }
+
+    /// The session's mode changed. Claude Code applies it to the next tool call, but a request
+    /// already waiting on the user stays open; answer the ones the new mode lets through, as
+    /// Claude Code would have.
+    fn mode_changed(&mut self, mode: PermissionMode) {
+        self.mode = mode;
+        self.em.emit(SessionEvent::Mode { mode });
+        let allowed: Vec<EntryId> = self
+            .incoming
+            .iter()
+            .filter(|(_, i)| i.questions.is_empty() && !matches!(i.tool_name.as_str(), "AskUserQuestion" | "ExitPlanMode"))
+            .filter(|(_, i)| policy::decide(mode, ToolKind::from_tool_name(&i.tool_name)) == AutoDecision::Allow)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in allowed {
+            self.resolve_permission(id, "allow".into());
+        }
     }
 
     // ---------------------------------------------------------------- inbound
@@ -489,6 +508,10 @@ impl Driver {
                                 if supports_effort {
                                     info.contexts = vec![ChoiceInfo::new("1m", "1M"), ChoiceInfo::new("200k", "200k")];
                                 }
+                                // Claude Code refuses auto mode on a model without it.
+                                if !m["supportsAutoMode"].as_bool().unwrap_or(false) {
+                                    info.unsupported_modes = vec![PermissionMode::Auto];
+                                }
                                 Some(info)
                             })
                             .collect()
@@ -523,8 +546,7 @@ impl Driver {
             }
             Some(Pending::SetMode(m)) => {
                 if ok {
-                    self.mode = m;
-                    self.em.emit(SessionEvent::Mode { mode: m });
+                    self.mode_changed(m);
                 } else {
                     self.em.notice(NoticeLevel::Warning, format!("Couldn't switch to {}: {}", m.label(), err.unwrap_or_default()));
                 }
@@ -683,6 +705,11 @@ impl Driver {
                 if v["status"] == "requesting" {
                     self.set_working(true);
                 }
+                // Claude Code reports every mode change, its own included (leaving plan mode).
+                if let Some(m) = v["permissionMode"].as_str().and_then(mode_from_claude)
+                    && m != self.mode {
+                        self.mode_changed(m);
+                    }
             }
             "task_started" => {
                 let (Some(task), Some(tu)) = (v["task_id"].as_str(), v["tool_use_id"].as_str()) else { return };

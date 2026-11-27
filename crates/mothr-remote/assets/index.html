@@ -713,8 +713,15 @@ function showUsage() {
 }
 
 /* ======================= session list ======================= */
+// Mirrors SessionMeta::list_order: busy chats by creation (every event bumps updated_at, so
+// two streaming chats would trade places on each reply), then the rest by last activity.
+const isBusy = (m) => ['starting', 'working', 'needs_input'].includes(m.status.state);
 function sortedSessions() {
-  return [...S.sessions.values()].sort((a, b) => ts(b.meta.updated_at) - ts(a.meta.updated_at));
+  return [...S.sessions.values()].sort((a, b) => {
+    const x = a.meta, y = b.meta, bx = isBusy(x), by = isBusy(y);
+    if (bx !== by) return bx ? -1 : 1;
+    return bx ? ts(y.created_at) - ts(x.created_at) : ts(y.updated_at) - ts(x.updated_at);
+  });
 }
 function renderList() {
   const all = sortedSessions(), archived = all.filter((s) => s.meta.archived).length;
@@ -801,6 +808,12 @@ function route() {
 }
 window.addEventListener('hashchange', route);
 function cur() { return S.current ? S.sessions.get(S.current) : null; }
+/** The agent's modes less those the chat's model can't run (mirrors `permission_modes` in session.rs). */
+function chatModes(s) {
+  const ms = s.models || [], info = ms.find((x) => x.id === s.meta.model) || ms.find((x) => x.id === 'default');
+  const no = (info && info.unsupported_modes) || [];
+  return agentOf(s.meta.agent).modes.filter((x) => !no.includes(x));
+}
 function renderChrome() {
   const s = cur();
   if (!s) return;
@@ -809,7 +822,7 @@ function renderChrome() {
   $('#shead').innerHTML = `<button class="iconbtn back" data-act="back" aria-label="Back">${ic('back')}</button>${badge(m.agent, 's', st)}
     <div class="t" data-act="m-rename" data-sid="${m.id}"><div class="t1">${esc(m.title)}</div><div class="t2">${esc(projectName(m.project))}${m.model ? ' · ' + esc(m.model) : ''} · <span class="st-label ${st}">${esc(statusTxt)}</span></div></div>
     ${termButton(m.id)}<button class="iconbtn" data-act="menu" data-sid="${m.id}" aria-label="Actions">${ic('more')}</button>`;
-  const sel = $('#mode'), modes = a.modes.includes(m.permission_mode) ? a.modes : a.modes.concat([m.permission_mode]);
+  const sel = $('#mode'), offered = chatModes(s), modes = offered.includes(m.permission_mode) ? offered : offered.concat([m.permission_mode]);
   const opts = modes.map((x) => `<option value="${x}"${x === m.permission_mode ? ' selected' : ''}>${esc(MODES[x] || x)}</option>`).join('');
   if (sel.dataset.html !== opts) { sel.innerHTML = opts; sel.dataset.html = opts; }
   sel.value = m.permission_mode;

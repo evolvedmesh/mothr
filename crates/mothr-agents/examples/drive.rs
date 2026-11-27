@@ -1,5 +1,7 @@
 //! Headless driver smoke test: `cargo run -p mothr-agents --example drive -- <agent_id> <cwd> "<prompt>" [model]`
 //! `DRIVE_PERMISSION=allow|always|reject` picks how permission requests are answered (default allow).
+//! `DRIVE_SET_MODE=<mode id>` switches to that mode when the first permission request arrives,
+//! instead of answering it; the driver should then answer the requests the new mode allows.
 use mothr_agents::*;
 use mothr_core::*;
 
@@ -25,6 +27,7 @@ async fn main() {
     let cmd = spawn(&transport, spec, out_tx).unwrap();
     cmd.send(SessionCommand::Prompt { text: args[3].clone(), attachments: std::env::var("DRIVE_ATTACH").ok().map(|p| vec![Attachment { path: p.into(), mime: Some("image/png".into()) }]).unwrap_or_default(), delivery: Default::default()}).unwrap();
     let mut prompted = true;
+    let mut set_mode = std::env::var("DRIVE_SET_MODE").ok().map(|m| PermissionMode::from_id(&m).expect("mode id"));
     while let Some(o) = out_rx.recv().await {
         match o {
             DriverOutput::Event(_, e) => {
@@ -33,7 +36,13 @@ async fn main() {
                     other => println!("EVENT {}", serde_json::to_string(other).unwrap().chars().take(300).collect::<String>()),
                 }
                 state.apply(&e);
-                if let SessionEvent::Upsert { entry: Entry::Permission(p) } = &e {
+                if let SessionEvent::Upsert { entry: Entry::Permission(p) } = &e
+                    && p.resolved.is_none()
+                    && let Some(mode) = set_mode.take() {
+                    println!("SET MODE {mode:?} with the request open");
+                    cmd.send(SessionCommand::SetMode { mode }).unwrap();
+                } else if let SessionEvent::Upsert { entry: Entry::Permission(p) } = &e
+                    && p.resolved.is_none() {
                     for d in &p.diffs {
                         println!("DIFF line {:?} {:?}\n{}", d.start_line, d.stats(), unified_patch("file", &[d]));
                     }

@@ -1112,6 +1112,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "constant_time_eq"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "144e7f1de087984240b7816d47f698b414979faa6f40839c5b86d6bd47db57b7"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3989,7 +3998,7 @@ dependencies = [
 
 [[package]]
 name = "mothr-agents"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4006,7 +4015,7 @@ dependencies = [
 
 [[package]]
 name = "mothr-app"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4029,7 +4038,7 @@ dependencies = [
 
 [[package]]
 name = "mothr-client"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4053,7 +4062,7 @@ dependencies = [
 
 [[package]]
 name = "mothr-core"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4070,7 +4079,7 @@ dependencies = [
 
 [[package]]
 name = "mothr-design"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4083,7 +4092,7 @@ dependencies = [
 
 [[package]]
 name = "mothr-hub"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4103,7 +4112,7 @@ dependencies = [
 
 [[package]]
 name = "mothr-projects"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4120,7 +4129,7 @@ dependencies = [
 
 [[package]]
 name = "mothr-remote"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -4144,7 +4153,7 @@ dependencies = [
 
 [[package]]
 name = "mothr-skills"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4162,7 +4171,7 @@ dependencies = [
 
 [[package]]
 name = "mothr-terminal"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -4174,7 +4183,7 @@ dependencies = [
 
 [[package]]
 name = "mothr-update"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "anyhow",
  "hex",
@@ -4185,11 +4194,14 @@ dependencies = [
  "sha2 0.10.9",
  "tokio",
  "tracing",
+ "windows-registry 0.6.1",
+ "windows-sys 0.61.2",
+ "zip",
 ]
 
 [[package]]
 name = "mothr-usage"
-version = "0.1.0"
+version = "0.2.0-dev.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4293,6 +4305,18 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
+name = "nix"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77730ed34f01f4990cb2ea67fec715ecebc6fab9a6396cf83c5529b13f581bdc"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
 
 [[package]]
 name = "no_std_io2"
@@ -7443,6 +7467,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-path"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9420,6 +9450,25 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
+]
+
+[[package]]
+name = "zip"
+version = "9.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d8dbe089cf6b0448b78f5fc50139ab5aaa40d08ac07cdc1baf2c13add35fcce"
+dependencies = [
+ "constant_time_eq",
+ "crc32fast",
+ "flate2",
+ "getrandom 0.4.3",
+ "indexmap",
+ "libc",
+ "memchr",
+ "nix",
+ "typed-path",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]

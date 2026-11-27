@@ -87,6 +87,12 @@ fn wait_until(client: &MothrClient, what: &str, mut ok: impl FnMut(&MothrClient)
 
 #[test]
 fn pairs_streams_and_sends_commands() {
+    // Images are served from the profile's images folder; keep it throwaway.
+    let home = std::env::temp_dir().join(format!("mothr-client-test-{}", uuid::Uuid::new_v4()));
+    // SAFETY: the only test in this binary, set before any thread reads the environment.
+    unsafe { std::env::set_var("MOTHR_HOME", &home) };
+    std::fs::create_dir_all(images_dir()).unwrap();
+    std::fs::write(images_dir().join("shot.png"), b"\x89PNG fake").unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let hub = FakeHub::new();
     let token = generate_token();
@@ -112,6 +118,15 @@ fn pairs_streams_and_sends_commands() {
         c.chat(id.to_string()).is_some_and(|d| matches!(d.entries.last(), Some(EntryView::Assistant { text, .. }) if text == "Hi there"))
     });
 
+    // A picture the agent produced: the phone fetches it by name.
+    let path = images_dir().join("shot.png");
+    let _ = hub.tx.send(HubEvent::Session { id, event: SessionEvent::Upsert { entry: Entry::Image { id: "img".into(), path, mime: Some("image/png".into()) } } });
+    wait_until(&client, "image entry", |c| {
+        c.chat(id.to_string()).is_some_and(|d| matches!(d.entries.last(), Some(EntryView::Image { name: Some(n), .. }) if n == "shot.png"))
+    });
+    assert_eq!(client.image("shot.png".into()).unwrap(), b"\x89PNG fake");
+    assert!(matches!(client.image("gone.png".into()), Err(ClientError::Rejected { .. })));
+
     // Commands reach the hub as AppCommands.
     client.send(id.to_string(), "hello".into(), Delivery::Steer).unwrap();
     let new_id = client.new_chat("copilot".into(), String::new(), "plan".into(), Some("claude-opus-5.5".into()), Some("high".into()), Some("long_context".into()), Some("hi".into()), false).unwrap();
@@ -119,6 +134,10 @@ fn pairs_streams_and_sends_commands() {
     let hits = client.search_projects("web".into()).unwrap();
     assert_eq!(hits[0].display_path, "~/web");
     assert_eq!(client.find_projects("web".into(), 500).unwrap()[0].name, "web");
+    // The mode changes mid-chat; the chat shows it once the agent has switched.
+    client.set_mode(id.to_string(), "allow_all".into()).unwrap();
+    let _ = hub.tx.send(HubEvent::Session { id, event: SessionEvent::Mode { mode: PermissionMode::AllowAll } });
+    wait_until(&client, "mode switched", |c| c.chat(id.to_string()).is_some_and(|d| d.mode.id == "allow_all" && d.mode.dangerous));
     {
         let d = hub.dispatched.lock().unwrap();
         assert!(matches!(&d[0], AppCommand::Session { command: SessionCommand::Prompt { delivery: mothr_core::Delivery::Steer, .. }, .. }));
@@ -127,6 +146,7 @@ fn pairs_streams_and_sends_commands() {
             AppCommand::NewSession { agent: AgentKind::Copilot, mode: PermissionMode::Plan, model: Some(m), effort: Some(e), context: Some(c), .. }
                 if m == "claude-opus-5.5" && e == "high" && c == "long_context"
         ));
+        assert!(matches!(&d[2], AppCommand::Session { id: s, command: SessionCommand::SetMode { mode: PermissionMode::AllowAll } } if *s == id));
     }
     assert!(matches!(client.send(id.to_string(), "  ".into(), Delivery::Normal), Err(ClientError::Invalid { .. })));
 
@@ -152,4 +172,5 @@ fn pairs_streams_and_sends_commands() {
 
     drop(client);
     rt.block_on(server.stop());
+    let _ = std::fs::remove_dir_all(home);
 }

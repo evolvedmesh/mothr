@@ -109,7 +109,9 @@ pub(crate) async fn run_command(
     args: &[&str],
     timeout: Duration,
 ) -> Option<CmdOutput> {
-    let child = Command::new(program)
+    let mut cmd = Command::new(program);
+    mothr_core::process::no_window(cmd.as_std_mut());
+    let child = cmd
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

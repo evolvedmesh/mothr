@@ -1,6 +1,6 @@
 ---
 name: release
-description: How Mothr releases are cut (semantic-release on main and dev, Linux x64 tarball and Android APK) and how to fix a failed or missing release. Use when preparing a merge to dev/main, choosing a commit type, asking why no release happened, or debugging .github/workflows/release.yml.
+description: How Mothr releases are cut (semantic-release on main and dev, Linux x64 tarball, Windows x64 installer and zip, macOS app tarballs and disk images, and Android APK) and how to fix a failed or missing release. Use when preparing a merge to dev/main, choosing a commit type, asking why no release happened, or debugging .github/workflows/release.yml.
 ---
 
 # Releases
@@ -10,17 +10,39 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
 1. **release** job: semantic-release (`.releaserc.json`) reads the Conventional Commits since
    the last `v*` tag, runs `scripts/set-version.sh <version>` (rewrites `[workspace.package]
    version` in `Cargo.toml` and the `mothr*` entries in `Cargo.lock`), commits
-   `ci(release): <version> [skip ci]`, tags `v<version>` and publishes a GitHub release with
+   `ci(release): <version>`, tags `v<version>` and publishes a GitHub release with
    notes. It runs as the release bot GitHub App (`RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`)
    because only that App may push to the protected branches.
-2. **linux** and **android** jobs (only on `main`, only when a release was published) build
+2. **linux**, **windows**, **macos** and **android** jobs (only on `main`, only when a release was published) build
    from the tag:
    - `mothr_<v>_linux_x64.tar.gz`: `cargo build --release --locked -p mothr-app` on
      ubuntu-24.04 (glibc 2.39+), with the `.desktop` entry and license files.
+   - `mothr_<v>_windows_x64.zip`: the same build on `windows-2025` (MSVC), one folder
+     `mothr_<v>_windows_x64/` with `mothr.exe`, `LICENSE.txt` and `licenses/`. It must build on
+     Windows: GPUI's build script compiles its HLSL shaders with the SDK's `fxc.exe` only on a
+     Windows host, so a cross-compiled release has no shaders. `.cargo/config.toml` links the
+     CRT statically (no VC++ redistributable needed); check with
+     `llvm-objdump -p mothr.exe | grep "DLL Name"` that no `VCRUNTIME140`/`api-ms-win-crt-*`
+     appears. Installed copies update from this zip, so keep its name and shape.
+   - `mothr_<v>_windows_x64_setup.exe`: the installer, built from the same folder by
+     `apps/desktop/windows/build-installer.ps1` (Inno Setup, pinned by version and SHA-256 in
+     that script) from `apps/desktop/windows/mothr.iss`. Never change its `AppId`: Windows and
+     the updater (`WINDOWS_UNINSTALL_KEY`) find the install by it.
+   - `mothr_<v>_macos_<arch>.tar.gz` and `.dmg` (`arch`: `arm64` for Apple silicon, `x64` for
+     Intel): both built on `macos-15` (Apple silicon; x64 cross-compiled with
+     `--target x86_64-apple-darwin`) with `MACOSX_DEPLOYMENT_TARGET=11.0`. GPUI's build compiles
+     its Metal shaders with Xcode's `metal`. `apps/desktop/macos/bundle.sh` wraps the binary in
+     `Mothr.app` (Info.plist from `apps/desktop/macos/Info.plist`, icon `Mothr.icns` made from
+     `icon.svg` by `make-icns.py`), signs it ad hoc (Apple silicon only runs signed code) and
+     packs one folder `mothr_<v>_macos_<arch>/Mothr.app` into the tarball, and `Mothr.app` plus
+     an Applications link into the disk image. It isn't Developer ID signed or notarized, so a
+     browser-downloaded disk image needs **Open Anyway** once; `install.sh` (curl) doesn't.
+     Installed copies update from the tarball, so keep its name and shape, and keep
+     `CFBundleShortVersionString` in an XML Info.plist (the updater reads it).
    - `mothr_<v>_android_arm64-v8a.apk`: `assembleRelease -Pmothr.abis=arm64-v8a
      -Pmothr.versionCode=<run number>`, R8-minified, signed with `ANDROID_KEYSTORE_*` secrets
      (debug key with a warning if they're missing).
-3. **publish** attaches both to the release.
+3. **publish** attaches them all to the release.
 4. **sync-dev** (every push to `main`, after the release job) merges `main` into `dev`.
 
 `dev` publishes prereleases (`0.2.0-dev.1`, …) with notes but no binaries, to save storage.
@@ -45,7 +67,7 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
   be explicitly bypassed in the merge dialog. Only the release bot pushes directly.
 - Flow: feature → PR into `dev` → PR `dev` into `main`. After every push to `main`, the
   `sync-dev` job merges `main` back into `dev` (a normal merge commit,
-  `chore: merge main into dev [skip ci]`), so `dev` sees the new release tag. Without it, `dev`
+  `chore: merge main into dev`), so `dev` sees the new release tag. Without it, `dev`
   would compute a prerelease of a version that's already out.
 - If `sync-dev` fails with "doesn't merge cleanly", open a PR from `main` into `dev` and resolve
   the conflict there.
@@ -54,18 +76,44 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
 
 ## Updates
 
-Users get releases three ways, all from the same GitHub release and all checked against its
+Users get releases these ways, all from the same GitHub release and all checked against its
 `SHA256SUMS` (written by the publish job):
 
-- `install.sh` (repo root, served from `main` via raw.githubusercontent.com): installs to
-  `~/.local/lib/mothr/versions/<v>` with a `current` symlink and an `install.json` marker.
-  It resolves "latest" from the `/releases/latest` redirect, so asset names must stay
-  `mothr_<v>_linux_x64.tar.gz`.
+- `install.sh` (repo root, served from `main` via raw.githubusercontent.com): checks `uname`
+  and installs the Linux or macOS build. On Linux it installs to
+  `~/.local/lib/mothr/versions/<v>` with a `current` symlink and an `install.json` marker; on
+  macOS it puts `Mothr.app` in `~/Applications` (picking `arm64` or `x64`, also from a Rosetta
+  shell) and links `~/.local/bin/mothr` into it. It resolves "latest" from the
+  `/releases/latest` redirect, so asset names must stay `mothr_<v>_linux_x64.tar.gz` and
+  `mothr_<v>_macos_<arch>.tar.gz`. It runs under macOS's bash 3.2 with BSD tools: no arrays
+  under `set -u`, no `mv -T`/`sed -i`/`readlink -f` outside the Linux-only function, and
+  `shasum -a 256` where there's no `sha256sum`. Don't run its functions in `$(…)`: bash
+  drops `set -e` there. Write `${version}…`, not `$version…`: macOS's bash 3.2 in the C
+  locale takes the `…` bytes as part of the name (`version�: unbound variable`); the
+  `bash:3.2` Docker image doesn't show this, only a Mac does.
 - The desktop updater (`apps/desktop/src/update.rs` on `crates/mothr-update`): checks 20 s
   after start and every 6 h, and offers a newer release in the sidebar (`ui/workspace/frame.rs`)
   and Settings → Updates. Clicking stages the new version next to the running one, swaps
   `current` and restarts (or waits while chats work). "Install updates automatically" (off by
   default) stages it unprompted. Only copies with the marker update themselves.
+- Windows (`mothr-update`'s `Layout::InPlace`): the setup installs per user into
+  `%LOCALAPPDATA%\Programs\Mothr` with `install.json` (`{"installer":"setup","version":…}`)
+  next to `mothr.exe`. An update downloads `mothr_<v>_windows_x64.zip`, renames the running
+  `mothr.exe` to `mothr.exe.<n>.old` (Windows allows that), moves the new one in, and writes
+  the version to `install.json` and the Apps & features entry. "Restart" starts the new exe
+  with `MOTHR_WAIT_PID`, which waits for the old one to exit (`update::wait_for_previous`);
+  each start deletes the `.old` files (`Install::clean_up`). The portable zip has no marker
+  and only links the installer.
+- macOS (`Layout::Bundle`): no marker. Any `<name>.app/Contents/MacOS/mothr` whose bundle and
+  folder are writable updates itself (Mac apps are installed by copying), so a copy dragged
+  from the disk image updates like one from `install.sh`; one on the disk image, in a
+  read-only folder or translocated (opened from Downloads while quarantined) doesn't, and
+  links the disk image. An update downloads `mothr_<v>_macos_<arch>.tar.gz`, unpacks it into
+  `.mothr-update/` next to the bundle, moves the running bundle aside into it and the new one
+  into its place. "Restart" waits for the old process and runs the bundle's binary (not
+  `open`, which would drop Mothr's environment, e.g. `MOTHR_HOME`); each start
+  deletes `.mothr-update/`. The installed version is the bundle's
+  `CFBundleShortVersionString`.
 - The phone (`AndroidUpdates.kt` via `mothr-client`'s `check_app_update` /
   `download_app_update`): downloads `mothr_<v>_android_<abi>.apk` and installs it with
   `PackageInstaller`. Phones only accept it when it's signed with the release key, so the
@@ -88,8 +136,16 @@ R=$(mktemp -d); mkdir -p $R/0.1.1
 python3 -I .agents/skills/release/scripts/mock-releases.py $R 8799 &
 ```
 
-- Installer, into a throwaway home:
-  `HOME=$(mktemp -d) MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases bash install.sh`
+- Installer, into a throwaway home. Unset the XDG variables, or the menu entry lands in the
+  real `$XDG_DATA_HOME/applications` (and replaces a real install's):
+  `env -u XDG_DATA_HOME -u XDG_CONFIG_HOME HOME=$(mktemp -d) MOTHR_RELEASES_URL=http://127.0.0.1:8799/releases bash install.sh`
+- macOS installer path, from Linux: put `mothr_<v>_macos_arm64.tar.gz` (made with
+  `apps/desktop/macos/bundle.sh <v> arm64 <any executable> <dir>`) in the mock release, and
+  shims first on `PATH`: `uname` (`-s` → `Darwin`, `-m` → `arm64`), `sw_vers` (prints
+  `15.1`) and `sysctl` (`hw.optional.arm64` → `1` to try a Rosetta shell with `uname -m` =
+  `x86_64`). To check bash 3.2 compatibility, run the same in the `bash:3.2` Docker image
+  (`--network host`, `apk add curl`). On a Mac, run it as is; `xattr` and `lsregister` only
+  run there.
 - Desktop updater: install an older version that way, then run it (e.g. with the `desktop-ui`
   skill's `ui-shot.sh`, `UI_SHOT_BIN=<home>/.local/lib/mothr/current/mothr`) with
   `MOTHR_UPDATE_API=http://127.0.0.1:8799/api`. The first check runs 20 s after start,
@@ -114,6 +170,8 @@ gh run view <id> --log-failed
 | "There are no relevant changes, so no new version is released" | only non-releasing commit types since the last tag; expected |
 | push of the release commit or tag rejected | the App isn't a bypass actor on the branch/tag ruleset, or isn't installed on the repo |
 | `cargoBuildAndroidArm64Release` fails reading `target/release/build/<crate>/<hash>/output` | Gobley 0.3.7 vs Cargo 1.100+'s new build-dir layout; the job pins `RUSTUP_TOOLCHAIN` 1.93.0. Keep it until Gobley supports the new layout |
+| windows job: `Inno Setup … doesn't match its checksum` | the pinned download changed upstream; check the release on jrsoftware/issrc before updating `$InnoSha256` |
+| windows job: `Failed to find fxc.exe` | the runner image lost the Windows SDK; set `GPUI_FXC_PATH` to an `fxc.exe` |
 | `--locked` fails in the linux job | `Cargo.lock` out of date on the branch; run `cargo update -w` and commit |
 | APK can't be installed over the previous one | signed with a different key (missing or rotated `ANDROID_KEYSTORE_*`) |
 | release exists but has no assets | a build job failed after the release job; fix and re-run the failed jobs (`gh run rerun <id> --failed`), `publish` uses `--clobber` |
@@ -127,3 +185,53 @@ Ask the user before deleting tags or releases.
 - Runners are pinned (`ubuntu-24.04`); bump them on purpose.
 - `NDK_VERSION` must match `ndkVersion` in `composeApp/build.gradle.kts`.
 - The apt list in the linux job is the reference for GPUI's system libraries.
+- CI's `windows` job (clippy for the Windows target, and compiling `mothr.iss` with placeholder
+  files) and `macos` job (clippy on macOS, and `bundle.sh` with a stand-in binary) run only on
+  pull requests into `main` (they take ~5 min), so a Windows- or macOS-only break in a feature
+  PR shows up at the `dev` → `main` PR. Check before: `cargo xwin clippy` for Windows, and for
+  either, run CI by hand on the branch (`gh workflow run ci.yml --ref <branch>`). They aren't
+  required checks, but when one is red the next release's build for it fails too.
+
+## Trying the Windows build on Linux (Wine)
+
+A debug build cross-compiles with [cargo-xwin](https://github.com/rust-cross/cargo-xwin)
+(`cargo install --locked cargo-xwin`, `rustup target add x86_64-pc-windows-msvc`; it downloads
+the MSVC CRT and Windows SDK, accepting Microsoft's license with `XWIN_ACCEPT_LICENSE=1`):
+
+```sh
+XWIN_ACCEPT_LICENSE=1 cargo xwin build --target x86_64-pc-windows-msvc -p mothr-app
+```
+
+Debug builds compile GPUI's shaders at run time (from the crate's source path), so they run
+under Wine; `cargo xwin clippy --target x86_64-pc-windows-msvc --workspace --all-targets`
+lints the `cfg(windows)` code. Wine (10.x) lacks a few things real Windows has, so to see the
+app run there, use a throwaway `WINEPREFIX` and work around them in the test setup only, never
+in the shipped code:
+
+| Wine gap | Test-only workaround |
+| --- | --- |
+| no `icuuc.dll` (GPUI imports `u_strlen`) | a stub DLL exporting `u_strlen` in the prefix's `system32` |
+| DirectWrite `IDWriteFontCollection1::GetFontSet` and `IDWriteFontSet::GetMatchingFonts` are stubs: "failed to resolve font '.SystemUIFont'" | a patched copy of `gpui-pre-windows` (`direct_write.rs`: look fonts up with `FindFamilyName`/`GetFirstMatchingFont`), passed with `--config 'patch.crates-io.gpui-pre-windows.path="<copy>"'`; restore `Cargo.lock` afterwards |
+| no DirectComposition | `GPUI_DISABLE_DIRECT_COMPOSITION=1` |
+| its HLSL compiler rejects `StructuredBuffer` | `winetricks d3dcompiler_47` |
+| no Direct Manipulation (touchpad) | make `DirectManipulationHandler::new` failures non-fatal in the same patched copy |
+
+Run it headless with the `desktop-ui` skill's `ui-shot.sh` and `UI_SHOT_BIN` set to a wrapper
+that does `MOTHR_HOME="$(winepath -w "$MOTHR_HOME")" exec wine target/x86_64-pc-windows-msvc/debug/mothr.exe`.
+**Windows updates under Wine.** No installer needed: lay the install out as the setup does,
+in the prefix's `drive_c/users/$USER/AppData/Local/Programs/Mothr/` (`mothr.exe`, `LICENSE.txt`,
+`licenses/`, and `install.json` = `{"installer":"setup","version":"<its version>"}`), and add the
+Apps & features entry with `wine reg add 'HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{0E591738-8A65-45C8-8C9B-61E1FE0ECC9E}_is1' /v DisplayVersion /d <version> /f`.
+Build a second exe with a higher version (`scripts/set-version.sh 9.9.9`, build, copy the exe,
+then set the version back) and serve it from `mock-releases.py` as
+`9.9.9/mothr_9.9.9_windows_x64.zip` (one `mothr_9.9.9_windows_x64/` folder) with `SHA256SUMS`.
+Start the installed exe through a wrapper that runs `wine <exe>` and then `wineserver -w`, so
+gamescope outlives the restart, with `MOTHR_UPDATE_API=http://127.0.0.1:8799/api` and
+`UI_SHOT_SETTINGS` holding `auto_update = true`. About 20 s later the log says "installed Mothr
+9.9.9", `mothr.exe` is the new one, the old sits beside it as `mothr.exe.<n>.old`, and the
+sidebar offers **Restart to update** (click it: the mouse works). After the restart, one
+`mothr.exe` runs, the `.old` file is gone and Settings → Updates says 9.9.9.
+
+Keyboard input injected into gamescope doesn't reach Wine windows (the mouse does), and opening
+a URL from the app hands it to the host's browser. The terminal starts but Wine's PowerShell is
+a stub, so it shows no prompt.

@@ -313,7 +313,7 @@ impl Drop for Child {
 /// Ask an ACP agent for its sessions. `None`: it can't list them.
 fn acp_list(program: &Path, args: &[String], env: &[(String, String)], agent: AgentKind) -> anyhow::Result<Option<Vec<PastChat>>> {
     let mut child = Child(
-        Command::new(program)
+        mothr_core::process::no_window(&mut Command::new(program))
             .args(args)
             .envs(env.iter().cloned())
             .current_dir(dirs::home_dir().unwrap_or_else(std::env::temp_dir))
