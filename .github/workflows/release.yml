@@ -40,6 +40,13 @@ permissions:
 
 jobs:
   release:
+    # The bot's own pushes (the `ci(release):` commit and sync-dev's merge) start this workflow
+    # again; skip them here. They don't carry `[skip ci]`: GitHub then skips every pull_request
+    # workflow whose head is that commit, and the dev -> main PR's head is always one of them,
+    # so its required checks would never run.
+    if: >-
+      !startsWith(github.event.head_commit.message, 'ci(release):') &&
+      !startsWith(github.event.head_commit.message, 'chore: merge main into dev')
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.semrel.outputs.new_release_version }}
@@ -94,8 +101,8 @@ jobs:
 
   # After dev (or anything) is merged into main, merge main back into dev with a normal merge
   # commit, so dev has the release commit and tag and the next prerelease counts from them.
-  # Runs as the release bot: admins can only change dev through pull requests. `[skip ci]`
-  # keeps the merge from starting another release or CI run on dev.
+  # Runs as the release bot: admins can only change dev through pull requests. The release
+  # job's `if` keeps the merge from starting another release on dev.
   sync-dev:
     needs: release
     if: github.ref == 'refs/heads/main'
@@ -131,7 +138,7 @@ jobs:
               echo "dev already contains main"
               exit 0
             fi
-            if ! git merge --no-ff --no-edit -m "chore: merge main into dev [skip ci]" origin/main; then
+            if ! git merge --no-ff --no-edit -m "chore: merge main into dev" origin/main; then
               git merge --abort
               echo "::error::main doesn't merge cleanly into dev. Merge it by hand in a pull request."
               exit 1

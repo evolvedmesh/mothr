@@ -10,7 +10,7 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
 1. **release** job: semantic-release (`.releaserc.json`) reads the Conventional Commits since
    the last `v*` tag, runs `scripts/set-version.sh <version>` (rewrites `[workspace.package]
    version` in `Cargo.toml` and the `mothr*` entries in `Cargo.lock`), commits
-   `ci(release): <version> [skip ci]`, tags `v<version>` and publishes a GitHub release with
+   `ci(release): <version>`, tags `v<version>` and publishes a GitHub release with
    notes. It runs as the release bot GitHub App (`RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`)
    because only that App may push to the protected branches.
 2. **linux**, **windows**, **macos** and **android** jobs (only on `main`, only when a release was published) build
@@ -67,7 +67,7 @@ description: How Mothr releases are cut (semantic-release on main and dev, Linux
   be explicitly bypassed in the merge dialog. Only the release bot pushes directly.
 - Flow: feature → PR into `dev` → PR `dev` into `main`. After every push to `main`, the
   `sync-dev` job merges `main` back into `dev` (a normal merge commit,
-  `chore: merge main into dev [skip ci]`), so `dev` sees the new release tag. Without it, `dev`
+  `chore: merge main into dev`), so `dev` sees the new release tag. Without it, `dev`
   would compute a prerelease of a version that's already out.
 - If `sync-dev` fails with "doesn't merge cleanly", open a PR from `main` into `dev` and resolve
   the conflict there.
