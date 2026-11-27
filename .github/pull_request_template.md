@@ -33,8 +33,9 @@ Feature branches target `dev`.
 ## How has this been tested?
 
 <!--
-CI only lints (clippy). Nothing builds the apps until the release on `main`, so both must be
-compiled locally before this PR is opened. Tick each box only after running it on this branch.
+CI only lints (clippy). Nothing builds the apps until the nightly dev build or a release, so
+both must be compiled locally before this PR is opened. Tick each box only after running it on
+this branch.
 -->
 
 **Required: both apps compile**

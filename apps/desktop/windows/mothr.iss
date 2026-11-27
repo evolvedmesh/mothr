@@ -1,6 +1,7 @@
-; Mothr's Windows installer (Inno Setup 6). Built by .github/workflows/release.yml through
+; Mothr's Windows installer (Inno Setup 6). Built by .github/workflows/build.yml through
 ; apps/desktop/windows/build-installer.ps1, which passes:
-;   /DAppVersion=<x.y.z>   the release version
+;   /DAppVersion=<x.y.z>   the release version (x.y.z-dev.n for a nightly dev build)
+;   /DFileVersion=<x.y.z>  its numeric part, for the file's version resource
 ;   /DSourceDir=<dir>      the unpacked release folder (mothr.exe, LICENSE.txt, licenses\)
 ;
 ; Per user, no admin rights: installs to %LOCALAPPDATA%\Programs\Mothr, adds a Start menu entry
@@ -11,6 +12,9 @@
 
 #ifndef AppVersion
   #error Pass the version: /DAppVersion=x.y.z
+#endif
+#ifndef FileVersion
+  #define FileVersion AppVersion
 #endif
 #ifndef SourceDir
   #error Pass the release folder: /DSourceDir=<dir>
@@ -27,7 +31,8 @@ AppPublisher=Mothr contributors
 AppPublisherURL=https://github.com/evolvedmesh/mothr
 AppSupportURL=https://github.com/evolvedmesh/mothr/issues
 AppUpdatesURL=https://github.com/evolvedmesh/mothr/releases
-VersionInfoVersion={#AppVersion}
+; Windows' version resource only takes numbers, so a dev build (0.3.0-dev.4) passes 0.3.0 here.
+VersionInfoVersion={#FileVersion}
 ; Per user: {autopf} is %LOCALAPPDATA%\Programs without admin rights.
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\Mothr

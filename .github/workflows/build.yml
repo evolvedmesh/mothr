@@ -1,0 +1,277 @@
+name: Build (Linux x64, Windows x64, macOS, Android)
+
+# The release builds, called by release.yml (stable releases), nightly.yml (dev builds) and
+# ci.yml (release and hotfix pull requests into main). Each job checks out `ref`, stamps
+# `version` into Cargo.toml and Cargo.lock (scripts/set-version.sh) and uploads its files as a
+# workflow artifact; the caller's publish job attaches them to the GitHub release.
+#   mothr_<version>_linux_x64.tar.gz       the desktop app for Linux
+#   mothr_<version>_windows_x64_setup.exe  the Windows installer (per user, updates itself)
+#   mothr_<version>_windows_x64.zip        the same app, portable; installed copies update from it
+#   mothr_<version>_macos_<arch>.tar.gz    Mothr.app for macOS (arm64: Apple silicon, x64: Intel);
+#                                          install.sh and installed copies install from it
+#   mothr_<version>_macos_<arch>.dmg       the same app on a disk image, to drag to Applications
+#   mothr_<version>_android_arm64-v8a.apk  the companion phone app (R8-optimized)
+#
+# Secrets (pass them with `secrets: inherit`):
+#   ANDROID_KEYSTORE_BASE64                  Mothr's release keystore, base64 encoded
+#   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# The android job fails without the keystore: phones only accept an update signed with the
+# same key as the installed app.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The tag or commit to build
+        required: true
+        type: string
+      version:
+        description: The version to build, without the leading v (0.3.0, 0.3.0-dev.4)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    # Pinned, not *-latest, so an image bump can't break a release. The binary needs
+    # glibc 2.39+ (this image's).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      # A stable tag already carries its version; a nightly build gets it here (not committed).
+      - name: Set version
+        shell: bash
+        run: sh scripts/set-version.sh "${{ inputs.version }}"
+
+      # GPUI's Linux backends: Wayland and X11 (xkbcommon, xcb), fonts, Vulkan.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libvulkan-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-release
+
+      - name: Build
+        run: cargo build --release --locked -p mothr-app
+
+      - name: Package
+        run: |
+          VER="${{ inputs.version }}"
+          DIR="mothr_${VER}_linux_x64"
+          mkdir -p "$DIR/licenses"
+          install -m 755 target/release/mothr "$DIR/mothr"
+          install -m 644 LICENSE "$DIR/LICENSE"
+          install -m 644 apps/desktop/linux/dev.mothr.Mothr.desktop "$DIR/"
+          # The menu entry's icon (install.sh points the entry's Icon= at it): the macOS icon's SVG.
+          install -m 644 apps/desktop/macos/icon.svg "$DIR/dev.mothr.Mothr.svg"
+          install -m 644 apps/desktop/assets/fonts/OFL.txt "$DIR/licenses/OFL-Geist.txt"
+          install -m 644 apps/desktop/assets/logos/NOTICE.md "$DIR/licenses/NOTICE-logos.md"
+          tar -czf "$DIR.tar.gz" "$DIR"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: mothr_*.tar.gz
+          if-no-files-found: error
+          # Only needed until the publish job attaches it to the release.
+          retention-days: 1
+
+  # Built on Windows, not cross-compiled: GPUI's build script compiles its HLSL shaders with
+  # the Windows SDK's fxc.exe (preinstalled on this image) and only does so on a Windows host.
+  # .cargo/config.toml links the C runtime statically, so no VC++ redistributable is needed.
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      # A stable tag already carries its version; a nightly build gets it here (not committed).
+      - name: Set version
+        shell: bash
+        run: sh scripts/set-version.sh "${{ inputs.version }}"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-release
+
+      - name: Build
+        run: cargo build --release --locked -p mothr-app
+
+      # A portable folder: unzip and run mothr.exe. Chats and settings live in %APPDATA%\mothr,
+      # so replacing the folder with a newer one keeps them. Installed copies update from this
+      # zip too (mothr-update swaps the new mothr.exe in), so keep its name and shape.
+      - name: Package
+        shell: bash
+        run: |
+          VER="${{ inputs.version }}"
+          DIR="mothr_${VER}_windows_x64"
+          mkdir -p "$DIR/licenses"
+          cp target/release/mothr.exe "$DIR/mothr.exe"
+          cp LICENSE "$DIR/LICENSE.txt"
+          cp apps/desktop/assets/fonts/OFL.txt "$DIR/licenses/OFL-Geist.txt"
+          cp apps/desktop/assets/logos/NOTICE.md "$DIR/licenses/NOTICE-logos.md"
+          7z a -tzip -mx=9 "$DIR.zip" "$DIR" >/dev/null
+          7z l "$DIR.zip"
+
+      # The installer (apps/desktop/windows/mothr.iss), from the same folder.
+      - name: Installer
+        shell: pwsh
+        run: |
+          $ver = "${{ inputs.version }}"
+          ./apps/desktop/windows/build-installer.ps1 -Version $ver -Source "mothr_${ver}_windows_x64" -OutDir .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            mothr_*.zip
+            mothr_*_setup.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  # Built on macOS: GPUI compiles its Metal shaders with Xcode's `metal` tool. Both architectures
+  # build on the Apple silicon image; x64 is cross-compiled. apps/desktop/macos/bundle.sh makes
+  # Mothr.app (signed ad hoc, not notarized), the tarball and the disk image. Installed copies
+  # update from the tarball, so keep its name and shape.
+  macos:
+    runs-on: macos-15
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          - arch: x64
+            target: x86_64-apple-darwin
+    env:
+      # Same as LSMinimumSystemVersion in apps/desktop/macos/Info.plist and install.sh's check.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      # A stable tag already carries its version; a nightly build gets it here (not committed).
+      - name: Set version
+        shell: bash
+        run: sh scripts/set-version.sh "${{ inputs.version }}"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-${{ matrix.arch }}-release
+
+      - name: Build
+        run: cargo build --release --locked -p mothr-app --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          BIN="target/${{ matrix.target }}/release/mothr"
+          lipo -info "$BIN"
+          apps/desktop/macos/bundle.sh "${{ inputs.version }}" ${{ matrix.arch }} "$BIN" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            mothr_*_macos_*.tar.gz
+            mothr_*_macos_*.dmg
+          if-no-files-found: error
+          retention-days: 1
+
+  android:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/mobile
+    env:
+      # Keep in lockstep with ndkVersion in apps/mobile/composeApp/build.gradle.kts.
+      NDK_VERSION: 28.2.13676358
+      # Gobley 0.3.7 reads build-script output from Cargo's old build-dir layout; Cargo 1.100
+      # switched to the new one and the build fails. RUSTUP_TOOLCHAIN makes Gobley's `cargo`
+      # and `rustup` calls use this one. Lift it once Gobley supports the new layout.
+      RUSTUP_TOOLCHAIN: "1.93.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      # A stable tag already carries its version; a nightly build gets it here (not committed).
+      - name: Set version
+        shell: bash
+        working-directory: .
+        run: sh scripts/set-version.sh "${{ inputs.version }}"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install the NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" >/dev/null
+
+      # Gobley builds crates/mothr-client for Android (and adds the rustup targets itself) and
+      # generates the Kotlin bindings from a host build of it.
+      - uses: dtolnay/rust-toolchain@1.93.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-release
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          # Phones only install an update signed with the same key, so never ship a release
+          # signed with anything else.
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set. Release APKs must be signed with Mothr's release key."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "MOTHR_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      # Release build: R8 minify + resource shrinking, Rust client built with --release. Only
+      # arm64-v8a, which covers practically every real phone. versionCode is the build time in
+      # minutes: phones only update to a higher one, and stable and nightly builds come from
+      # different workflows, so a run number wouldn't keep growing across both.
+      - name: Build
+        env:
+          MOTHR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MOTHR_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          MOTHR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          ./gradlew :composeApp:assembleRelease --console=plain \
+            -Pmothr.abis=arm64-v8a -Pmothr.versionCode=$(( $(date +%s) / 60 ))
+
+      - name: Package
+        run: |
+          mv composeApp/build/outputs/apk/release/composeApp-release.apk \
+             "$GITHUB_WORKSPACE/mothr_${{ inputs.version }}_android_arm64-v8a.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: mothr_*.apk
+          if-no-files-found: error
+          retention-days: 1

@@ -1,0 +1,52 @@
+# git-cliff: computes the next version and writes the release notes (see the `release` skill).
+#
+#   git cliff --bumped-version                    next stable version, from the commits since
+#                                                 the last stable tag
+#   git cliff --unreleased --tag v<x> --strip all the notes for that version
+#
+# Only Conventional Commits count (AGENTS.md → Git workflow): `feat` raises the minor version,
+# `fix`/`perf` the patch, `!` or a `BREAKING CHANGE:` footer the major. Other types (chore, ci,
+# docs, refactor, test, …) don't release anything and stay out of the notes.
+
+[changelog]
+# The notes are the body of a GitHub release (and of the release pull request), so no title.
+header = ""
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope | replace(from=",", to=", ") }}**: {% endif %}\
+{% if commit.breaking %}**breaking:** {% endif %}\
+{{ commit.message | split(pat="\n") | first | trim | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+protect_breaking_commits = true
+filter_commits = false
+# Stable tags only: dev builds (v0.3.0-dev.4) never count as the last release.
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+topo_order = false
+sort_commits = "oldest"
+# The HTML comments keep the groups in this order; striptags removes them from the headings.
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^revert", group = "<!-- 3 -->Reverts" },
+  { body = ".*BREAKING CHANGE.*", group = "<!-- 0 -->Features" },
+  { message = ".*", skip = true },
+]
+
+[bump]
+# A feature raises the minor version and a breaking change the major one, even below 1.0.0
+# (the rules semantic-release used for Mothr's earlier releases).
+features_always_bump_minor = true
+breaking_always_bump_major = true
+initial_tag = "v0.1.0"

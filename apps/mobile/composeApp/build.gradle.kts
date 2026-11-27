@@ -2,7 +2,7 @@ import gobley.gradle.Variant
 import gobley.gradle.cargo.dsl.appleMobile
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
-// The app's version is the Cargo workspace's, which semantic-release bumps on every release
+// The app's version is the Cargo workspace's, which the release branch and the nightly build set
 // (scripts/set-version.sh). CI passes a growing versionCode (-Pmothr.versionCode) and can narrow
 // the ABIs (-Pmothr.abis=arm64-v8a); Gobley builds the Rust client for the same ABIs.
 val mothrVersion: String = rootProject.file("../../Cargo.toml").readLines()

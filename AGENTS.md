@@ -78,7 +78,8 @@ crates/
 mothr-design/       Mothr's own design system written in its Design DSL (system.json)
 install.sh          the public Linux and macOS installer (raw.githubusercontent.com/…/main/install.sh);
                     keep it to bash 3.2 and BSD tools (macOS's)
-scripts/            set-version.sh (used by semantic-release)
+scripts/            set-version.sh (sets the version; used by the release workflows)
+cliff.toml          git-cliff: next version and release notes from Conventional Commits
 .agents/skills/     task skills for agents working on this repo (.claude/skills links here)
 ```
 
@@ -136,10 +137,11 @@ cargo test -p mothr-core                      # one crate (fast loop for reducer
 cargo clippy --workspace --all-targets        # keep it warning-free
 ```
 
-- CI only lints. Required checks on `dev` and `main`: `rust` (clippy `-D warnings`,
+- CI only lints feature PRs. Required checks on `dev` and `main`: `rust` (clippy `-D warnings`,
   `.github/workflows/ci.yml`), `pr-title` (a lowercase Conventional Commit title) and
-  `pr-checklist` (`pr-title.yml`). The apps are built only by the release on `main`, so before
-  opening a PR build both locally and tick them in the template, or `pr-checklist` fails:
+  `pr-checklist` (`pr-title.yml`). The apps are built only by release PRs, releases and the
+  nightly dev build, so before opening a PR build both locally and tick them in the template, or
+  `pr-checklist` fails:
   `cargo build -p mothr-app`, `RUSTUP_TOOLCHAIN=1.93.0 ./gradlew :composeApp:assembleDebug`
   (in `apps/mobile`), `cargo test --workspace`, and clippy.
 - Debug builds use `opt-level = 1` (dependencies at 3); release uses thin LTO and one codegen
@@ -191,18 +193,21 @@ runs Mothr in a headless gamescope (nothing opens on screen) and writes a PNG to
 
 ## Git workflow
 
-- Branches: `main` (releases) ← `dev` (integration) ← feature branches. The initial MVP lives on
-  `mvp`, branched from `dev`. Feature branches and PRs target `dev`. `dev` and `main` change only
-  through pull requests (only the release bot pushes directly); after each merge into `main`,
-  the release workflow merges `main` back into `dev`.
+- Git flow. Branches: `main` (stable: only what was released) ← `release/*` and `hotfix/*` ←
+  `dev` (unstable, untested integration) ← feature branches. The initial MVP lives on `mvp`,
+  branched from `dev`. Feature branches and PRs target `dev`. `dev` and `main` change only
+  through pull requests; `main` only through the release and hotfix pull requests that the
+  Prepare release workflow opens. After each release the release workflow merges `main` back
+  into `dev`.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
   `feat(hub): …`, `fix(desktop): …`, `docs: …`, `refactor(agents): …`, `test(core): …`,
   `ci: …`, `chore: …`. The scope is the crate without the `mothr-` prefix (`desktop` and
   `mobile` for the apps); list several, comma-separated, when a change spans them.
-- Releases are cut by semantic-release from those commit types (`.github/workflows/release.yml`,
-  `release.config.cjs`): `feat` → minor, `fix`/`perf` → patch, `!`/`BREAKING CHANGE` → major.
-  Don't bump versions by hand; it owns `version` in Cargo.toml (the Android app reads it from
-  there). See the `release` skill.
+- The version comes from those commit types (git-cliff, `cliff.toml`): `feat` → minor,
+  `fix`/`perf` → patch, `!`/`BREAKING CHANGE` → major. Don't bump versions by hand: the Prepare
+  release workflow commits `version` in Cargo.toml (the Android app reads it from there) on the
+  release branch, and nightly dev builds stamp theirs at build time. Never write the bracketed
+  skip-ci marker in a commit message or PR title, even quoted. See the `release` skill.
 - Don't commit `target/`, `.codegraph/` contents, `apps/mobile/**/build`, or anything from a
   real `MOTHR_HOME` (transcripts, settings, tokens). Pairing links carry a secret token.
 

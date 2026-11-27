@@ -1,18 +1,18 @@
 name: CI
 
 # Lint gate for every pull request: clippy over the whole Rust workspace (it type-checks
-# without building binaries) plus pr-title.yml. Nothing is compiled into an app here: both
-# apps are built once, by release.yml on main, and the pull request template asks for a local
-# build of each before a PR is opened.
+# without building binaries) plus pr-title.yml. Feature pull requests don't compile the apps
+# here: the pull request template asks for a local build of each before a PR is opened. Release
+# and hotfix pull requests into main build every platform (`build`, below).
 #
 # `rust` and `pr-title` are required status checks on dev and main (the "mothr checks" repo
 # ruleset). Job names are the check names: rename them only together with the ruleset.
 # `windows` lints the same workspace for Windows and compiles the installer script, both of which
-# the release builds too. It's slow (~5 min), so it only runs on pull requests into main (the dev
-# -> main merge), not on every feature PR into dev. It isn't required; a red one means the next
+# the release builds too. It's slow (~5 min), so it only runs on pull requests into main (release
+# and hotfix pull requests), not on every feature PR into dev. It isn't required; a red one means the next
 # release's Windows build will fail. `macos` does the same for macOS (clippy, and packaging
 # Mothr.app and its disk image with a stand-in binary). Both also run when CI is started by hand
-# on a branch (Actions → CI → Run workflow), to check a platform before the dev -> main PR.
+# on a branch (Actions → CI → Run workflow), to check a platform before preparing a release.
 # Don't add path filters: a required check that never runs stays pending and blocks the merge.
 
 on:
@@ -90,13 +90,14 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked --config 'profile.dev.package."*".opt-level=0' -- -D warnings
 
       # The installer script compiles (with placeholder files; the release packs the real ones).
+      # A dev build's version, the stricter case: its version resource takes only the 0.0.0.
       - name: installer
         shell: pwsh
         run: |
-          $src = Join-Path $env:RUNNER_TEMP "mothr_0.0.0_windows_x64"
+          $src = Join-Path $env:RUNNER_TEMP "mothr_0.0.0-dev.1_windows_x64"
           New-Item -ItemType Directory -Force "$src\licenses" | Out-Null
           foreach ($f in "mothr.exe", "LICENSE.txt", "licenses\OFL-Geist.txt") { Set-Content (Join-Path $src $f) "placeholder" }
-          ./apps/desktop/windows/build-installer.ps1 -Version 0.0.0 -Source $src -OutDir $env:RUNNER_TEMP
+          ./apps/desktop/windows/build-installer.ps1 -Version 0.0.0-dev.1 -Source $src -OutDir $env:RUNNER_TEMP
 
   # Same lint for macOS (Apple silicon), and the app bundle and disk image build. Only for pull
   # requests into main (or by hand); on the others this job is skipped.
@@ -124,10 +125,34 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked --config 'profile.dev.package."*".opt-level=0' -- -D warnings
 
       # bundle.sh signs, lints Info.plist and makes the disk image; a tiny binary stands in for
-      # the app (the release builds the real one).
+      # the app (the release builds the real one). With a dev build's version, as nightlies have.
       - name: bundle
         run: |
           echo 'int main(void) { return 0; }' | cc -x c - -o "$RUNNER_TEMP/mothr"
-          apps/desktop/macos/bundle.sh 0.0.0 arm64 "$RUNNER_TEMP/mothr" "$RUNNER_TEMP/out"
-          hdiutil imageinfo "$RUNNER_TEMP/out/mothr_0.0.0_macos_arm64.dmg" >/dev/null
-          tar -tzf "$RUNNER_TEMP/out/mothr_0.0.0_macos_arm64.tar.gz"
+          apps/desktop/macos/bundle.sh 0.0.0-dev.1 arm64 "$RUNNER_TEMP/mothr" "$RUNNER_TEMP/out"
+          hdiutil imageinfo "$RUNNER_TEMP/out/mothr_0.0.0-dev.1_macos_arm64.dmg" >/dev/null
+          tar -tzf "$RUNNER_TEMP/out/mothr_0.0.0-dev.1_macos_arm64.tar.gz"
+
+  # Release and hotfix pull requests into main (prepare-release.yml) build every platform, the
+  # same builds the release makes (build.yml): what would ship is known to build before merging.
+  # Skipped on every other pull request.
+  release-version:
+    name: release version
+    if: >-
+      github.base_ref == 'main' &&
+      (startsWith(github.head_ref, 'release/') || startsWith(github.head_ref, 'hotfix/'))
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: release-version
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ github.event.pull_request.head.sha }}
+      version: ${{ needs.release-version.outputs.version }}
+    secrets: inherit

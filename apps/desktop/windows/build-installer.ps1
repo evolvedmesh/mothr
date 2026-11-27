@@ -5,7 +5,8 @@
 # Writes <OutDir>\mothr_<Version>_windows_x64_setup.exe. Uses its own copy of Inno Setup (the
 # official release from jrsoftware/issrc, pinned by version and checksum), installed into the
 # temp folder on first use, never one that happens to be on PATH.
-# Used by .github/workflows/release.yml (the real build) and ci.yml (a check of mothr.iss).
+# Used by .github/workflows/build.yml (releases and nightly dev builds) and ci.yml (a check of
+# mothr.iss).
 param(
     [Parameter(Mandatory)] [string] $Version,
     [Parameter(Mandatory)] [string] $Source,
@@ -35,6 +36,8 @@ $script = Join-Path $PSScriptRoot "mothr.iss"
 $src = (Resolve-Path $Source).Path
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $out = (Resolve-Path $OutDir).Path
-& $iscc "/DAppVersion=$Version" "/DSourceDir=$src" "/O$out" $script
+# The version resource is numeric only: 0.3.0-dev.4 -> 0.3.0.
+$fileVersion = ($Version -split "-")[0]
+& $iscc "/DAppVersion=$Version" "/DFileVersion=$fileVersion" "/DSourceDir=$src" "/O$out" $script
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
 Get-Item (Join-Path $out "mothr_${Version}_windows_x64_setup.exe")
