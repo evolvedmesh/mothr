@@ -30,6 +30,10 @@ on:
     branches:
       - main
       - dev
+  # By hand (Actions → Release → Run workflow, on main or dev) when a push didn't start it: a
+  # skip-ci marker anywhere in the pushed head commit's message makes GitHub skip the run, and
+  # a merge commit that lists the merged commits can carry one.
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
