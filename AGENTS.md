@@ -203,7 +203,10 @@ runs Mothr in a headless gamescope (nothing opens on screen) and writes a PNG to
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
   `feat(hub): …`, `fix(desktop): …`, `docs: …`, `refactor(agents): …`, `test(core): …`,
   `ci: …`, `chore: …`. The scope is the crate without the `mothr-` prefix (`desktop` and
-  `mobile` for the apps); list several, comma-separated, when a change spans them.
+  `mobile` for the apps); list several, comma-separated, when a change spans them. An
+  organization ruleset rejects any other commit message on `main`, `dev`, `mvp` and `patch/**`,
+  including the commits inside a pull request (reword "wip" commits before merging) and
+  GitHub's "Merge branch …" commits from the Update branch / Resolve conflicts buttons.
 - The version comes from those commit types, one per pull request (squash or merge, the PR
   title counts; `scripts/changes.sh`, `cliff.toml`): `feat` → minor,
   `fix`/`perf` → patch, `!`/`BREAKING CHANGE` → major. Don't bump versions by hand: the Prepare

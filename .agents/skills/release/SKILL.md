@@ -137,6 +137,13 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
   "pull requests only", and the required checks (`rust`, `pr-title`, `pr-checklist`) must pass or
   be explicitly bypassed in the merge dialog. The release bot pushes `release/*`, `hotfix/*` and
   `sync/*` branches, `v*` tags and sync-dev's merge into `dev`; it never pushes to `main`.
+- Every commit that lands on `main`, `dev`, `mvp` or `patch/**` must be a Conventional Commit
+  (org ruleset "conventional commits", regex on the first line, same as `pr-title`). The repo
+  uses the **PR title** as the merge and squash commit title, so GitHub's merges pass; a squash
+  merge also checks every commit on the branch, so reword "wip" commits before merging. GitHub's
+  **Update branch**, **Resolve conflicts** and **Revert** buttons make "Merge branch …" /
+  `Revert "…"` commits that the rule rejects: merge or revert locally with a conventional
+  message instead. Only the release bot bypasses it.
 - Never write the bracketed skip-ci marker in a commit message or PR title, even quoted: GitHub
   then skips every workflow for that commit, including a pull request's checks.
 - `v*` tags are protected org-wide ("release tags" ruleset): only the release bot and org
@@ -238,12 +245,12 @@ gh run view <id> --log-failed
 | --- | --- |
 | Prepare release: "dev has no feat, fix or perf commits since v…" | nothing releasable on `dev`; expected. Pass `-f version=x.y.z` to release anyway |
 | Prepare release: "release/x.y.z already exists" (or `hotfix/x.y.z`) | a release or hotfix branch with that version is open; merge or close its pull request and delete the branch |
-| sync-dev: "main doesn't merge cleanly into release/x.y.z" | a hotfix and the release branch changed the same lines. `git switch release/x.y.z && git merge origin/main`, keep the branch's version (`scripts/set-version.sh x.y.z` if needed), push |
+| sync-dev: "main doesn't merge cleanly into release/x.y.z" | a hotfix and the release branch changed the same lines. `git switch release/x.y.z && git merge origin/main -m "chore: merge main into release/x.y.z"`, keep the branch's version (`scripts/set-version.sh x.y.z` if needed), push |
 | sync-dev: "release/x.y.z isn't above the release on main" | a hotfix took that version or a newer one shipped. Close the pull request, delete the branch, run Prepare release again |
 | the next release repeats already released changes / has a too-high version | the newest release tag lacks `cut:` (made by hand, or a release PR whose branch didn't come from Prepare release). Edit the notes in the release PR and pass `-f version=` to Prepare release |
 | Release run: "v… is already released; nothing to release" | the push to `main` didn't change `Cargo.toml`'s version (not a release pull request); expected |
 | push of the tag, a `release/*` branch or sync-dev's merge rejected | the App isn't a bypass actor on the tag/`dev` ruleset, or isn't installed on the repo |
-| sync-dev: "main doesn't merge cleanly into dev" | it opened a pull request from `sync/main-into-dev-<sha>` into `dev`. Resolve the conflicts on that branch (GitHub's **Resolve conflicts**, or locally `git switch sync/…`, `git merge origin/dev`, push), then merge it into `dev` with a merge commit before the next release. Never resolve them on `main` |
+| sync-dev: "main doesn't merge cleanly into dev" | it opened a pull request from `sync/main-into-dev-<sha>` into `dev`. Resolve the conflicts on that branch locally (`git switch sync/…`, `git merge origin/dev -m "chore: merge dev into sync/…"`, fix, `git commit --no-edit`, push), then merge it into `dev` with a merge commit before the next release. Not GitHub's **Resolve conflicts** or **Update branch** buttons: their "Merge branch …" commits break the commit message rule. Never resolve them on `main` |
 | `cargoBuildAndroidArm64Release` fails reading `target/release/build/<crate>/<hash>/output` | Gobley 0.3.7 vs Cargo 1.100+'s new build-dir layout; the job pins `RUSTUP_TOOLCHAIN` 1.93.0. Keep it until Gobley supports the new layout |
 | windows job: `Inno Setup … doesn't match its checksum` | the pinned download changed upstream; check the release on jrsoftware/issrc before updating `$InnoSha256` |
 | windows job: `Failed to find fxc.exe` | the runner image lost the Windows SDK; set `GPUI_FXC_PATH` to an `fxc.exe` |
