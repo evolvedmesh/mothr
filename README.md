@@ -411,8 +411,9 @@ into `Mothr.app`, the release tarball and the disk image.
 
 Mothr uses git flow: `dev` holds unstable work, `main` only what was released. The
 **Prepare release** workflow (`.github/workflows/prepare-release.yml`, run by hand) cuts
-`release/<x.y.z>` from `dev`: git-cliff (`cliff.toml`) works out the version from the
-[Conventional Commits](https://www.conventionalcommits.org/) since the last release,
+`release/<x.y.z>` from `dev`: `scripts/changes.sh` works out the version from the titles of the
+pull requests merged since the last release ([Conventional
+Commits](https://www.conventionalcommits.org/); squash or merge, each PR counts once),
 `scripts/set-version.sh` sets it (the Cargo workspace, and through it the Android app), and it
 opens a pull request into `main` whose description holds the release notes. Merging it runs
 `.github/workflows/release.yml`, which tags it and publishes a GitHub release. Hotfixes take the

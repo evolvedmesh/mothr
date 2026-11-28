@@ -2,7 +2,7 @@ name: Nightly
 
 # A dev build of `dev` every night (and by hand: Actions → Nightly → Run workflow), for the dev
 # update channel: a GitHub prerelease `v<next>-dev.<n>` with every platform's files and
-# SHA256SUMS. <next> is the version the next release would get (cliff.toml), so a dev build
+# SHA256SUMS. <next> is the version the next release would get (scripts/changes.sh), so a dev build
 # always sorts above the last stable release and below the next one; <n> counts up.
 #
 # Nothing is committed: the tag points at dev's commit, and build.yml stamps the version into
@@ -61,9 +61,9 @@ jobs:
             exit 0
           fi
           last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' 2>/dev/null || echo v0.0.0)
-          next=$(git cliff --bumped-version)
-          # Only chore/docs/ci commits since the last release: still sort above it.
-          if [ "$next" = "$last" ]; then
+          next=v$(sh scripts/changes.sh version)
+          # Only chore/docs/ci changes since the last release: still sort above it.
+          if [ "$next" = v ]; then
             next=$(echo "$last" | awk -F. '{ printf "%s.%s.%d", $1, $2, $3 + 1 }')
           fi
           n=$(git tag --list "$next-dev.*" | sed 's/.*-dev\.//' | sort -n | tail -n 1)
@@ -84,13 +84,16 @@ jobs:
           LAST: ${{ steps.version.outputs.last }}
         run: |
           prev=$(git describe --tags --abbrev=0 --match 'v*-dev.*' 2>/dev/null || true)
-          from=$LAST
-          if [ -n "$prev" ] && git merge-base --is-ancestor "$LAST" "$prev"; then from=$prev; fi
-          changes=$(git cliff "$from..HEAD" --strip all)
+          cut=$(sh scripts/changes.sh cut)
+          from=$cut since=$LAST
+          if [ -n "$prev" ] && { [ -z "$cut" ] || git merge-base --is-ancestor "$cut" "$prev"; }; then
+            from=$prev since=$prev
+          fi
+          changes=$(sh scripts/changes.sh notes "$TAG" HEAD "$from")
           {
             echo "Dev build of \`dev\` at $(git rev-parse --short HEAD). **Unstable**: untested changes on their way to the next release."
             echo
-            echo "Changes since $from:"
+            echo "Changes since $since:"
             echo
             if [ -n "$changes" ]; then echo "$changes"; else echo "No feature or fix commits."; fi
           } > notes.md

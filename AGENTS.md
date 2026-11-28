@@ -78,8 +78,9 @@ crates/
 mothr-design/       Mothr's own design system written in its Design DSL (system.json)
 install.sh          the public Linux and macOS installer (raw.githubusercontent.com/…/main/install.sh);
                     keep it to bash 3.2 and BSD tools (macOS's)
-scripts/            set-version.sh (sets the version; used by the release workflows)
-cliff.toml          git-cliff: next version and release notes from Conventional Commits
+scripts/            set-version.sh (sets the version), changes.sh (next version and notes, one
+                    change per PR); used by the release workflows
+cliff.toml          git-cliff: release notes from Conventional Commits (scripts/changes.sh drives it)
 .agents/skills/     task skills for agents working on this repo (.claude/skills links here)
 ```
 
@@ -203,7 +204,8 @@ runs Mothr in a headless gamescope (nothing opens on screen) and writes a PNG to
   `feat(hub): …`, `fix(desktop): …`, `docs: …`, `refactor(agents): …`, `test(core): …`,
   `ci: …`, `chore: …`. The scope is the crate without the `mothr-` prefix (`desktop` and
   `mobile` for the apps); list several, comma-separated, when a change spans them.
-- The version comes from those commit types (git-cliff, `cliff.toml`): `feat` → minor,
+- The version comes from those commit types, one per pull request (squash or merge, the PR
+  title counts; `scripts/changes.sh`, `cliff.toml`): `feat` → minor,
   `fix`/`perf` → patch, `!`/`BREAKING CHANGE` → major. Don't bump versions by hand: the Prepare
   release workflow commits `version` in Cargo.toml (the Android app reads it from there) on the
   release branch, and nightly dev builds stamp theirs at build time. Never write the bracketed

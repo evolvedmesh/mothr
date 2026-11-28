@@ -3,15 +3,16 @@ name: Prepare release
 # Run by hand: Actions → Prepare release → Run workflow (or `gh workflow run prepare-release.yml`
 # with `-f kind=hotfix` for a hotfix). It opens the pull request that releases on merge:
 #
-#   release  cuts release/<x.y.z> from dev. git-cliff (cliff.toml) works out the version from the
-#            Conventional Commits since the last stable tag and writes the release notes.
+#   release  cuts release/<x.y.z> from dev. scripts/changes.sh works out the version from the pull
+#            requests merged since the last release (Conventional Commit titles, cliff.toml) and
+#            git-cliff writes the release notes.
 #   hotfix   cuts hotfix/<x.y.z> from main with the next patch version. Open the fix pull
 #            requests against that branch; the notes are written from them when it's merged.
 #
 # The branch gets one commit, the version (scripts/set-version.sh: Cargo.toml, Cargo.lock, and
 # through them the phone app's versionName), and a pull request into main whose description
 # holds the release notes: edit them there before merging. Fixes found while reviewing go into
-# the branch as normal pull requests. Merging it (merge commit, not squash) releases it
+# the branch as normal pull requests. Merging it (merge commit or squash) releases it
 # (release.yml). Nothing else ever commits a version, so dev and main only change through
 # pull requests.
 
@@ -69,9 +70,9 @@ jobs:
           elif [ "$KIND" = hotfix ]; then
             next=$(echo "$last" | awk -F. '{ printf "%s.%s.%d", $1, $2, $3 + 1 }')
           else
-            next=$(git cliff --bumped-version)
-            if [ "$next" = "$last" ]; then
-              echo "::error::dev has no feat, fix or perf commits since $last: nothing to release."
+            next=$(sh scripts/changes.sh version)
+            if [ -z "$next" ]; then
+              echo "::error::dev has no feat, fix or perf changes since $last: nothing to release."
               exit 1
             fi
           fi
@@ -121,7 +122,7 @@ jobs:
             notes="<!-- Leave empty: the notes are written from the fix commits when this is merged. Or write them here. -->"
             intro="Hotfix **$VERSION** on top of $LAST. Open the fix pull requests against \`$BRANCH\`, then merge this."
           else
-            notes=$(git cliff --unreleased --tag "v$VERSION" --strip all)
+            notes=$(sh scripts/changes.sh notes "v$VERSION")
             intro="Release **$VERSION**: everything on \`dev\` since $LAST."
           fi
           cat > body.md <<EOF
@@ -139,6 +140,6 @@ jobs:
 
           - Fixes go into \`$BRANCH\` as normal pull requests. Add them to the notes above.
           - The \`build\` checks build every platform from this branch.
-          - **Merge with a merge commit, not a squash.** Merging tags v$VERSION, builds, publishes the release and merges \`main\` back into \`dev\` (release.yml).
+          - Merge it (merge commit or squash). Merging tags v$VERSION, builds, publishes the release and merges \`main\` back into \`dev\` (release.yml).
           EOF
           gh pr create --base main --head "$BRANCH" --title "chore: release $VERSION" --body-file body.md

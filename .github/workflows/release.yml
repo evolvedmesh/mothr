@@ -5,7 +5,9 @@ name: Release
 #
 # 1. release: if `v<Cargo.toml version>` isn't tagged yet, tag this commit and create a draft
 #    GitHub release. Its notes are the "Release notes" section of the merged pull request
-#    (edited there before merging); if that's empty, git-cliff writes them (cliff.toml).
+#    (edited there before merging); if that's empty, scripts/changes.sh writes them. The tag is
+#    annotated with the kind and, for a release, the dev commit it was cut from: the next
+#    release counts from there, so release pull requests can be merged or squashed.
 # 2. build (build.yml): every platform's files, from the tag.
 # 3. publish: attach the files and SHA256SUMS to the draft, then publish it as the latest
 #    release. The repo has immutable releases, so nothing can be added after that. If a build
@@ -98,36 +100,74 @@ jobs:
 
       # The notes between the markers in the merged pull request's description, without HTML
       # comments. prepare-release.yml writes them there for you to edit before merging. Empty,
-      # git-cliff writes them from the commits since the previous release.
+      # scripts/changes.sh writes them from the pull requests the release branch brought in.
+      # Also works out what the tag records: the kind (release or hotfix, from the branch name)
+      # and, for a release, the dev commit it was cut from (the version commit's parent), which
+      # the next release counts from whether this pull request was merged or squashed.
       - name: Release notes
+        id: notes
         if: steps.version.outputs.released == 'true' && steps.version.outputs.draft == 'none'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
           SHA: ${{ steps.version.outputs.sha }}
         run: |
-          gh api "repos/${{ github.repository }}/commits/$SHA/pulls" \
-            --jq '[.[] | select(.base.ref == "main")][0].body // ""' > body.md
+          gh api "repos/${{ github.repository }}/commits/$SHA/pulls" > pulls.json
+          jq -r '[.[] | select(.base.ref == "main")][0].body // ""' pulls.json > body.md
+          head_ref=$(jq -r '[.[] | select(.base.ref == "main")][0].head.ref // ""' pulls.json)
+          head_sha=$(jq -r '[.[] | select(.base.ref == "main")][0].head.sha // ""' pulls.json)
+          number=$(jq -r '[.[] | select(.base.ref == "main")][0].number // ""' pulls.json)
+          # The pull request's branch may be deleted already; GitHub keeps its head.
+          if [ -n "$head_sha" ] && ! git cat-file -e "$head_sha^{commit}" 2>/dev/null; then
+            git fetch -q origin "refs/pull/$number/head" || head_sha=
+          fi
+          branch=${head_sha:-$SHA}
+          # No pull request found but a merge commit: what it merged is its second parent.
+          if [ -z "$head_sha" ] && git rev-parse -q --verify "$SHA^2" >/dev/null; then branch=$(git rev-parse "$SHA^2"); fi
+          case "$head_ref" in
+            release/*) kind=release ;;
+            hotfix/*) kind=hotfix ;;
+            *) kind=other ;;
+          esac
+          cut=
+          if [ "$kind" = release ]; then
+            cut=$(git log --first-parent -1 --format=%P --grep="^chore: set version to $VERSION\$" "$branch" | cut -d' ' -f1)
+          fi
           awk '/<!-- notes:start -->/ { on = 1; next } /<!-- notes:end -->/ { on = 0 } on' body.md \
             | perl -0pe 's/<!--.*?-->//gs' > notes.md
           if ! grep -q '[^[:space:]]' notes.md; then
-            echo "The pull request has no release notes; writing them from the commits."
-            prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' --exclude "$TAG" "$SHA" 2>/dev/null || true)
-            git cliff ${prev:+"$prev..$SHA"} --tag "$TAG" --strip all > notes.md
+            echo "The pull request has no release notes; writing them from its changes."
+            if [ "$kind" = hotfix ]; then
+              prev=$(git tag --list 'v[0-9]*' | grep -v -- - | grep -vxF "$TAG" | sort -rV | head -n 1)
+              sh scripts/changes.sh notes "$TAG" "$branch" "$prev" > notes.md
+            else
+              sh scripts/changes.sh notes "$TAG" "$branch" > notes.md
+            fi
           fi
           cat notes.md
+          echo "Kind $kind, cut from ${cut:-(none)}"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "cut=$cut" >> "$GITHUB_OUTPUT"
 
-      # The tag first (git-cliff and the next release count from it), then the draft on it.
+      # The tag first (the next release counts from it), then the draft on it. An annotated tag:
+      # its message records the kind and the cut for scripts/changes.sh.
       - name: Tag and create the draft release
         if: steps.version.outputs.released == 'true' && steps.version.outputs.draft == 'none'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BOT: ${{ steps.app-token.outputs.app-slug }}[bot]
           TAG: ${{ steps.version.outputs.tag }}
           SHA: ${{ steps.version.outputs.sha }}
           TAGGED: ${{ steps.version.outputs.tagged }}
+          KIND: ${{ steps.notes.outputs.kind }}
+          CUT: ${{ steps.notes.outputs.cut }}
         run: |
           if [ "$TAGGED" = false ]; then
-            git tag "$TAG" "$SHA"
+            git config user.name "$BOT"
+            git config user.email "$(gh api "/users/$BOT" --jq .id)+$BOT@users.noreply.github.com"
+            git tag -a "$TAG" -m "$TAG" -m "kind: $KIND${CUT:+
+          cut: $CUT}" "$SHA"
             git push origin "refs/tags/$TAG"
           fi
           gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md

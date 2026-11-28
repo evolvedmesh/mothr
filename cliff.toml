@@ -1,8 +1,6 @@
-# git-cliff: computes the next version and writes the release notes (see the `release` skill).
-#
-#   git cliff --bumped-version                    next stable version, from the commits since
-#                                                 the last stable tag
-#   git cliff --unreleased --tag v<x> --strip all the notes for that version
+# git-cliff: writes the release notes (see the `release` skill). The workflows run it through
+# scripts/changes.sh, which picks the commits (one per pull request, squash-merged or not) and
+# works out the next version with the same rules as [bump] below.
 #
 # Only Conventional Commits count (AGENTS.md → Git workflow): `feat` raises the minor version,
 # `fix`/`perf` the patch, `!` or a `BREAKING CHANGE:` footer the major. Other types (chore, ci,
@@ -34,6 +32,11 @@ filter_commits = false
 tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
 topo_order = false
 sort_commits = "oldest"
+# A pull request merged with a merge commit counts as its title (GitHub puts it under the
+# "Merge pull request #n from …" line); scripts/changes.sh leaves out the commits inside it.
+commit_preprocessors = [
+  { pattern = "^Merge pull request #[0-9]+ from [^\n]*\n+", replace = "" },
+]
 # The HTML comments keep the groups in this order; striptags removes them from the headings.
 commit_parsers = [
   { message = "^feat", group = "<!-- 0 -->Features" },

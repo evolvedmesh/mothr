@@ -25,8 +25,8 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
 - **prepare-release.yml** (Actions → Prepare release → Run workflow, or
   `gh workflow run prepare-release.yml [-f kind=hotfix] [-f version=x.y.z]`): as the release bot
   App (`RELEASE_APP_ID`, `RELEASE_APP_PRIVATE_KEY`, so the pull request starts the checks).
-  - `release`: cuts `release/<x.y.z>` from `dev`. git-cliff (`cliff.toml`) works out the version
-    from the Conventional Commits since the last stable tag (`git cliff --bumped-version`) and
+  - `release`: cuts `release/<x.y.z>` from `dev`. `scripts/changes.sh version` works out the
+    version from the pull requests merged since the last release (see Versions) and
     fails if there's nothing to release.
   - `hotfix`: cuts `hotfix/<x.y.z>` from `main` with the next patch version. Open the fix pull
     requests against that branch.
@@ -42,8 +42,9 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
 - **release.yml** (every push to `main`, or by hand):
   1. **release**: reads the version from `Cargo.toml`. If `v<version>` is already published
      there's nothing to release (only sync-dev runs). Otherwise it takes the notes from the merged
-     pull request (`commits/<sha>/pulls`), falls back to git-cliff from the previous stable tag,
-     pushes the tag and creates a **draft** release. Drafts because the repo has immutable
+     pull request (`commits/<sha>/pulls`), falls back to `scripts/changes.sh notes` over the
+     pull request's branch, pushes an annotated tag (`kind: release|hotfix`, and for a release
+     `cut: <sha>`, the `dev` commit it was cut from) and creates a **draft** release. Drafts because the repo has immutable
      releases: once published, a release takes no new files. It picks up where an earlier run
      stopped: a pushed tag or an unpublished draft is reused, so running Release again (or
      `gh run rerun <id> --failed`) finishes a half-done release.
@@ -53,7 +54,7 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
      **publish** finishes it.
   4. **sync-dev** merges `main` into `dev` (a normal merge commit, `chore: merge main into dev`)
      as the release bot. `dev` gets the version change and the tag, so the next release branch
-     doesn't conflict with `main` on the version lines and git-cliff counts from the new tag. If
+     doesn't conflict with `main` on the version lines and `dev` contains the new tag. If
      it doesn't merge cleanly it pushes `sync/main-into-dev-<sha>` (a copy of `main`) and opens a
      pull request from it into `dev`: conflicts are resolved on a pull request's head branch, and
      `main` and `dev` are both protected. Nothing runs on pushes to `dev`, so the merge starts no
@@ -106,8 +107,15 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
 - `feat` → minor, `fix` / `perf` → patch, `feat!` or a `BREAKING CHANGE:` footer → major (that
   takes Mothr to 1.0.0), even below 1.0.0 (`cliff.toml` → `[bump]`). `docs`, `chore`, `ci`,
   `refactor`, `test`, `style`, `build` don't release and stay out of the notes.
-- Stable tags are `v<x.y.z>`; dev builds `v<x.y.z>-dev.<n>`. `cliff.toml`'s `tag_pattern` only
-  counts stable tags.
+- Stable tags are `v<x.y.z>`; dev builds `v<x.y.z>-dev.<n>`.
+- Changes are counted **once per pull request**, whatever the merge method
+  (`scripts/changes.sh`): it walks the branch's first-parent line, so a squash commit is one
+  change, a "Merge pull request" commit counts as its PR title (`cliff.toml`'s
+  `commit_preprocessors`), and the commits inside a merged branch ("wip", …) are never read.
+  It counts from the `cut:` recorded in the newest release tag, not from the tag's ancestry,
+  so a squash-merged release PR (whose commits aren't ancestors of its tag) isn't counted again.
+  Older tags without a `cut:` count from where they meet `dev`. git-cliff only renders the
+  notes; the bump rules live in `changes.sh` and match `cliff.toml`'s `[bump]`.
 - Never edit `version` by hand: only the release branch's bot commit sets it. The Android
   `versionName` comes from `Cargo.toml` (`composeApp/build.gradle.kts`); the crates report it
   through `CARGO_PKG_VERSION` (e.g. ACP `clientInfo`). Older dev prereleases
@@ -115,15 +123,11 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
 
 ## Merging
 
-- Feature and fix pull requests target `dev` (or a `release/*` / `hotfix/*` branch) and are
-  **squash-merged**: the PR title (checked by `pr-title`) becomes the one commit git-cliff reads.
-  With a merge commit git-cliff only sees the PR's own commits (the "Merge pull request" subject
-  isn't a Conventional Commit), so "wip" commits would drop the change from the version and the
-  notes.
-- Release and hotfix pull requests into `main` take a **merge commit**, never a squash. A squash
-  cuts `dev`'s commits off from the release tag, so the next release counts them again (a wrong
-  version and repeated notes). Keep the default merge message. `main`'s ruleset should allow
-  merge commits only, and `dev`'s squash only.
+- Feature and fix pull requests target `dev` (or a `release/*` / `hotfix/*` branch). Squash or
+  merge commit, either works: the PR title (checked by `pr-title`) is what counts. Release and
+  hotfix pull requests into `main` can be squashed or merged too; keep the default message.
+- The bot's `sync/main-into-dev-*` pull requests take a **merge commit**: a squash leaves `main`
+  outside `dev`'s history, so sync-dev would try again after every release.
 - Changes reach `dev` and `main` only through pull requests: admins' ruleset bypass is
   "pull requests only", and the required checks (`rust`, `pr-title`, `pr-checklist`) must pass or
   be explicitly bypassed in the merge dialog. The release bot pushes `release/*`, `hotfix/*` and
@@ -231,7 +235,7 @@ gh run view <id> --log-failed
 | Prepare release: "release/x.y.z already exists" (or `hotfix/x.y.z`) | a release or hotfix branch with that version is open; merge or close its pull request and delete the branch |
 | sync-dev: "main doesn't merge cleanly into release/x.y.z" | a hotfix and the release branch changed the same lines. `git switch release/x.y.z && git merge origin/main`, keep the branch's version (`scripts/set-version.sh x.y.z` if needed), push |
 | sync-dev: "release/x.y.z isn't above the release on main" | a hotfix took that version or a newer one shipped. Close the pull request, delete the branch, run Prepare release again |
-| the next release repeats already released commits / has a too-high version | the previous release pull request was squash-merged. Edit the notes in the release PR (and pass `-f version=` to Prepare release); set `main` to merge commits only |
+| the next release repeats already released changes / has a too-high version | the newest release tag lacks `cut:` (made by hand, or a release PR whose branch didn't come from Prepare release). Edit the notes in the release PR and pass `-f version=` to Prepare release |
 | Release run: "v… is already released; nothing to release" | the push to `main` didn't change `Cargo.toml`'s version (not a release pull request); expected |
 | push of the tag, a `release/*` branch or sync-dev's merge rejected | the App isn't a bypass actor on the tag/`dev` ruleset, or isn't installed on the repo |
 | sync-dev: "main doesn't merge cleanly into dev" | it opened a pull request from `sync/main-into-dev-<sha>` into `dev`. Resolve the conflicts on that branch (GitHub's **Resolve conflicts**, or locally `git switch sync/…`, `git merge origin/dev`, push), then merge it into `dev` with a merge commit before the next release. Never resolve them on `main` |
