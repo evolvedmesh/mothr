@@ -1,0 +1,147 @@
+name: Nightly
+
+# A dev build of `dev` every night (and by hand: Actions → Nightly → Run workflow), for the dev
+# update channel: a GitHub prerelease `v<next>-dev.<n>` with every platform's files and
+# SHA256SUMS. <next> is the version the next release would get (scripts/changes.sh), so a dev build
+# always sorts above the last stable release and below the next one; <n> counts up.
+#
+# Nothing is committed: the tag points at dev's commit, and build.yml stamps the version into
+# Cargo.toml and Cargo.lock for the build only. Nights without new commits on dev are skipped.
+# Only the newest KEEP dev builds are kept; older ones lose their release (their tags stay,
+# since tags of immutable releases can't be reused anyway). The stable channel never sees these:
+# install.sh and the updaters' stable channel read /releases/latest, which skips prereleases.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  KEEP: 7
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.version.outputs.build }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      # v* tags are protected: only the release bot may push them.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+
+      - name: Version
+        id: version
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -n "$(git tag --points-at HEAD --list 'v*-dev.*')" ]; then
+            echo "dev hasn't changed since the last dev build ($(git tag --points-at HEAD --list 'v*-dev.*')); skipping."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' 2>/dev/null || echo v0.0.0)
+          next=v$(sh scripts/changes.sh version)
+          # Only chore/docs/ci changes since the last release: still sort above it.
+          if [ "$next" = v ]; then
+            next=$(echo "$last" | awk -F. '{ printf "%s.%s.%d", $1, $2, $3 + 1 }')
+          fi
+          n=$(git tag --list "$next-dev.*" | sed 's/.*-dev\.//' | sort -n | tail -n 1)
+          version="${next#v}-dev.$(( ${n:-0} + 1 ))"
+          echo "Dev build $version (last release $last)"
+          echo "build=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "last=$last" >> "$GITHUB_OUTPUT"
+
+      # What changed since the previous dev build (or the last release, if there's none since).
+      - name: Tag and create the draft prerelease
+        if: steps.version.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          LAST: ${{ steps.version.outputs.last }}
+        run: |
+          prev=$(git describe --tags --abbrev=0 --match 'v*-dev.*' 2>/dev/null || true)
+          cut=$(sh scripts/changes.sh cut)
+          from=$cut since=$LAST
+          if [ -n "$prev" ] && { [ -z "$cut" ] || git merge-base --is-ancestor "$cut" "$prev"; }; then
+            from=$prev since=$prev
+          fi
+          changes=$(sh scripts/changes.sh notes "$TAG" HEAD "$from")
+          {
+            echo "Dev build of \`dev\` at $(git rev-parse --short HEAD). **Unstable**: untested changes on their way to the next release."
+            echo
+            echo "Changes since $since:"
+            echo
+            if [ -n "$changes" ]; then echo "$changes"; else echo "No feature or fix commits."; fi
+          } > notes.md
+          cat notes.md
+          git tag "$TAG" HEAD
+          git push origin "refs/tags/$TAG"
+          gh release create "$TAG" --draft --prerelease --verify-tag --title "Dev build $VERSION" --notes-file notes.md
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ needs.prepare.outputs.tag }}
+      version: ${{ needs.prepare.outputs.version }}
+    secrets: inherit
+
+  publish:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Upload to the draft prerelease and publish it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          gh release upload "$TAG" dist/* --clobber --repo "${{ github.repository }}"
+          gh release edit "$TAG" --draft=false --prerelease --latest=false --repo "${{ github.repository }}"
+
+      # Newest first; everything after the KEEP newest dev builds goes (drafts of failed runs too).
+      - name: Remove old dev builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --repo "${{ github.repository }}" --limit 200 \
+              --json tagName,createdAt --jq '[.[] | select(.tagName | test("-dev\\."))] | sort_by(.createdAt) | reverse | .[].tagName' \
+            | tail -n +"$((KEEP + 1))" \
+            | while read -r tag; do
+                echo "Removing the release of $tag"
+                gh release delete "$tag" --yes --repo "${{ github.repository }}"
+              done

@@ -409,21 +409,27 @@ into `Mothr.app`, the release tarball and the disk image.
 
 ### Releases
 
-Every push to `main` or `dev` runs `.github/workflows/release.yml`. semantic-release reads the
-[Conventional Commits](https://www.conventionalcommits.org/) since the last release, sets the
-version with `scripts/set-version.sh` (the Cargo workspace, and through it the Android app),
-then tags and publishes a GitHub release. Versions start at `0.1.0`; `dev` publishes
-prereleases (`0.1.0-dev.1`, …). Stable releases on `main` also attach the Linux x64 desktop
+Mothr uses git flow: `dev` holds unstable work, `main` only what was released. The
+**Prepare release** workflow (`.github/workflows/prepare-release.yml`, run by hand) cuts
+`release/<x.y.z>` from `dev`: `scripts/changes.sh` works out the version from the titles of the
+pull requests merged since the last release ([Conventional
+Commits](https://www.conventionalcommits.org/); squash or merge, each PR counts once),
+`scripts/set-version.sh` sets it (the Cargo workspace, and through it the Android app), and it
+opens a pull request into `main` whose description holds the release notes. Merging it runs
+`.github/workflows/release.yml`, which tags it and publishes a GitHub release. Hotfixes take the
+same route from `main` (`hotfix/<x.y.z>`). Every night, `.github/workflows/nightly.yml` builds
+`dev` as a prerelease (`<next>-dev.<n>`) with the same files, for trying unreleased changes.
+Releases attach the Linux x64 desktop
 build (`mothr_<version>_linux_x64.tar.gz`), the Windows x64 build
 (`mothr_<version>_windows_x64_setup.exe`, and the same app as a portable `.zip`), the macOS
 builds for Apple silicon and Intel (`mothr_<version>_macos_<arm64|x64>.tar.gz` and `.dmg`) and the
 R8-optimized Android APK
 (`mothr_<version>_android_arm64-v8a.apk`) plus `SHA256SUMS`, which `install.sh` and both in-app
 updaters (`crates/mothr-update`) check every download against, and `main` is merged back into
-`dev` afterwards. Pull requests into `dev` and `main` must pass a lint-only CI (clippy, PR title,
-and the template's ticked "both apps compile" checklist); the apps themselves are built only
-for releases.
-The release workflow's header lists the secrets it needs.
+`dev` afterwards. Pull requests into `dev` must pass a lint-only CI (clippy, PR title, and the
+template's ticked "both apps compile" checklist); release pull requests into `main` also build
+every platform (`.github/workflows/build.yml`).
+The workflows' headers list the secrets they need; the `release` skill has the details.
 
 ### Developer hooks
 

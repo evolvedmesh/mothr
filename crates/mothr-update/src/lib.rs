@@ -1,6 +1,6 @@
 //! Mothr's updates, shared by the desktop app and the phone app (through `mothr-client`).
 //!
-//! Releases are GitHub releases of [`REPO`], cut by semantic-release. Every stable release
+//! Releases are GitHub releases of [`REPO`] (see the `release` skill). Every stable release
 //! carries `SHA256SUMS` next to its assets; a download is only kept when it matches.
 //!
 //! - [`Client::latest`] finds the newest stable release (prereleases are never offered).

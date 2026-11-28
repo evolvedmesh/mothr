@@ -2,10 +2,12 @@ name: PR title and checklist
 
 # Two quick checks on the pull request itself, re-run whenever its title or description is
 # edited. Both are required status checks on dev and main (the "mothr checks" repo ruleset).
-# - pr-title: with a squash merge, the title becomes the commit semantic-release reads, so it
-#   has to be a Conventional Commit (`feat(hub): …`, `fix(desktop,mobile): …`, `docs: …`).
-# - pr-checklist: CI doesn't build the apps (only the release on main does), so the
-#   description must tick the template's "both apps compile" boxes.
+# - pr-title: the title becomes the merged commit's message (merge and squash both use it), which
+#   scripts/changes.sh reads for the next version and the release notes, so it has to be a Conventional Commit
+#   (`feat(hub): …`, `fix(desktop,mobile): …`, `docs: …`).
+# - pr-checklist: CI doesn't build the apps on feature pull requests, so the description must
+#   tick the template's "both apps compile" boxes. The release bot's release and hotfix pull
+#   requests are exempt: CI builds every platform on those.
 
 on:
   pull_request:
@@ -50,7 +52,16 @@ jobs:
       - name: Both apps were compiled locally
         env:
           BODY: ${{ github.event.pull_request.body }}
+          # Release and hotfix pull requests are opened by the release bot (prepare-release.yml)
+          # and build every platform in CI (ci.yml → build) instead.
+          RELEASE_PR: >-
+            ${{ github.base_ref == 'main' && github.event.pull_request.user.type == 'Bot' &&
+            (startsWith(github.head_ref, 'release/') || startsWith(github.head_ref, 'hotfix/')) }}
         run: |
+          if [ "$RELEASE_PR" = true ]; then
+            echo "Release pull request: the build checks compile every platform."
+            exit 0
+          fi
           missing=0
           for item in "Desktop app builds" "Phone app builds" "Tests pass" "Lint is clean"; do
             if ! grep -iE "^[[:space:]]*[-*][[:space:]]*\[[xX]\][[:space:]]*${item}" >/dev/null <<<"$BODY"; then

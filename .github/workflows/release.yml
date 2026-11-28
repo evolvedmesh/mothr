@@ -1,43 +1,43 @@
-name: Release (Linux x64, Windows x64, macOS, Android)
+name: Release
 
-# Every push to main or dev runs semantic-release (release.config.cjs): it reads the Conventional
-# Commits since the last release, bumps the version (scripts/set-version.sh), commits it, tags it
-# and creates a GitHub release with notes. dev publishes prereleases (0.1.0-dev.1, …) right
-# away; main's stable release starts as a draft, and the publish job publishes it once the
-# binaries are attached (the repo has immutable releases: nothing can be added after that).
+# Releases what was just merged into main. main only changes through a release or hotfix pull
+# request (prepare-release.yml opens them), and those set the version in Cargo.toml, so:
 #
-# Only a stable release on main is built and gets binaries attached:
-#   mothr_<version>_linux_x64.tar.gz       the desktop app for Linux
-#   mothr_<version>_windows_x64_setup.exe  the Windows installer (per user, updates itself)
-#   mothr_<version>_windows_x64.zip        the same app, portable; installed copies update from it
-#   mothr_<version>_macos_<arch>.tar.gz    Mothr.app for macOS (arm64: Apple silicon, x64: Intel);
-#                                          install.sh and installed copies install from it
-#   mothr_<version>_macos_<arch>.dmg       the same app on a disk image, to drag to Applications
-#   mothr_<version>_android_arm64-v8a.apk  the companion phone app (R8-optimized)
-# After every push to main, sync-dev merges main back into dev (a normal merge commit).
+# 1. release: if `v<Cargo.toml version>` isn't tagged yet, tag this commit and create a draft
+#    GitHub release. Its notes are the "Release notes" section of the merged pull request
+#    (edited there before merging); if that's empty, scripts/changes.sh writes them. The tag is
+#    annotated with the kind and, for a release, the dev commit it was cut from: the next
+#    release counts from there, so release pull requests can be merged or squashed.
+# 2. build (build.yml): every platform's files, from the tag.
+# 3. publish: attach the files and SHA256SUMS to the draft, then publish it as the latest
+#    release. The repo has immutable releases, so nothing can be added after that. If a build
+#    fails, the draft stays unpublished: re-run the failed jobs and publish finishes it.
+# 4. sync-dev: merge main back into dev, so dev has the new version and tag and the next
+#    release branch merges cleanly. If it doesn't merge cleanly, it opens a pull request from
+#    sync/main-into-dev-<sha> (a copy of main) into dev, where the conflicts can be resolved.
+#    Then it merges main into open release/hotfix branches (a hotfix shipped meanwhile).
 #
-# Every stable release also carries SHA256SUMS; install.sh and the in-app updaters (desktop
-# and phone) only install files that match it.
+# Running it again (by hand, or re-running failed jobs) finishes a half-done release: a pushed
+# tag or an unpublished draft is picked up where it was left.
+#
+# A push to main that doesn't change the version (nothing to tag) only runs sync-dev.
+# install.sh and the in-app updaters only install files listed in SHA256SUMS.
 #
 # Secrets:
-#   RELEASE_APP_ID, RELEASE_APP_PRIVATE_KEY  the evolvedmesh release bot GitHub App
-#   ANDROID_KEYSTORE_BASE64                  Mothr's release keystore, base64 encoded
-#   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
-# The android job fails without the keystore: phones only accept an update signed with the
-# same key as the installed app.
+#   RELEASE_APP_ID, RELEASE_APP_PRIVATE_KEY  the evolvedmesh release bot GitHub App: pushes
+#                                            the tag (v* tags are protected) and dev's merge
+#   ANDROID_KEYSTORE_*                       see build.yml
 
 on:
   push:
     branches:
       - main
-      - dev
-  # By hand (Actions → Release → Run workflow, on main or dev) when a push didn't start it: a
-  # skip-ci marker anywhere in the pushed head commit's message makes GitHub skip the run, and
-  # a merge commit that lists the merged commits can carry one.
+  # By hand (Actions → Release → Run workflow, on main): finishes a release an earlier run left
+  # half done (tag pushed, or the draft created but not published), from where it stopped.
   workflow_dispatch:
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 permissions:
@@ -45,26 +45,12 @@ permissions:
 
 jobs:
   release:
-    # The bot's own pushes (the `ci(release):` commit and sync-dev's merge) start this workflow
-    # again; skip them here. They don't carry `[skip ci]`: GitHub then skips every pull_request
-    # workflow whose head is that commit, and the dev -> main PR's head is always one of them,
-    # so its required checks would never run.
-    if: >-
-      !startsWith(github.event.head_commit.message, 'ci(release):') &&
-      !startsWith(github.event.head_commit.message, 'chore: merge main into dev')
     runs-on: ubuntu-24.04
     outputs:
-      version: ${{ steps.semrel.outputs.new_release_version }}
-      tag: ${{ steps.semrel.outputs.new_release_git_tag }}
-      released: ${{ steps.semrel.outputs.new_release_published }}
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
+      released: ${{ steps.version.outputs.released }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
-      # @semantic-release/git pushes the `ci(release):` commit back to the protected branch.
-      # Only the release bot App can bypass the dev/main rulesets; the default GITHUB_TOKEN
-      # can't, so everything here runs as the App.
       - name: Generate App token
         id: app-token
         uses: actions/create-github-app-token@v2
@@ -75,45 +61,153 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: true
           token: ${{ steps.app-token.outputs.token }}
 
-      # Without any tag semantic-release starts at 1.0.0. Mothr starts at 0.1.0, so the first
-      # run tags the root commit v0.0.0 as the base; the first `feat` then releases 0.1.0.
-      - name: Seed base version
-        run: |
-          if [ -z "$(git tag -l 'v*')" ]; then
-            root=$(git rev-list --max-parents=0 HEAD | tail -n 1)
-            git tag v0.0.0 "$root"
-            git push origin v0.0.0
-          fi
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
-      # scripts/set-version.sh rewrites Cargo.toml and Cargo.lock and @semantic-release/git
-      # commits them before the tag is created, so the tag points at a tree with its version.
-      - name: Run semantic-release
-        id: semrel
-        uses: cycjimmy/semantic-release-action@v4
-        with:
-          extra_plugins: |
-            @semantic-release/exec
-            @semantic-release/git
+      # Picks up where an earlier run stopped: the tag may already be pushed, or the draft
+      # created (a failed build, or a run that died). Only a published release is done.
+      - name: Version
+        id: version
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          tag="v$version"
+          case "$version" in
+            *-*) echo "::error::main's Cargo.toml has a prerelease version ($version)."; exit 1 ;;
+          esac
+          draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || echo none)
+          tagged=false
+          git rev-parse -q --verify "refs/tags/$tag" >/dev/null && tagged=true
+          if [ "$draft" = false ]; then
+            echo "$tag is already released; nothing to release."
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Releasing $tag (tag pushed: $tagged, draft: $draft)"
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          fi
+          # The commit to release: the tag's, if an earlier run pushed it.
+          if [ "$tagged" = true ]; then sha=$(git rev-list -n 1 "$tag"); else sha=$GITHUB_SHA; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tagged=$tagged" >> "$GITHUB_OUTPUT"
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
 
-  # After dev (or anything) is merged into main, merge main back into dev with a normal merge
-  # commit, so dev has the release commit and tag and the next prerelease counts from them.
-  # Runs as the release bot: admins can only change dev through pull requests. The release
-  # job's `if` keeps the merge from starting another release on dev.
-  sync-dev:
+
+      # The notes between the markers in the merged pull request's description, without HTML
+      # comments. prepare-release.yml writes them there for you to edit before merging. Empty,
+      # scripts/changes.sh writes them from the pull requests the release branch brought in.
+      # Also works out what the tag records: the kind (release or hotfix, from the branch name)
+      # and, for a release, the dev commit it was cut from (the version commit's parent), which
+      # the next release counts from whether this pull request was merged or squashed.
+      - name: Release notes
+        id: notes
+        if: steps.version.outputs.released == 'true' && steps.version.outputs.draft == 'none'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          gh api "repos/${{ github.repository }}/commits/$SHA/pulls" > pulls.json
+          jq -r '[.[] | select(.base.ref == "main")][0].body // ""' pulls.json > body.md
+          head_ref=$(jq -r '[.[] | select(.base.ref == "main")][0].head.ref // ""' pulls.json)
+          head_sha=$(jq -r '[.[] | select(.base.ref == "main")][0].head.sha // ""' pulls.json)
+          number=$(jq -r '[.[] | select(.base.ref == "main")][0].number // ""' pulls.json)
+          # The pull request's branch may be deleted already; GitHub keeps its head.
+          if [ -n "$head_sha" ] && ! git cat-file -e "$head_sha^{commit}" 2>/dev/null; then
+            git fetch -q origin "refs/pull/$number/head" || head_sha=
+          fi
+          branch=${head_sha:-$SHA}
+          # No pull request found but a merge commit: what it merged is its second parent.
+          if [ -z "$head_sha" ] && git rev-parse -q --verify "$SHA^2" >/dev/null; then branch=$(git rev-parse "$SHA^2"); fi
+          case "$head_ref" in
+            release/*) kind=release ;;
+            hotfix/*) kind=hotfix ;;
+            *) kind=other ;;
+          esac
+          cut=
+          if [ "$kind" = release ]; then
+            cut=$(git log --first-parent -1 --format=%P --grep="^chore: set version to $VERSION\$" "$branch" | cut -d' ' -f1)
+          fi
+          awk '/<!-- notes:start -->/ { on = 1; next } /<!-- notes:end -->/ { on = 0 } on' body.md \
+            | perl -0pe 's/<!--.*?-->//gs' > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "The pull request has no release notes; writing them from its changes."
+            if [ "$kind" = hotfix ]; then
+              prev=$(git tag --list 'v[0-9]*' | grep -v -- - | grep -vxF "$TAG" | sort -rV | head -n 1)
+              sh scripts/changes.sh notes "$TAG" "$branch" "$prev" > notes.md
+            else
+              sh scripts/changes.sh notes "$TAG" "$branch" > notes.md
+            fi
+          fi
+          cat notes.md
+          echo "Kind $kind, cut from ${cut:-(none)}"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "cut=$cut" >> "$GITHUB_OUTPUT"
+
+      # The tag first (the next release counts from it), then the draft on it. An annotated tag:
+      # its message records the kind and the cut for scripts/changes.sh.
+      - name: Tag and create the draft release
+        if: steps.version.outputs.released == 'true' && steps.version.outputs.draft == 'none'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BOT: ${{ steps.app-token.outputs.app-slug }}[bot]
+          TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ steps.version.outputs.sha }}
+          TAGGED: ${{ steps.version.outputs.tagged }}
+          KIND: ${{ steps.notes.outputs.kind }}
+          CUT: ${{ steps.notes.outputs.cut }}
+        run: |
+          if [ "$TAGGED" = false ]; then
+            git config user.name "$BOT"
+            git config user.email "$(gh api "/users/$BOT" --jq .id)+$BOT@users.noreply.github.com"
+            git tag -a "$TAG" -m "$TAG" -m "kind: $KIND${CUT:+
+          cut: $CUT}" "$SHA"
+            git push origin "refs/tags/$TAG"
+          fi
+          gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md
+
+  build:
     needs: release
-    if: github.ref == 'refs/heads/main'
+    if: needs.release.outputs.released == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ needs.release.outputs.tag }}
+      version: ${{ needs.release.outputs.version }}
+    secrets: inherit
+
+  publish:
+    needs: [release, build]
+    if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # install.sh and the in-app updaters only accept files listed here.
+      - name: Checksums
+        run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Upload to the draft release and publish it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          gh release upload "$TAG" dist/* --clobber --repo "${{ github.repository }}"
+          gh release edit "$TAG" --draft=false --latest --repo "${{ github.repository }}"
+
+  # Merge main back into dev with a normal merge commit: dev gets the version change and the
+  # tag, so the next release branch (cut from dev) doesn't conflict with main on them and
+  # dev contains the new tag. Runs as the release bot: admins can only change dev
+  # through pull requests. Nothing runs on pushes to dev, so the merge starts no workflow.
+  sync-dev:
+    needs: release
+    runs-on: ubuntu-24.04
     steps:
       - name: Generate App token
         id: app-token
@@ -145,8 +239,23 @@ jobs:
             fi
             if ! git merge --no-ff --no-edit -m "chore: merge main into dev" origin/main; then
               git merge --abort
-              echo "::error::main doesn't merge cleanly into dev. Merge it by hand in a pull request."
-              exit 1
+              # Both main and dev are protected, and a pull request's conflicts are resolved on
+              # its head branch, so the pull request comes from a copy of main that can take
+              # the resolution.
+              branch="sync/main-into-dev-$(git rev-parse --short origin/main)"
+              git push origin "origin/main:refs/heads/$branch"
+              if [ -z "$(gh pr list --base dev --head "$branch" --json number --jq '.[].number')" ]; then
+                printf '%s\n' \
+                  "main doesn't merge cleanly into dev. Resolve the conflicts on this branch, then merge it into dev with a merge commit, so the next release branch merges cleanly into main. (If it gets squashed, the Sync guard workflow repairs dev's history afterwards.)" \
+                  "" \
+                  "Locally: \`git fetch && git switch $branch && git merge origin/dev -m \"chore: merge dev into $branch\"\`, fix the conflicts, \`git commit --no-edit\` and push." \
+                  "" \
+                  "Not GitHub's **Resolve conflicts** button: its \"Merge branch 'dev' into …\" commit isn't a Conventional Commit, and the organization's rules reject it on dev." \
+                  > body.md
+                gh pr create --base dev --head "$branch" --title "chore: merge main into dev" --body-file body.md
+              fi
+              echo "::warning::main doesn't merge cleanly into dev; opened a pull request from $branch to merge it by hand."
+              exit 0
             fi
             if git push origin HEAD:dev; then
               exit 0
@@ -155,259 +264,45 @@ jobs:
           done
           exit 1
 
-  # Release assets and workflow artifacts count against the account's storage, so dev
-  # prereleases get a tag and notes but no binaries.
-  linux:
-    needs: release
-    if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/main'
-    # Pinned, not *-latest, so an image bump can't break a release. The binary needs
-    # glibc 2.39+ (this image's).
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release.outputs.tag }}
-
-      # GPUI's Linux backends: Wayland and X11 (xkbcommon, xcb), fonts, Vulkan.
-      - name: Install system libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libvulkan-dev
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: linux-release
-
-      - name: Build
-        run: cargo build --release --locked -p mothr-app
-
-      - name: Package
-        run: |
-          VER="${{ needs.release.outputs.version }}"
-          DIR="mothr_${VER}_linux_x64"
-          mkdir -p "$DIR/licenses"
-          install -m 755 target/release/mothr "$DIR/mothr"
-          install -m 644 LICENSE "$DIR/LICENSE"
-          install -m 644 apps/desktop/linux/dev.mothr.Mothr.desktop "$DIR/"
-          # The menu entry's icon (install.sh points the entry's Icon= at it): the macOS icon's SVG.
-          install -m 644 apps/desktop/macos/icon.svg "$DIR/dev.mothr.Mothr.svg"
-          install -m 644 apps/desktop/assets/fonts/OFL.txt "$DIR/licenses/OFL-Geist.txt"
-          install -m 644 apps/desktop/assets/logos/NOTICE.md "$DIR/licenses/NOTICE-logos.md"
-          tar -czf "$DIR.tar.gz" "$DIR"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux
-          path: mothr_*.tar.gz
-          if-no-files-found: error
-          # Only needed until the publish job attaches it to the release.
-          retention-days: 1
-
-  # Built on Windows, not cross-compiled: GPUI's build script compiles its HLSL shaders with
-  # the Windows SDK's fxc.exe (preinstalled on this image) and only does so on a Windows host.
-  # .cargo/config.toml links the C runtime statically, so no VC++ redistributable is needed.
-  windows:
-    needs: release
-    if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/main'
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release.outputs.tag }}
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: windows-release
-
-      - name: Build
-        run: cargo build --release --locked -p mothr-app
-
-      # A portable folder: unzip and run mothr.exe. Chats and settings live in %APPDATA%\mothr,
-      # so replacing the folder with a newer one keeps them. Installed copies update from this
-      # zip too (mothr-update swaps the new mothr.exe in), so keep its name and shape.
-      - name: Package
-        shell: bash
-        run: |
-          VER="${{ needs.release.outputs.version }}"
-          DIR="mothr_${VER}_windows_x64"
-          mkdir -p "$DIR/licenses"
-          cp target/release/mothr.exe "$DIR/mothr.exe"
-          cp LICENSE "$DIR/LICENSE.txt"
-          cp apps/desktop/assets/fonts/OFL.txt "$DIR/licenses/OFL-Geist.txt"
-          cp apps/desktop/assets/logos/NOTICE.md "$DIR/licenses/NOTICE-logos.md"
-          7z a -tzip -mx=9 "$DIR.zip" "$DIR" >/dev/null
-          7z l "$DIR.zip"
-
-      # The installer (apps/desktop/windows/mothr.iss), from the same folder.
-      - name: Installer
-        shell: pwsh
-        run: |
-          $ver = "${{ needs.release.outputs.version }}"
-          ./apps/desktop/windows/build-installer.ps1 -Version $ver -Source "mothr_${ver}_windows_x64" -OutDir .
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows
-          path: |
-            mothr_*.zip
-            mothr_*_setup.exe
-          if-no-files-found: error
-          retention-days: 1
-
-  # Built on macOS: GPUI compiles its Metal shaders with Xcode's `metal` tool. Both architectures
-  # build on the Apple silicon image; x64 is cross-compiled. apps/desktop/macos/bundle.sh makes
-  # Mothr.app (signed ad hoc, not notarized), the tarball and the disk image. Installed copies
-  # update from the tarball, so keep its name and shape.
-  macos:
-    needs: release
-    if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/main'
-    runs-on: macos-15
-    strategy:
-      matrix:
-        include:
-          - arch: arm64
-            target: aarch64-apple-darwin
-          - arch: x64
-            target: x86_64-apple-darwin
-    env:
-      # Same as LSMinimumSystemVersion in apps/desktop/macos/Info.plist and install.sh's check.
-      MACOSX_DEPLOYMENT_TARGET: "11.0"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release.outputs.tag }}
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: macos-${{ matrix.arch }}-release
-
-      - name: Build
-        run: cargo build --release --locked -p mothr-app --target ${{ matrix.target }}
-
-      - name: Package
-        run: |
-          BIN="target/${{ matrix.target }}/release/mothr"
-          lipo -info "$BIN"
-          apps/desktop/macos/bundle.sh "${{ needs.release.outputs.version }}" ${{ matrix.arch }} "$BIN" .
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos-${{ matrix.arch }}
-          path: |
-            mothr_*_macos_*.tar.gz
-            mothr_*_macos_*.dmg
-          if-no-files-found: error
-          retention-days: 1
-
-  android:
-    needs: release
-    if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: apps/mobile
-    env:
-      # Keep in lockstep with ndkVersion in apps/mobile/composeApp/build.gradle.kts.
-      NDK_VERSION: 28.2.13676358
-      # Gobley 0.3.7 reads build-script output from Cargo's old build-dir layout; Cargo 1.100
-      # switched to the new one and the build fails. RUSTUP_TOOLCHAIN makes Gobley's `cargo`
-      # and `rustup` calls use this one. Lift it once Gobley supports the new layout.
-      RUSTUP_TOOLCHAIN: "1.93.0"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release.outputs.tag }}
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Install the NDK
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" >/dev/null
-
-      # Gobley builds crates/mothr-client for Android (and adds the rustup targets itself) and
-      # generates the Kotlin bindings from a host build of it.
-      - uses: dtolnay/rust-toolchain@1.93.0
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: android-release
-
-      - uses: gradle/actions/setup-gradle@v4
-
-      - name: Decode signing key
+      # A hotfix released while a release branch is open: both changed the version lines, so
+      # the release pull request would conflict with main. Merge main into each open release
+      # or hotfix branch, keeping that branch's version: merge with main's version in place
+      # (so only real conflicts can remain), then put the branch's version back, as one
+      # ordinary merge commit.
+      - name: Merge main into open release branches
         env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          # Phones only install an update signed with the same key, so never ship a release
-          # signed with anything else.
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 is not set. Release APKs must be signed with Mothr's release key."
-            exit 1
-          fi
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-          echo "MOTHR_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
-
-      # Release build: R8 minify + resource shrinking, Rust client built with --release. Only
-      # arm64-v8a, which covers practically every real phone.
-      - name: Build
-        env:
-          MOTHR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          MOTHR_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          MOTHR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          ./gradlew :composeApp:assembleRelease --console=plain \
-            -Pmothr.abis=arm64-v8a -Pmothr.versionCode=${{ github.run_number }}
-
-      - name: Package
-        run: |
-          mv composeApp/build/outputs/apk/release/composeApp-release.apk \
-             "$GITHUB_WORKSPACE/mothr_${{ needs.release.outputs.version }}_android_arm64-v8a.apk"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: android
-          path: mothr_*.apk
-          if-no-files-found: error
-          retention-days: 1
-
-  # Attach every binary to the release in one step, after all builds finished.
-  publish:
-    needs: [release, linux, windows, macos, android]
-    if: needs.release.outputs.released == 'true' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      # install.sh and the in-app updaters only accept files listed here.
-      - name: Checksums
-        run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
-
-      # semantic-release left the release as a draft (release.config.cjs): the repo has immutable
-      # releases, so files can only be added before it's published. If a build job failed, the
-      # draft stays unpublished; re-run the failed jobs and this finishes it.
-      - name: Upload to the draft release and publish it
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.release.outputs.tag }}
-        run: |
-          gh release upload "$TAG" dist/* --clobber --repo "${{ github.repository }}"
-          gh release edit "$TAG" --draft=false --latest --repo "${{ github.repository }}"
+          git fetch origin main '+refs/heads/release/*:refs/remotes/origin/release/*' \
+            '+refs/heads/hotfix/*:refs/remotes/origin/hotfix/*'
+          main_version=$(git show origin/main:Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+          for ref in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin/release refs/remotes/origin/hotfix); do
+            branch=${ref#origin/}
+            if git merge-base --is-ancestor origin/main "$ref" || git merge-base --is-ancestor "$ref" origin/main; then
+              continue  # already has main, or already merged (released)
+            fi
+            version=$(git show "$ref:Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+            if [ "$(printf '%s\n%s\n' "$version" "$main_version" | sort -V | tail -n 1)" != "$version" ] || \
+               [ "$version" = "$main_version" ]; then
+              echo "::warning::$branch ($version) isn't above the release on main ($main_version). Close its pull request, delete the branch and run Prepare release again."
+              continue
+            fi
+            # A throwaway local commit with main's version; the pushed merge commit's parents
+            # are the branch and main, so it never shows up.
+            git checkout -q --detach "$ref"
+            sh scripts/set-version.sh "$main_version"
+            git commit -q -am "temporary: main's version"
+            if ! git merge -q --no-commit --no-ff origin/main; then
+              git merge --abort
+              echo "::warning::main doesn't merge cleanly into $branch. Merge it there by hand (git switch $branch && git merge origin/main -m \"chore: merge main into $branch\"), keeping version $version."
+              git checkout -q --detach origin/main
+              continue
+            fi
+            sh scripts/set-version.sh "$version"
+            git add -A
+            commit=$(git commit-tree "$(git write-tree)" -p "$ref" -p origin/main -m "chore: merge main into $branch")
+            git push origin "$commit:refs/heads/$branch"
+            echo "Merged main into $branch (kept $version)"
+            git reset -q --hard
+            git checkout -q --detach origin/main
+          done
