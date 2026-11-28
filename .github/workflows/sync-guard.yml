@@ -1,0 +1,74 @@
+name: Sync guard
+
+# sync-dev (release.yml) opens a pull request from sync/main-into-dev-<sha> into dev when main
+# doesn't merge cleanly. It has to be merged with a merge commit: squashed or rebased, dev gets
+# main's changes but not main's history, so the next release's sync-dev tries the same merge
+# again and hits the same conflicts. GitHub can't restrict the merge method by head branch
+# (rulesets set it per base branch), so this repairs it instead: after such a pull request is
+# squashed or rebased, it records main as merged into dev with `git merge -s ours` of the sync
+# branch's head. That adds one merge commit and keeps dev's files exactly as they are (the
+# conflict resolution included). It takes the sync branch's head, not main, so main commits
+# made since aren't marked as merged.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'sync/')
+    runs-on: ubuntu-24.04
+    steps:
+      # dev is protected: only the release bot may push to it.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Record main as merged into dev
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BOT: ${{ steps.app-token.outputs.app-slug }}[bot]
+          MERGED: ${{ github.event.pull_request.merge_commit_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch -q origin dev
+          if [ "$(git rev-list --parents -n 1 "$MERGED" | wc -w)" -gt 2 ]; then
+            echo "Merged with a merge commit; nothing to repair."
+            exit 0
+          fi
+          # The branch is deleted on merge; GitHub keeps the pull request's head.
+          git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null || git fetch -q origin "refs/pull/$NUMBER/head"
+          git config user.name "$BOT"
+          git config user.email "$(gh api "/users/$BOT" --jq .id)+$BOT@users.noreply.github.com"
+          # Retry if dev moves between fetch and push.
+          for attempt in 1 2 3; do
+            git fetch -q origin dev
+            git checkout -q -B dev origin/dev
+            if git merge-base --is-ancestor "$HEAD_SHA" HEAD; then
+              echo "dev already has the sync branch's history."
+              exit 0
+            fi
+            git merge -q -s ours --no-ff -m "chore: merge main into dev" "$HEAD_SHA"
+            if git push -q origin HEAD:dev; then
+              echo "::notice::#$NUMBER was squashed or rebased; recorded main as merged into dev (files unchanged)."
+              exit 0
+            fi
+            echo "dev moved during the repair (attempt $attempt); retrying"
+          done
+          exit 1

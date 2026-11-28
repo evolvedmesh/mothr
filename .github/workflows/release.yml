@@ -250,7 +250,7 @@ jobs:
               git push origin "origin/main:refs/heads/$branch"
               if [ -z "$(gh pr list --base dev --head "$branch" --json number --jq '.[].number')" ]; then
                 printf '%s\n' \
-                  "main doesn't merge cleanly into dev. Resolve the conflicts on this branch, then merge it into dev with a merge commit (not a squash), so the next release branch merges cleanly into main." \
+                  "main doesn't merge cleanly into dev. Resolve the conflicts on this branch, then merge it into dev with a merge commit, so the next release branch merges cleanly into main. (Squashed or rebased, the Sync guard workflow repairs dev's history afterwards.)" \
                   "" \
                   "- On GitHub: **Resolve conflicts** below (it merges dev into \`$branch\` and commits the resolution there)." \
                   "- Or locally: \`git fetch && git switch $branch && git merge origin/dev\`, fix the conflicts, commit and push." \

@@ -69,6 +69,8 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
   committed) and publishes a **prerelease** (not latest) with every file and `SHA256SUMS`. Notes
   list the changes since the previous dev build. Only the newest 7 dev builds keep their release
   (`KEEP`); tags stay. The stable channel never sees them: `/releases/latest` skips prereleases.
+- **sync-guard.yml** (when a `sync/*` pull request into `dev` is merged): if it was squashed or
+  rebased, records `main` as merged into `dev` (see Merging).
 - **build.yml** (called by the three above): checks out `ref`, runs `scripts/set-version.sh
   <version>` (a no-op on a release tag), builds and uploads each platform's files as workflow
   artifacts for the caller's publish job:
@@ -126,8 +128,11 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
 - Feature and fix pull requests target `dev` (or a `release/*` / `hotfix/*` branch). Squash or
   merge commit, either works: the PR title (checked by `pr-title`) is what counts. Release and
   hotfix pull requests into `main` can be squashed or merged too; keep the default message.
-- The bot's `sync/main-into-dev-*` pull requests take a **merge commit**: a squash leaves `main`
-  outside `dev`'s history, so sync-dev would try again after every release.
+- The bot's `sync/main-into-dev-*` pull requests should take a **merge commit**: a squash or
+  rebase leaves `main` outside `dev`'s history, so the next release PR or sync would conflict
+  again. GitHub can't restrict the merge method by head branch, so **sync-guard.yml** repairs
+  it: after such a PR is squashed or rebased, it adds `git merge -s ours <sync head>` to `dev`
+  (history only, `dev`'s files unchanged).
 - Changes reach `dev` and `main` only through pull requests: admins' ruleset bypass is
   "pull requests only", and the required checks (`rust`, `pr-title`, `pr-checklist`) must pass or
   be explicitly bypassed in the merge dialog. The release bot pushes `release/*`, `hotfix/*` and
