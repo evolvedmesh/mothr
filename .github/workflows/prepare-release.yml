@@ -4,8 +4,8 @@ name: Prepare release
 # with `-f kind=hotfix` for a hotfix). It opens the pull request that releases on merge:
 #
 #   release  cuts release/<x.y.z> from dev. scripts/changes.sh works out the version from the pull
-#            requests merged since the last release (Conventional Commit titles, cliff.toml) and
-#            git-cliff writes the release notes.
+#            requests merged since the last release (Conventional Commit titles; a patch/ pull
+#            request counts as each of its commits) and writes the release notes.
 #   hotfix   cuts hotfix/<x.y.z> from main with the next patch version. Open the fix pull
 #            requests against that branch; the notes are written from them when it's merged.
 #
@@ -54,13 +54,11 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: git-cliff@2.14.2
 
       - name: Version
         id: version
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           KIND: ${{ inputs.kind }}
           INPUT: ${{ inputs.version }}
         run: |

@@ -107,17 +107,24 @@ hotfix/0.2.2 (cut from main by Prepare release, kind hotfix) ──PR──▶ m
 ## Versions
 
 - `feat` → minor, `fix` / `perf` → patch, `feat!` or a `BREAKING CHANGE:` footer → major (that
-  takes Mothr to 1.0.0), even below 1.0.0 (`cliff.toml` → `[bump]`). `docs`, `chore`, `ci`,
+  takes Mothr to 1.0.0), even below 1.0.0. `docs`, `chore`, `ci`,
   `refactor`, `test`, `style`, `build` don't release and stay out of the notes.
 - Stable tags are `v<x.y.z>`; dev builds `v<x.y.z>-dev.<n>`.
-- Changes are counted **once per pull request**, whatever the merge method
-  (`scripts/changes.sh`): it walks the branch's first-parent line, so a squash commit is one
-  change, a "Merge pull request" commit counts as its PR title (`cliff.toml`'s
-  `commit_preprocessors`), and the commits inside a merged branch ("wip", …) are never read.
-  It counts from the `cut:` recorded in the newest release tag, not from the tag's ancestry,
+- `scripts/changes.sh` works out both the version and the notes. Changes are counted **once per
+  pull request**, whatever the merge method: it walks the branch's first-parent line, so a squash
+  commit is one change and a merge commit counts as its PR title (the repo uses the PR title for
+  both; old `Merge pull request #n from …` commits are read as the title under that line). The
+  commits inside a merged branch aren't read.
+- **`patch/*` pull requests** are the exception: one PR carrying several features, fixes and
+  changes as its own commits. It counts as **each of its commits**, which the script gets from the
+  GitHub API (`commits/<sha>/pulls`, then `pulls/<n>/commits`), so it works when the PR was
+  squashed too. The org ruleset makes every commit on `patch/**` a Conventional Commit. Without
+  the API (`GITHUB_REPOSITORY` and `GH_TOKEN` unset, e.g. locally) a patch PR counts once.
+- It counts from the `cut:` recorded in the newest release tag, not from the tag's ancestry,
   so a squash-merged release PR (whose commits aren't ancestors of its tag) isn't counted again.
-  Older tags without a `cut:` count from where they meet `dev`. git-cliff only renders the
-  notes; the bump rules live in `changes.sh` and match `cliff.toml`'s `[bump]`.
+  Older tags without a `cut:` count from where they meet `dev`.
+- Notes group the changes under Features (and anything breaking), Fixes, Performance and
+  Reverts, as `- **scope**: Subject`, oldest first.
 - Never edit `version` by hand: only the release branch's bot commit sets it. The Android
   `versionName` comes from `Cargo.toml` (`composeApp/build.gradle.kts`); the crates report it
   through `CARGO_PKG_VERSION` (e.g. ACP `clientInfo`). Older dev prereleases

@@ -80,7 +80,6 @@ install.sh          the public Linux and macOS installer (raw.githubusercontent.
                     keep it to bash 3.2 and BSD tools (macOS's)
 scripts/            set-version.sh (sets the version), changes.sh (next version and notes, one
                     change per PR); used by the release workflows
-cliff.toml          git-cliff: release notes from Conventional Commits (scripts/changes.sh drives it)
 .agents/skills/     task skills for agents working on this repo (.claude/skills links here)
 ```
 
@@ -208,7 +207,7 @@ runs Mothr in a headless gamescope (nothing opens on screen) and writes a PNG to
   including the commits inside a pull request (reword "wip" commits before merging) and
   GitHub's "Merge branch …" commits from the Update branch / Resolve conflicts buttons.
 - The version comes from those commit types, one per pull request (squash or merge, the PR
-  title counts; `scripts/changes.sh`, `cliff.toml`): `feat` → minor,
+  title counts, a `patch/*` PR counts as each of its commits; `scripts/changes.sh`): `feat` → minor,
   `fix`/`perf` → patch, `!`/`BREAKING CHANGE` → major. Don't bump versions by hand: the Prepare
   release workflow commits `version` in Cargo.toml (the Android app reads it from there) on the
   release branch, and nightly dev builds stamp theirs at build time. Never write the bracketed

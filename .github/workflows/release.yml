@@ -93,10 +93,6 @@ jobs:
           echo "tagged=$tagged" >> "$GITHUB_OUTPUT"
           echo "draft=$draft" >> "$GITHUB_OUTPUT"
 
-      - uses: taiki-e/install-action@v2
-        if: steps.version.outputs.released == 'true' && steps.version.outputs.draft == 'none'
-        with:
-          tool: git-cliff@2.14.2
 
       # The notes between the markers in the merged pull request's description, without HTML
       # comments. prepare-release.yml writes them there for you to edit before merging. Empty,
@@ -207,7 +203,7 @@ jobs:
 
   # Merge main back into dev with a normal merge commit: dev gets the version change and the
   # tag, so the next release branch (cut from dev) doesn't conflict with main on them and
-  # git-cliff counts from the new tag. Runs as the release bot: admins can only change dev
+  # dev contains the new tag. Runs as the release bot: admins can only change dev
   # through pull requests. Nothing runs on pushes to dev, so the merge starts no workflow.
   sync-dev:
     needs: release

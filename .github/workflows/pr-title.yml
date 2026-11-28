@@ -2,8 +2,8 @@ name: PR title and checklist
 
 # Two quick checks on the pull request itself, re-run whenever its title or description is
 # edited. Both are required status checks on dev and main (the "mothr checks" repo ruleset).
-# - pr-title: with a squash merge, the title becomes the commit git-cliff reads for the next
-#   version and the release notes (cliff.toml), so it has to be a Conventional Commit
+# - pr-title: the title becomes the merged commit's message (merge and squash both use it), which
+#   scripts/changes.sh reads for the next version and the release notes, so it has to be a Conventional Commit
 #   (`feat(hub): …`, `fix(desktop,mobile): …`, `docs: …`).
 # - pr-checklist: CI doesn't build the apps on feature pull requests, so the description must
 #   tick the template's "both apps compile" boxes. The release bot's release and hotfix pull
